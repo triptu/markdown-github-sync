@@ -48,3 +48,11 @@ The baseline is tag `0.2.0-beta.1`, commit `e780b4c`: 239 plugin tests, four leg
 The native configuration policy, reviewed legacy journal upgrade, engine scope migration, and configuration review screens are integrated in `21a3d18` with engine fixes in `46aa75e`. Startup derives scope from durable enrollment state; legacy vaults need a reviewed pause and fresh enrollment. New hidden-file publication previews and deferred incoming configuration show saved contents and bind approval to the exact versions. Successful sync statuses show remaining unreadable, held, or deferred work.
 
 Root validation: 398/398 plugin tests, TypeScript, build, and diff checks pass. Independent native and composed-workflow reviews remain active, along with expanded Quint models. The new factory and UI still require dedicated integration and final Android/desktop acceptance. Earlier device evidence applies to its recorded bundle hash only. No release or full-replacement completion is claimed.
+
+## Current assembled-build checkpoint (14 October 2026)
+
+The integrated source at `697bdb5` passed 437 tests, TypeScript and build. At `e8fdd3e`, Fable reproduced 438 passing tests after the added parallel-blob interruption regression. The parallel journal review found no blocking issue; the native editor review closed R3-E at the adapter boundary. Real FileView acceptance remains a distinct device gate.
+
+Quint scope review R3 is closed, including evidence freshness and independent identity-fence negative controls. The writing-host review R4 closed configuration-apply R3-C1 but found the same stale-writer risk in history restore (R4-C1). The fix includes consideration of previously unguarded configuration restores, rather than treating that behavior as outside scope.
+
+Android configuration acceptance is running on production SHA `2a1f0ecb9679e8bf4e7cd5c635f69d1f773e29af3a4e9cb6c7e9abf0c82bb93f`. Its pre-state failure is retained, and a separate resumed record allows only pending unpublished configuration additions. Root reviewed revision 1 → 2 through the production UI. Finish the full restart checks, restore-fix review, real FileView race, final packaged desktop/Android acceptance, and release. No personal-vault changes or full-replacement approval.
