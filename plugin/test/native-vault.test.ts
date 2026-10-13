@@ -588,6 +588,100 @@ test("a view opened inside the queued rename is restored before installation", a
   assert.equal(file.path, "a.bin");
   assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([0]));
   assert.equal((await h.vault.pendingIntents())[0].attempted, false);
+  h.closeViews();
+  h.setQueuedRenameHook();
+  assert.equal((await h.vault.apply("a.bin", expected, null)).kind, "applied");
+  assert.deepEqual(await h.vault.pendingIntents(), []);
+});
+
+for (const choice of ["replay", "cancel"] as const) {
+  test(`a view opened during queued installation keeps ${choice} pending with its dirty hold`, async () => {
+    const h = await harness();
+    h.put("a.bin", new Uint8Array([0]));
+    const oldFile = h.files.get("a.bin")!.file;
+    const expected = (await h.vault.capture())["a.bin"];
+    const next = await entryFromBytes(new Uint8Array([1]));
+    h.setQueuedRenameHook(async from => {
+      if (from.includes("/stage/")) h.openView(oldFile.path);
+    });
+    const result = await h.vault.apply("a.bin", expected, next);
+    assert.equal(result.kind, "blocked");
+    assert.match(result.kind === "blocked" ? result.reason : "", /a\.bin/);
+    const hold = oldFile.path;
+    assert.match(hold, /\/hold\//);
+    assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([1]));
+    assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+    const [intent] = await h.vault.pendingIntents();
+    assert.equal(intent.attempted, true);
+    assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "blocked");
+    h.put(hold, bytes("unsaved editor draft flushed to hold"));
+    const restarted = await h.open("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    await restarted.vault.recover({ replay: choice === "replay" ? [intent.id] : [],
+      cancel: choice === "cancel" ? [intent.id] : [] });
+    assert.deepEqual((await restarted.vault.pendingIntents()).map(item => item.id), [intent.id]);
+    assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([1]));
+    assert.equal(text(h.files.get(hold)!.data), "unsaved editor draft flushed to hold");
+    h.closeViews();
+    const afterClose = await h.open("cccccccc-cccc-cccc-cccc-cccccccccccc");
+    const issues = await afterClose.vault.recover({ replay: choice === "replay" ? [intent.id] : [],
+      cancel: choice === "cancel" ? [intent.id] : [] });
+    assert.deepEqual(await afterClose.vault.pendingIntents(), []);
+    assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([1]));
+    assert.equal(text(h.files.get(hold)!.data), "unsaved editor draft flushed to hold");
+    assert.ok(issues.some(issue => issue.kind === "displaced" && issue.sourcePath === hold
+      && issue.found?.data === Buffer.from(bytes("unsaved editor draft flushed to hold")).toString("base64")));
+    if (choice === "cancel")
+      assert.ok(issues.some(issue => issue.kind === "displaced" && issue.found?.oid === expected.oid));
+  });
+}
+
+test("replay final fast path waits for an open hold before settling exact bytes", async () => {
+  const h = await harness();
+  h.put("a.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["a.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  h.setRenameHook(from => { if (from.includes("/stage/")) throw new Error("crash after install"); });
+  await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after install/);
+  h.setRenameHook();
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  h.openView(hold);
+  const restarted = await h.open("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+  const [intent] = await restarted.vault.pendingIntents();
+  await restarted.vault.recover({ replay: [intent.id], cancel: [] });
+  assert.deepEqual((await restarted.vault.pendingIntents()).map(item => item.id), [intent.id]);
+  assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+  assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([1]));
+  h.closeViews();
+  await restarted.vault.recover({ replay: [intent.id], cancel: [] });
+  assert.deepEqual(await restarted.vault.pendingIntents(), []);
+  assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+});
+
+test("cancel rechecks a hold view opened while retaining recovery evidence", async () => {
+  const h = await harness();
+  h.put("a.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["a.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  h.setRenameHook(from => { if (from.includes("/stage/")) throw new Error("crash after install"); });
+  await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after install/);
+  h.setRenameHook();
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  const restarted = await h.open("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+  const [intent] = await restarted.vault.pendingIntents();
+  let writes = 0;
+  h.setJournalWriteHook(path => {
+    if (path.includes("/native/records/") && ++writes === 1) h.openView(hold);
+  });
+  await restarted.vault.recover({ replay: [], cancel: [intent.id] });
+  h.setJournalWriteHook();
+  assert.deepEqual((await restarted.vault.pendingIntents()).map(item => item.id), [intent.id]);
+  assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+  assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([1]));
+  h.closeViews();
+  await restarted.vault.recover({ replay: [], cancel: [intent.id] });
+  assert.deepEqual(await restarted.vault.pendingIntents(), []);
 });
 
 test("a late write during clean-hold inspection is retained and then raised", async () => {

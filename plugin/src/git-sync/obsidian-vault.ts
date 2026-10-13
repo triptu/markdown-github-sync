@@ -138,8 +138,15 @@ export class GitObsidianVault implements LocalVault {
       await this.app.vault.adapter.rename(intent.hold, intent.path);
     }
   }
+  private heldViewBlock(intent: FileIntent): ApplyResult | null {
+    return intent.hold && visible(intent.path) && this.openView(intent.hold)
+      ? { kind: "blocked", reason: `Close the open view for ${intent.path} before native recovery can finish. Its original file is retained in a hidden hold.` }
+      : null;
+  }
   private async finish(intent: FileIntent, result: ApplyResult): Promise<ApplyResult> {
     if (result.kind === "blocked") return result;
+    const heldView = this.heldViewBlock(intent);
+    if (heldView) return heldView;
     await this.transactions?.finish(intent.path);
     return result;
   }
@@ -292,25 +299,29 @@ export class GitObsidianVault implements LocalVault {
     await this.modes.set(intent.path, intent.nextEntry.mode);
     return this.finish(intent, { kind: "applied" });
   }
+  private async finishCancel(intent: FileIntent): Promise<void> {
+    if (!this.heldViewBlock(intent)) await this.transactions?.cancel(intent.path);
+  }
   private async cancelIntent(intent: FileIntent): Promise<void> {
     if (!this.transactions) return;
     await this.assertWritableNamespace(intent.path);
-    if (!intent.attempted) { await this.transactions.cancel(intent.path); return; }
+    if (this.heldViewBlock(intent)) return;
+    if (!intent.attempted) { await this.finishCancel(intent); return; }
     if (await this.pendingSource(intent)) return;
     const live = await this.oid(intent.path);
     const held = intent.hold ? await this.hiddenOid(intent.hold) : null;
     if (live === intent.expected && (held === null || held === intent.expected)) {
-      await this.transactions.cancel(intent.path);
+      await this.finishCancel(intent);
       return;
     }
     if (live === null && held === intent.expected && intent.hold) {
       await this.rollbackHeld(intent);
-      await this.transactions.cancel(intent.path);
+      await this.finishCancel(intent);
       return;
     }
     if (held === "oversize" && intent.hold) {
       await this.preserve(intent.hold, intent, "displaced");
-      await this.transactions.cancel(intent.path);
+      await this.finishCancel(intent);
       return;
     }
     if (held !== null && held !== intent.expected && intent.hold)
@@ -323,7 +334,7 @@ export class GitObsidianVault implements LocalVault {
     } else if (live === intent.next && intent.expected === null) {
       await this.preserve(intent.path, intent, "interrupted");
     }
-    await this.transactions.cancel(intent.path);
+    await this.finishCancel(intent);
   }
   pendingIntents(): Promise<PendingNativeIntent[]> {
     this.assertActive();
