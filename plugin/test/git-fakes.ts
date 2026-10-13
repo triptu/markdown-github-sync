@@ -102,6 +102,17 @@ export class MemoryRepository {
     return { oid: commit.oid, treeOid: commit.tree, files };
   }
 
+  async readCommitForScope(commit: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot> {
+    const value = this.commits.get(commit);
+    if (!value) throw new Error(`no commit ${commit}`);
+    const scope = rules === "visible-only"
+      ? await compileScope({ rules, configDir: ".obsidian", gitignore: null }, null)
+      : await this.scopeFor(commit);
+    const files: Snapshot = {};
+    for (const [path, entry] of Object.entries(value.files)) if (scope.includes(path)) files[path] = { ...entry };
+    return { oid: value.oid, treeOid: value.tree, files };
+  }
+
   async scopeFor(commit: string): Promise<Scope> {
     const files = this.commits.get(commit)?.files;
     if (!files) throw new Error(`no commit ${commit}`);
@@ -127,6 +138,7 @@ export class MemoryRepository {
       identity: () => this.identity(),
       head: () => this.head(),
       readCommit: (oid) => this.readCommit(oid),
+      readCommitForScope: (oid, rules) => this.readCommitForScope(oid, rules),
       scopeFor: (oid) => this.scopeFor(oid),
       readRootGitignore: (oid) => this.readRootGitignore(oid),
       isAncestor: (a, b) => this.isAncestor(a, b),

@@ -1655,6 +1655,7 @@ function toLegacy(state: string, format: "github-vault-sync/1" | "github-vault-s
   delete old.scope;
   delete old.deferred;
   delete old.hiddenConsent;
+  delete old.configurationGuards;
   delete old.reentry;
   if (format === "github-vault-sync/2" && observation) old.observation = observation;
   if (old.review && format === "github-vault-sync/2") Object.assign(old.review, { scope: "review-1", local: {} });
@@ -2332,6 +2333,7 @@ test("/3 enrollment remains visible-only and requires a reviewed fresh enrollmen
   delete legacy.scope;
   delete legacy.deferred;
   delete legacy.hiddenConsent;
+  delete legacy.configurationGuards;
   delete legacy.reentry;
   a.store.raw = JSON.stringify(legacy);
   assert.equal((await parseState(JSON.parse(a.store.raw!))).scope.rules, "visible-only");
@@ -2719,7 +2721,10 @@ test("R3-3: configuration CAS races retain the original preimage across result-s
     };
     if (crash) failSaveMatching(a.store, (state) => state.operation?.kind === "configuration" && state.operation.steps.some((step) => step.status === "changed"), crash);
     if (crash) await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
-    else assert.equal((await a.session.applyConfiguration({ token: preview.token })).kind, "applied");
+    else {
+      const outcome = await a.session.applyConfiguration({ token: preview.token });
+      assert.deepEqual(outcome, { kind: "review-needed", applied: [], changed: [configurationPath] });
+    }
     a.store.fault = null;
     const before = repository.branchHead;
     const reviewed = await a.restart().sync();
@@ -2789,4 +2794,163 @@ test("configuration and hidden publication previews expose exact verified bytes 
   assert.equal(a.store.raw, before, "exact-content previews are read-only");
   await a.vault.write(".obsidian/plugins/foo/data.json", "new secret draft");
   assert.equal((await a.session.consentHiddenPublication({ path: hidden.path, token: hidden.token })).kind, "stale");
+});
+
+test("migration preview with hidden drafts is read-only and re-enrollment survives reload", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
+  const a = await enrolled(repository, "A", { "note.md": "base", ".obsidian/app.json": "local draft" });
+  repository.scopeRules = "config/1";
+  a.restart();
+  const scope = await a.session.previewConfigurationScope();
+  assert.equal(scope.kind, "preview");
+  if (scope.kind !== "preview") return;
+  assert.equal((await a.session.enableConfigurationScope({ token: scope.token })).kind, "reenroll");
+  const before = a.store.raw;
+  const preview = await a.session.previewEnrollment();
+  assert.equal(preview.kind, "preview");
+  assert.equal(a.store.raw, before, "preview cannot save hidden drafts under the old policy");
+  const reloaded = await a.restart().previewEnrollment();
+  assert.equal(reloaded.kind, "preview");
+  if (reloaded.kind !== "preview") return;
+  assert.equal((await a.session.enroll({ token: reloaded.token })).kind, "enrolled");
+  const saved = await parseState(await a.store.load());
+  assert.equal(saved.scope.rules, "config/1");
+  assert.ok(saved.recovery.some((item) => item.files[".obsidian/app.json"]));
+  assert.equal(a.vault.text(".obsidian/app.json"), "local draft");
+});
+
+test("migration validates an ignored visible checkpoint under its old scope", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ ".gitignore": "drafts/\n", "note.md": "base", "drafts/x.md": "old visible" }));
+  const a = await enrolled(repository);
+  assert.ok((await parseState(await a.store.load())).base.files["drafts/x.md"]);
+  repository.scopeRules = "config/1";
+  a.restart();
+  const review = await a.session.previewConfigurationScope();
+  assert.equal(review.kind, "preview");
+  if (review.kind !== "preview") return;
+  assert.equal((await a.session.enableConfigurationScope({ token: review.token })).kind, "reenroll");
+  const enrollment = await a.session.previewEnrollment();
+  assert.equal(enrollment.kind, "preview");
+  if (enrollment.kind !== "preview") return;
+  assert.equal((await a.session.enroll({ token: enrollment.token })).kind, "enrolled");
+  assert.equal(a.vault.text("drafts/x.md"), "old visible");
+  assert.equal(entryText(repository.fullHeadFiles()["drafts/x.md"]!), "old visible");
+});
+
+test("configuration scope review preserves an unrelated durable pause", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
+  const a = await enrolled(repository);
+  const state = await parseState(await a.store.load());
+  state.pause = { reason: "history-rewritten", detail: "old history was replaced" };
+  await a.store.save(state);
+  repository.scopeRules = "config/1";
+  a.restart();
+  assert.deepEqual(await a.session.previewConfigurationScope(), { kind: "paused", pause: state.pause });
+  assert.deepEqual(await a.session.enableConfigurationScope({ token: "stale" }), { kind: "paused", pause: state.pause });
+  assert.deepEqual((await parseState(await a.store.load())).pause, state.pause);
+});
+
+test("same-host postapply flush is guarded across reload while notes sync; exact consent and host restart release it", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, deviceName: "A", scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.deepEqual(await a.session.applyConfiguration({ token: preview.token }), { kind: "applied", paths: [configurationPath] });
+  const applied = await parseState(await a.store.load());
+  assert.equal(applied.configurationGuards[configurationPath]?.hostLifetimeId, "host-1");
+  await a.vault.write(configurationPath, "old configuration");
+  await a.vault.write("new-note.md", "unrelated draft");
+  const before = repository.branchHead;
+  const progress = await a.session.sync();
+  assert.equal(progress.kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  assert.equal(entryText(repository.fullHeadFiles()["new-note.md"]!), "unrelated draft");
+  assert.ok(progress.kind === "synced" && progress.attention?.held.includes(configurationPath));
+  assert.notEqual(repository.branchHead, before);
+  a.session = session("host-1");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  const listing = await a.session.listConfiguration();
+  assert.ok(listing.kind === "configuration" && listing.guarded.some((item) => item.path === configurationPath));
+  const consent = await a.session.previewGuardedConfigurationPublication(configurationPath);
+  assert.equal(consent.kind, "preview");
+  if (consent.kind !== "preview") return;
+  assert.equal(entryText(consent.entry!), "old configuration");
+  assert.equal((await a.session.consentGuardedConfigurationPublication({ path: configurationPath, token: consent.token })).kind, "recorded");
+  assert.equal((await a.session.sync()).kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "old configuration");
+  await a.vault.write(configurationPath, "another stale flush");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "old configuration");
+  a.session = session("host-2");
+  assert.equal((await a.session.sync()).kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "another stale flush");
+});
+
+test("crash after native configuration write restores postapply guard before resuming sync", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = () => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, deviceName: "A", scopeRules: "config/1", hostLifetimeId: "same-host", now: NOW, delay: async () => {} });
+  a.session = session();
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.applyFault = { at: a.vault.applyCalls + 1, when: "after" };
+  await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
+  a.vault.applyFault = null;
+  a.session = session();
+  await a.session.sync();
+  await a.vault.write(configurationPath, "old configuration");
+  const outcome = await a.session.sync();
+  assert.equal(outcome.kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  const saved = await parseState(await a.store.load());
+  assert.ok(saved.configurationGuards[configurationPath]);
+});
+
+test("a previously poisoned legacy migration record loads only under its reviewed scope pause", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
+  const a = await enrolled(repository);
+  const raw = await parseState(await a.store.load());
+  const hidden = await entryFromText("recoverable hidden draft");
+  raw.pause = { reason: "scope-enrollment", detail: "Review fresh enrollment" };
+  raw.blobs[hidden.oid] = hidden.data;
+  raw.recovery.push({ id: "old-preview", createdAt: NOW().toISOString(), reason: "sync", commit: raw.base.commit, files: toManifest({ ".obsidian/app.json": hidden }), pinned: true });
+  await a.store.save(raw);
+  assert.equal((await a.session.status()).kind, "enrolled");
+  repository.scopeRules = "config/1";
+  a.restart();
+  const preview = await a.session.previewEnrollment();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.equal((await a.session.enroll({ token: preview.token })).kind, "enrolled");
+  assert.equal((await parseState(await a.store.load())).blobs[hidden.oid], hidden.data);
+  const rejected = structuredClone(raw);
+  rejected.pause = null;
+  await assert.rejects(parseState(rejected), /outside built-in scope/);
+});
+
+test("same-host deletion of applied configuration needs explicit exact-version consent", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  a.session = new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: "host", now: NOW, delay: async () => {} });
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: preview.token })).kind, "applied");
+  a.vault.files.delete(configurationPath);
+  const before = repository.branchHead;
+  const held = await a.session.sync();
+  assert.equal(held.kind, "up-to-date");
+  assert.equal(repository.branchHead, before);
+  const reviewed = await a.session.previewGuardedConfigurationPublication(configurationPath);
+  assert.equal(reviewed.kind, "preview");
+  if (reviewed.kind !== "preview") return;
+  assert.equal(reviewed.entry, null);
+  assert.equal(reviewed.version, null);
+  assert.equal((await a.session.consentGuardedConfigurationPublication({ path: configurationPath, token: reviewed.token })).kind, "recorded");
+  assert.equal((await a.session.sync()).kind, "synced");
+  assert.equal(repository.fullHeadFiles()[configurationPath], undefined);
+  await a.vault.write(configurationPath, "stale writer");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(repository.fullHeadFiles()[configurationPath], undefined);
 });

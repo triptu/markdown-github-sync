@@ -179,6 +179,14 @@ export interface ConfigurationOperation {
   steps: StoredStep[];
   recoveryId: string | null;
   incomingRecoveryId: string | null;
+  /** The host that reviewed this apply, retained across a plugin reload. */
+  hostLifetimeId: string | null;
+}
+
+export interface ConfigurationGuard {
+  hostLifetimeId: string | null;
+  applied: Ref | null;
+  consent: { version: Ref | null; head: string; scope: string } | null;
 }
 
 export type Operation = PublishOperation | ApplyOperation | RestoreOperation | ConfigurationOperation;
@@ -222,6 +230,8 @@ export interface StoredState {
   deferred: Record<string, { expected: Ref | null; next: Ref | null; commit: string; blockedReason: string | null }>;
   /** One-shot authorization for an exact new local hidden version. */
   hiddenConsent: Record<string, Ref>;
+  /** Same-host config writer reversals require exact-version review. */
+  configurationGuards: Record<string, ConfigurationGuard>;
   /** Paths re-entering after an excluded checkpoint have no remembered merge base. */
   reentry: string[];
   /**
@@ -432,11 +442,12 @@ function operation(value: unknown, at: string, version: Version): Operation {
     };
   }
   if (kind === "configuration") {
-    const raw = object(value, at, ["kind", "id", "baseCommit", "steps", "recoveryId", "incomingRecoveryId"]);
+    const raw = object(value, at, ["kind", "id", "baseCommit", "steps", "recoveryId", "incomingRecoveryId", ...(Object.hasOwn(value, "hostLifetimeId") ? ["hostLifetimeId"] : [])]);
     const parsed = steps(field(raw, "steps"), `${at}.steps`);
     if (parsed.length === 0 || parsed.some((item) => item.decision !== null || item.status === "kept")) fail(`${at}.steps`, "configuration needs reviewed write steps");
     return { kind, id: text(field(raw, "id"), `${at}.id`), baseCommit: oid(field(raw, "baseCommit"), `${at}.baseCommit`), steps: parsed,
-      recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text), incomingRecoveryId: nullable(field(raw, "incomingRecoveryId"), `${at}.incomingRecoveryId`, text) };
+      recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text), incomingRecoveryId: nullable(field(raw, "incomingRecoveryId"), `${at}.incomingRecoveryId`, text),
+      hostLifetimeId: Object.hasOwn(raw, "hostLifetimeId") ? nullable(field(raw, "hostLifetimeId"), `${at}.hostLifetimeId`, text) : null };
   }
   if (kind === "restore") {
     const raw = object(value, at, ["kind", "id", "sourceCommit", "baseCommit", "step", "recoveryId", "incomingRecoveryId"]);
@@ -638,6 +649,7 @@ export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> 
   const oids = new Set<string>();
   for (const item of Object.values(state.deferred)) for (const entry of [item.expected, item.next]) if (entry) oids.add(entry.oid);
   for (const entry of Object.values(state.carry)) if (entry) oids.add(entry.oid);
+  for (const guard of Object.values(state.configurationGuards)) for (const entry of [guard.applied, guard.consent?.version]) if (entry) oids.add(entry.oid);
   for (const decision of Object.values(state.decisions)) if (decision.kind === "edit") oids.add(decision.entry.oid);
   for (const item of state.review?.conflicts ?? []) {
     if (item.kind === "collision" || item.kind === "bulk-deletion") continue;
@@ -662,7 +674,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     "repository",
     ...(version === "3" || version === "4" ? ["ledger"] : []),
     "base",
-    ...(version === "4" ? ["scope", "deferred", "hiddenConsent", "reentry"] : []),
+    ...(version === "4" ? ["scope", "deferred", "hiddenConsent", "reentry", ...(Object.hasOwn(value, "configurationGuards") ? ["configurationGuards"] : [])] : []),
     "carry",
     "operation",
     "pause",
@@ -797,6 +809,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
   let scope: StoredState["scope"] = { ...visible.rules, digest: visible.digest };
   const deferred: StoredState["deferred"] = safeDictionary();
   const hiddenConsent: StoredState["hiddenConsent"] = safeDictionary();
+  const configurationGuards: StoredState["configurationGuards"] = safeDictionary();
   const reentry: string[] = [];
   if (version === "4") {
     const rawScope = object(field(raw, "scope"), `${at}.scope`, ["rules", "configDir", "gitignore", "digest"]);
@@ -816,6 +829,21 @@ export async function parseState(value: unknown): Promise<StoredState> {
         commit: oid(field(entry, "commit"), `${at}.deferred.commit`), blockedReason: nullable(field(entry, "blockedReason"), `${at}.deferred.blockedReason`, text) };
     }
     for (const [key, item] of dictionary(field(raw, "hiddenConsent"), `${at}.hiddenConsent`)) hiddenConsent[path(key, `${at}.hiddenConsent`)] = ref(item, `${at}.hiddenConsent[${key}]`);
+    if (Object.hasOwn(raw, "configurationGuards")) for (const [key, item] of dictionary(field(raw, "configurationGuards"), `${at}.configurationGuards`)) {
+      const p = path(key, `${at}.configurationGuards`);
+      const guard = object(item, `${at}.configurationGuards[${key}]`, ["hostLifetimeId", "applied", "consent"]);
+      const rawConsent = field(guard, "consent");
+      const consent = rawConsent === null ? null : object(rawConsent, `${at}.configurationGuards[${key}].consent`, ["version", "head", "scope"]);
+      configurationGuards[p] = {
+        hostLifetimeId: nullable(field(guard, "hostLifetimeId"), `${at}.configurationGuards.hostLifetimeId`, text),
+        applied: nullable(field(guard, "applied"), `${at}.configurationGuards.applied`, ref),
+        consent: consent === null ? null : {
+          version: nullable(field(consent, "version"), `${at}.configurationGuards.consent.version`, ref),
+          head: oid(field(consent, "head"), `${at}.configurationGuards.consent.head`),
+          scope: oid(field(consent, "scope"), `${at}.configurationGuards.consent.scope`),
+        },
+      };
+    }
     for (const [index, item] of array(field(raw, "reentry"), `${at}.reentry`).entries()) reentry.push(path(item, `${at}.reentry[${index}]`));
     if (new Set(reentry).size !== reentry.length) fail(`${at}.reentry`, "duplicate path");
   }
@@ -827,6 +855,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     scope,
     deferred,
     hiddenConsent,
+    configurationGuards,
     reentry,
     carry,
     operation: op,
@@ -844,16 +873,28 @@ export async function parseState(value: unknown): Promise<StoredState> {
     if (Object.hasOwn(state.carry, key) || Object.hasOwn(state.holds, key)) fail(`${at}.deferred`, `deferred path overlaps a carry or native hold: ${key}`);
     if (state.scope.rules !== "config/1" || !key.startsWith(`${state.scope.configDir}/`)) fail(`${at}.deferred`, `deferred path is outside configuration: ${key}`);
   }
+  for (const key of Object.keys(state.configurationGuards)) {
+    if (state.scope.rules !== "config/1" || !key.startsWith(`${state.scope.configDir}/`)) fail(`${at}.configurationGuards`, `guarded path is outside configuration: ${key}`);
+  }
   const storedPaths = [
     ...Object.keys(state.base.files), ...Object.keys(state.carry), ...Object.keys(state.holds),
-    ...Object.keys(state.deferred), ...Object.keys(state.hiddenConsent), ...state.reentry,
-    ...state.recovery.flatMap((item) => Object.keys(item.files)),
+    ...Object.keys(state.deferred), ...Object.keys(state.hiddenConsent), ...Object.keys(state.configurationGuards), ...state.reentry,
     ...state.nativeErrors.flatMap((item) => item.path === null ? [] : [item.path]),
     ...(state.operation ? (state.operation.kind === "restore" ? [state.operation.step.path] : state.operation.steps.map((item) => item.path)) : []),
     ...(state.review?.conflicts.flatMap((item) => item.kind === "collision" || item.kind === "bulk-deletion" ? item.paths : [item.path]) ?? []),
   ];
   const builtin = await compileScope({ rules: state.scope.rules, configDir: state.scope.configDir, gitignore: null }, null);
   if (storedPaths.some((item) => !builtin.includes(item))) fail(at, "state contains a path outside built-in scope");
+  // An older migration preview could pin a hidden draft in a still-legacy
+  // state immediately after the reviewed scope-enrollment pause. Accept only
+  // those pinned recovery bytes so the user can finish re-enrollment; no
+  // checkpoint, carry, operation or decision path gains a broader policy.
+  const repairScope = state.scope.rules === "visible-only" && state.pause?.reason === "scope-enrollment"
+    ? await compileScope({ rules: "config/1", configDir: state.scope.configDir, gitignore: null }, null)
+    : null;
+  for (const record of state.recovery) for (const item of Object.keys(record.files)) {
+    if (!builtin.includes(item) && !(repairScope && record.pinned && repairScope.includes(item))) fail(at, "state contains a path outside built-in scope");
+  }
   for (const id of referencedBlobs(state)) if (!Object.hasOwn(blobs, id)) fail(`${at}.blobs`, `missing referenced blob ${id}`);
   return state;
 }

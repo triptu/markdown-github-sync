@@ -56,6 +56,8 @@ export interface SessionPorts {
   random?: () => number;
   /** Config sync is opt-in. Existing /3 enrollments remain visible-only until reviewed re-enrollment. */
   scopeRules?: ScopeRules["rules"];
+  /** Stable for an Obsidian App lifetime, including plugin reloads; changes on full host restart. */
+  hostLifetimeId?: string;
 }
 
 /** Unpinned recovery records (bytes known to be in GitHub history) kept for convenience. */
@@ -172,12 +174,14 @@ export interface ConfigurationListing {
   rules: ScopeRules["rules"];
   deferred: Array<{ path: string; expected: Ref | null; next: Ref | null; blockedReason: string | null }>;
   unpublished: Array<{ path: string; version: Ref }>;
+  guarded: Array<{ path: string; applied: Ref | null; local: Ref | null; unreadable: boolean }>;
 }
 export type ConfigurationPreview =
   | Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "disabled" }
   | { kind: "preview"; token: string; items: Array<ConfigurationListing["deferred"][number] & { expectedEntry: Entry | null; incomingEntry: Entry | null }>; blocked: BlockedStep[] };
-export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] } | { kind: "native-error"; errors: NativeError[] };
+export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "review-needed"; applied: string[]; changed: string[] } | { kind: "blocked"; steps: BlockedStep[] } | { kind: "native-error"; errors: NativeError[] };
 export type HiddenPublicationPreview = Unavailable | { kind: "disabled" } | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref; entry: Entry };
+export type GuardedConfigurationPreview = Unavailable | { kind: "disabled" } | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "missing" } | { kind: "unreadable" } | { kind: "preview"; token: string; path: string; head: string; scopeDigest: string; applied: Ref | null; version: Ref | null; entry: Entry | null };
 
 export interface PublicationRecoveryPreview {
   kind: "preview";
@@ -272,11 +276,13 @@ export class SyncSession {
   readonly #delay: (ms: number) => Promise<void>;
   readonly #random: () => number;
   readonly #requestedRules: ScopeRules["rules"];
+  readonly #hostLifetimeId: string | null;
   #queue: Promise<unknown> = Promise.resolve();
   readonly #previewSession = crypto.randomUUID();
   #holdPass = false;
   /** Visible files the latest capture could not read; they are untouched until readable. */
   #unreadable: UnreadableFile[] = [];
+  #guarded: string[] = [];
 
   constructor(ports: SessionPorts) {
     this.#repository = ports.repository;
@@ -287,6 +293,7 @@ export class SyncSession {
     this.#delay = ports.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#random = ports.random ?? Math.random;
     this.#requestedRules = ports.scopeRules ?? "visible-only";
+    this.#hostLifetimeId = ports.hostLifetimeId ?? null;
   }
 
   // ---- Public API --------------------------------------------------------
@@ -308,6 +315,7 @@ export class SyncSession {
       if (loaded.kind !== "enrolled") return loaded;
       const state = loaded.state;
       const unpublished: ConfigurationListing["unpublished"] = [];
+      const guarded: ConfigurationListing["guarded"] = [];
       if (state.scope.rules === "config/1") {
         const head = await this.#readHead("config/1");
         const scope = await this.#scopeFor(head.oid, "config/1");
@@ -317,19 +325,28 @@ export class SyncSession {
           if (path === ".gitignore" || head.files[path] || state.base.files[path]) continue;
           if (!sameEntry(state.hiddenConsent[path], entry)) unpublished.push({ path, version: toRef(entry) });
         }
+        for (const [path, guard] of Object.entries(state.configurationGuards)) {
+          if (!this.#guardActive(guard.hostLifetimeId)) continue;
+          if (!scope.includes(path)) continue;
+          const unreadable = this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path);
+          const entry = local[path] ?? null;
+          if (unreadable || !sameEntry(entry, guard.applied)) guarded.push({ path, applied: guard.applied, local: entry && toRef(entry), unreadable });
+        }
       }
       return { kind: "configuration", rules: state.scope.rules,
         deferred: Object.entries(state.deferred).map(([path, item]) => ({ path, expected: item.expected, next: item.next, blockedReason: item.blockedReason })),
-        unpublished: unpublished.sort((a, b) => a.path.localeCompare(b.path)) };
+        unpublished: unpublished.sort((a, b) => a.path.localeCompare(b.path)),
+        guarded: guarded.sort((a, b) => a.path.localeCompare(b.path)) };
     });
   }
 
-  previewConfigurationScope(): Promise<Unavailable | { kind: "already-enabled" } | { kind: "busy" } | { kind: "preview"; token: string; note: string }> {
+  previewConfigurationScope(): Promise<Unavailable | { kind: "already-enabled" } | { kind: "busy" } | { kind: "paused"; pause: Pause } | { kind: "preview"; token: string; note: string }> {
     return this.#exclusive(async () => {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const state = loaded.state;
       if (state.scope.rules === "config/1") return { kind: "already-enabled" };
+      if (state.pause) return { kind: "paused", pause: state.pause };
       if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
       const head = await this.#readHead("config/1");
       const scope = await this.#scopeFor(head.oid, "config/1");
@@ -338,12 +355,13 @@ export class SyncSession {
     });
   }
 
-  enableConfigurationScope(input: { token: string }): Promise<Unavailable | { kind: "stale" } | { kind: "busy" } | { kind: "already-enabled" } | { kind: "reenroll" }> {
+  enableConfigurationScope(input: { token: string }): Promise<Unavailable | { kind: "stale" } | { kind: "busy" } | { kind: "paused"; pause: Pause } | { kind: "already-enabled" } | { kind: "reenroll" }> {
     return this.#exclusive(async () => {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const state = loaded.state;
       if (state.scope.rules === "config/1") return { kind: "already-enabled" };
+      if (state.pause) return { kind: "paused", pause: state.pause };
       if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
       const head = await this.#readHead("config/1");
       const scope = await this.#scopeFor(head.oid, "config/1");
@@ -357,6 +375,46 @@ export class SyncSession {
 
   previewHiddenPublication(path: string): Promise<HiddenPublicationPreview> {
     return this.#exclusive(async () => this.#hiddenPublicationPreview(path));
+  }
+
+  previewGuardedConfigurationPublication(path: string): Promise<GuardedConfigurationPreview> {
+    return this.#exclusive(async () => this.#guardedConfigurationPreview(path));
+  }
+
+  consentGuardedConfigurationPublication(input: { path: string; token: string }): Promise<GuardedConfigurationPreview | { kind: "recorded" } | { kind: "stale" }> {
+    return this.#exclusive(async () => {
+      const preview = await this.#guardedConfigurationPreview(input.path);
+      if (preview.kind !== "preview") return preview;
+      if (preview.token !== input.token) return { kind: "stale" };
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const guard = loaded.state.configurationGuards[input.path];
+      if (!guard || !this.#guardActive(guard.hostLifetimeId)) return { kind: "missing" };
+      guard.consent = { version: preview.version, head: preview.head, scope: preview.scopeDigest };
+      await this.#save(loaded.state);
+      return { kind: "recorded" };
+    });
+  }
+
+  async #guardedConfigurationPreview(path: string): Promise<GuardedConfigurationPreview> {
+    const loaded = await this.#load();
+    if (loaded.kind !== "enrolled") return loaded;
+    const state = loaded.state;
+    if (state.scope.rules !== "config/1") return { kind: "disabled" };
+    if (state.pause) return { kind: "paused", pause: state.pause };
+    if (state.operation) return { kind: "busy" };
+    const guard = state.configurationGuards[path];
+    if (!guard || !this.#guardActive(guard.hostLifetimeId)) return { kind: "missing" };
+    const head = await this.#readHead("config/1");
+    const scope = await this.#scopeFor(head.oid, "config/1");
+    if (!scope.includes(path)) return { kind: "missing" };
+    const local = await this.#capture(state, "guarded configuration preview", false, scope);
+    if (this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path)) return { kind: "unreadable" };
+    const entry = local[path] ?? null;
+    if (sameEntry(entry, guard.applied)) return { kind: "missing" };
+    const version = entry && toRef(entry);
+    const token = await digestText(JSON.stringify(["configuration-publication/1", this.#previewSession, state.base.commit, head.oid, scope.digest, path, guard, version]));
+    return { kind: "preview", token, path, head: head.oid, scopeDigest: scope.digest, applied: guard.applied, version, entry };
   }
 
   consentHiddenPublication(input: { path: string; token: string }): Promise<HiddenPublicationPreview | { kind: "recorded" } | { kind: "stale" }> {
@@ -462,7 +520,7 @@ export class SyncSession {
         return { path: item.path, expected: item.expected, next: item.next, status: "pending", decision: null, reason: null };
       });
       const operation: ConfigurationOperation = { kind: "configuration", id: this.#nextId(state, "configuration"), baseCommit: state.base.commit,
-        steps, recoveryId: this.#record(state, "sync", expected), incomingRecoveryId: this.#record(state, "incoming", incoming) };
+        steps, recoveryId: this.#record(state, "sync", expected), incomingRecoveryId: this.#record(state, "incoming", incoming), hostLifetimeId: this.#hostLifetimeId };
       state.operation = operation;
       await this.#save(state); // Approval and exact steps precede every native write.
       return this.#applyConfigurationSteps(state, operation);
@@ -520,6 +578,7 @@ export class SyncSession {
         scope: { ...survey.scope.rules, digest: survey.scope.digest },
         deferred: dictionary(Object.entries(prior?.deferred ?? {})),
         hiddenConsent: dictionary(),
+        configurationGuards: dictionary(Object.entries(prior?.configurationGuards ?? {})),
         reentry: [],
         carry: survey.carry,
         operation: null,
@@ -621,7 +680,7 @@ export class SyncSession {
     if (outcome.kind !== "up-to-date" && outcome.kind !== "synced") return outcome;
     const attention: OutstandingWork = {
       unreadable: [...new Set(this.#unreadable.map((item) => item.path))].sort(),
-      held: [...new Set([...Object.keys(state.holds), ...state.nativeErrors.flatMap((item) => item.path === null ? [] : [item.path])])].sort(),
+      held: [...new Set([...Object.keys(state.holds), ...this.#guarded, ...state.nativeErrors.flatMap((item) => item.path === null ? [] : [item.path])])].sort(),
       deferred: Object.keys(state.deferred).length,
     };
     return attention.unreadable.length || attention.held.length || attention.deferred ? { ...outcome, attention } : outcome;
@@ -732,6 +791,10 @@ export class SyncSession {
       // The write is a compare-and-swap against the previewed bytes.
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
       if (result.kind === "applied") {
+        const guard = state.configurationGuards[preview.path];
+        if (guard && this.#guardActive(guard.hostLifetimeId)) {
+          guard.consent = { version: toRef(preview.historical), head: state.base.commit, scope: state.scope.digest };
+        }
         state.operation = null;
         await this.#save(state);
         return { kind: "restored" };
@@ -870,6 +933,7 @@ export class SyncSession {
   // ---- Synchronization ---------------------------------------------------
 
   async #transact(state: StoredState): Promise<SyncOutcome | Cancelled> {
+    this.#guarded = [];
     let head: CommitSnapshot;
     try { head = await this.#readHead(state.scope.rules); }
     catch (error) {
@@ -940,6 +1004,24 @@ export class SyncSession {
       else delete planBase[path];
       delete state.deferred[path];
     }
+    let guardsChanged = false;
+    for (const [path, guard] of Object.entries(state.configurationGuards)) {
+      if (!this.#guardActive(guard.hostLifetimeId)) {
+        delete state.configurationGuards[path];
+        guardsChanged = true;
+        continue;
+      }
+      if (guard.consent && state.base.commit !== guard.consent.head && sameRef(state.base.files[path], guard.consent.version)) {
+        guard.applied = guard.consent.version;
+        guard.consent = null;
+        guardsChanged = true;
+      }
+      if (!transaction.includes(path)) continue;
+      const observed = this.#observeLocal(state, local, path);
+      if (observed.kind === "unknown" || sameEntry(observed.entry, guard.applied)) continue;
+      const authorized = guard.consent && sameRef(guard.consent.version, observed.entry) && guard.consent.head === head.oid && guard.consent.scope === headScope.digest;
+      if (!authorized) this.#guarded.push(path);
+    }
     // A deferred live path and every unconsented hidden addition are held out
     // of all automatic reconciliation, including remote deletion counting.
     const unconsented: string[] = [];
@@ -951,7 +1033,7 @@ export class SyncSession {
     }
     const guardScope = await digestText(JSON.stringify(["guard/1", head.oid, sortedManifest(local)]));
     const holds = nativeHolds(state);
-    const untouched = [...new Set([...this.#untouched(state), ...excluded, ...Object.keys(state.deferred), ...unconsented])];
+    const untouched = [...new Set([...this.#untouched(state), ...excluded, ...Object.keys(state.deferred), ...unconsented, ...this.#guarded])];
     const unresolved = await reconcile({ base: planBase, local: planLocal, remote: planRemote, decisions: dictionary(), guardScope, holds, untouched });
     const conflicts = unresolved.kind === "needs-decision" ? unresolved.conflicts : unresolved.held;
     // Decisions survive only while their exact conflict (versions, or guard scope) still exists.
@@ -1018,6 +1100,7 @@ export class SyncSession {
         !released &&
         head.oid === state.base.commit &&
         sameCarry(state.carry, kept) &&
+        !guardsChanged &&
         !hadReview &&
         hadPrototypeBaseline === Object.hasOwn(state.base.files, "__proto__") &&
         !state.review &&
@@ -1180,7 +1263,8 @@ export class SyncSession {
       await this.#save(state);
       return { kind: "continue", published: false, carried: [] };
     }
-    if (!sameEntry(current, step.next)) {
+    let installed = sameEntry(current, step.next);
+    if (!installed) {
       if (!step.next) throw new IntegrityError("Restore has no historical version");
       const next = materialize(state, dictionary([[step.path, step.next]]))[step.path];
       const result = await this.#vault.apply(step.path, current, next);
@@ -1192,6 +1276,13 @@ export class SyncSession {
       if (result.kind === "interrupted" || result.kind === "displaced") {
         await this.#ingest(state, [result.issue], { requiredPath: step.path });
       }
+      installed = result.kind === "applied";
+    }
+    // Historical restore carries its own exact review. Keep that durable
+    // authorization across the next sync, including a plugin reload.
+    const guard = state.configurationGuards[step.path];
+    if (installed && guard && this.#guardActive(guard.hostLifetimeId) && step.next) {
+      guard.consent = { version: step.next, head: state.base.commit, scope: state.scope.digest };
     }
     state.operation = null;
     await this.#save(state);
@@ -1613,9 +1704,12 @@ export class SyncSession {
     return { kind: "complete", commit: operation.target.commit, carried: Object.keys(carry).sort() };
   }
 
-  async #applyConfigurationSteps(state: StoredState, operation: ConfigurationOperation): Promise<{ kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] }> {
+  async #applyConfigurationSteps(state: StoredState, operation: ConfigurationOperation): Promise<{ kind: "applied"; paths: string[] } | { kind: "review-needed"; applied: string[]; changed: string[] } | { kind: "blocked"; steps: BlockedStep[] }> {
     const scope = await this.#scopeFor(state.base.commit, state.scope.rules);
     const local = await this.#capture(state, "configuration application capture", true, scope);
+    // A prior call may have saved an applied step before a crash. Rebuild its
+    // guard before the operation can retire or another transaction can plan.
+    for (const step of operation.steps) if (step.status === "applied") this.#setConfigurationGuard(state, operation, step);
     for (const step of operation.steps) {
       if (step.status !== "pending" && step.status !== "blocked") continue;
       const observed = this.#observeLocal(state, local, step.path);
@@ -1629,6 +1723,7 @@ export class SyncSession {
       const current = observed.entry;
       if (sameEntry(current, step.next)) {
         markStep(step, "applied");
+        this.#setConfigurationGuard(state, operation, step);
         delete state.deferred[step.path];
         await this.#save(state);
         continue;
@@ -1644,6 +1739,7 @@ export class SyncSession {
       const result = await this.#vault.apply(step.path, current, next);
       if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
       else markStep(step, result.kind);
+      if (result.kind === "applied") this.#setConfigurationGuard(state, operation, step);
       if (result.kind === "changed") state.carry[step.path] = step.expected;
       if (result.kind === "interrupted" || result.kind === "displaced") {
         await this.#ingest(state, [result.issue], { requiredPath: step.path, known: [local, next ? dictionary([[step.path, next]]) : dictionary()] });
@@ -1656,7 +1752,17 @@ export class SyncSession {
     await this.#capture(state, "post-configuration capture");
     state.operation = null;
     await this.#save(state);
-    return { kind: "applied", paths: operation.steps.filter((step) => step.status === "applied").map((step) => step.path) };
+    const applied = operation.steps.filter((step) => step.status === "applied").map((step) => step.path);
+    const changed = operation.steps.filter((step) => step.status === "changed").map((step) => step.path);
+    return changed.length > 0 ? { kind: "review-needed", applied, changed } : { kind: "applied", paths: applied };
+  }
+
+  #guardActive(hostLifetimeId: string | null): boolean {
+    return hostLifetimeId === null || this.#hostLifetimeId === null || hostLifetimeId === this.#hostLifetimeId;
+  }
+
+  #setConfigurationGuard(state: StoredState, operation: ConfigurationOperation, step: StoredStep): void {
+    state.configurationGuards[step.path] = { hostLifetimeId: operation.hostLifetimeId, applied: step.next, consent: null };
   }
 
   /**
@@ -1904,11 +2010,19 @@ export class SyncSession {
     const head = await this.#readHead(rules);
     const scope = await this.#scopeFor(head.oid, rules);
     const pending = await this.#pendingIntents();
-    const local = await this.#capture(prior, "local capture", true, scope);
+    // A preview cannot pin newly visible hidden paths into the old visible-only
+    // state: its parser would reject those paths on the next load.
+    const local = await this.#capture(null, "local capture", false, scope);
     const unreadable = new Set(this.#unreadable.map((item) => item.path));
     const nativePending = new Set(pending.map((intent) => intent.path));
     if (prior) {
-      const checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
+      const migrating = prior.scope.rules !== rules;
+      let checkpointCommit: CommitSnapshot;
+      if (migrating) {
+        const readForScope = this.#repository.readCommitForScope;
+        if (!readForScope) throw new IntegrityError("Repository cannot read the prior checkpoint under its original scope");
+        checkpointCommit = await readForScope.call(this.#repository, prior.base.commit, prior.scope.rules);
+      } else checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
       const priorScope = await this.#scopeFor(checkpointCommit.oid, prior.scope.rules);
       const checkpoint = await verifySnapshot(filterSnapshot(checkpointCommit.files, priorScope), "re-enrollment checkpoint", priorScope);
       if (!Object.hasOwn(prior.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) prior.base.files["__proto__"] = toRef(checkpoint["__proto__"]!);
@@ -2139,6 +2253,7 @@ export class SyncSession {
     copy.carry = dictionary(Object.entries(copy.carry));
     copy.deferred = dictionary(Object.entries(copy.deferred));
     copy.hiddenConsent = dictionary(Object.entries(copy.hiddenConsent));
+    copy.configurationGuards = dictionary(Object.entries(copy.configurationGuards));
     copy.decisions = dictionary(Object.entries(copy.decisions));
     copy.blobs = dictionary(Object.entries(copy.blobs));
     if (copy.operation?.kind === "publish") copy.operation.target = toManifest(copy.operation.target);

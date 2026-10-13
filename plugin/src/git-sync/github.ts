@@ -399,8 +399,10 @@ export class GitHubRepository implements Repository {
     const rootIgnore = items.find(item => item.path === ".gitignore");
     return rootIgnore ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(await this.blob(rootIgnore.sha, size(rootIgnore.size)))) : null;
   }
-  private async snapshot(value: Commit, items: TreeItem[]): Promise<CommitSnapshot> {
-    const scope = await this.scopeForItems(value.treeOid, items);
+  private async snapshot(value: Commit, items: TreeItem[], requestedRules = this.ruleVersion): Promise<CommitSnapshot> {
+    const scope = requestedRules === this.ruleVersion
+      ? await this.scopeForItems(value.treeOid, items)
+      : await compileScope({ rules: "visible-only", configDir: this.configDir, gitignore: null }, null);
     const included = items.filter(i => i.type !== "tree" && scope.includes(i.path));
     validatePaths(items.map(i => i.path), included.map(i => i.path));
     let total = 0;
@@ -420,6 +422,11 @@ export class GitHubRepository implements Repository {
   async readCommit(hash: string): Promise<CommitSnapshot> {
     const value = await this.getCommit(hash);
     return this.snapshot(value, await this.tree(value.treeOid));
+  }
+  async readCommitForScope(hash: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot> {
+    if (rules !== "visible-only" && rules !== this.ruleVersion) throw new GitHubError("Unsupported historical scope read");
+    const value = await this.getCommit(hash);
+    return this.snapshot(value, await this.tree(value.treeOid), rules);
   }
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
     oid(ancestor); oid(descendant);

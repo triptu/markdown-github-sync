@@ -910,3 +910,14 @@ test("explicit configuration directory is applied to commit scope", async () => 
   assert.equal(head.files[".obsidian/settings.json"], undefined);
   assert.equal((await repo.scopeFor(head.oid)).rules.configDir, ".vault");
 });
+
+test("config client reads an ignored visible historical checkpoint under visible-only rules", async () => {
+  const ignored = file("visible checkpoint bytes");
+  const api = new FakeGitHub({ ".gitignore": file("drafts/\n"), "drafts/x.md": ignored, "note.md": file("base") });
+  const repo = client(api, undefined, INSTALLATION, "config/1");
+  assert.equal((await repo.readCommit(api.head)).files["drafts/x.md"], undefined);
+  const checkpoint = await repo.readCommitForScope(api.head, "visible-only");
+  assert.equal(checkpoint.files["drafts/x.md"]?.oid, ignored.oid);
+  assert.equal(checkpoint.files[".gitignore"], undefined);
+  assert.equal(checkpoint.treeOid, (await repo.readCommit(api.head)).treeOid);
+});

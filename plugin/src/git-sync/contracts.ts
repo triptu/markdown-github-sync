@@ -1,4 +1,4 @@
-import type { Scope } from "./scope";
+import type { Scope, ScopeRules } from "./scope";
 
 export type FileMode = "100644" | "100755";
 export interface Entry {
@@ -34,6 +34,8 @@ export interface Repository {
   identity(): Promise<RepositoryIdentity>;
   head(): Promise<CommitSnapshot>;
   readCommit(oid: string): Promise<CommitSnapshot>;
+  /** Read a historical checkpoint under its original policy during reviewed scope migration. */
+  readCommitForScope?(oid: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot>;
   /** Immutable policy for the complete tree at this commit; needed only in config/1 mode. */
   scopeFor?(commit: string): Promise<Scope>;
   /** Verified root ignore text at this commit; needed only in config/1 mode. */
