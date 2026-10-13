@@ -7,7 +7,9 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import type { GitObsidianVault as Adapter } from "../src/git-sync/obsidian-vault";
 import { NativeTransactionJournal } from "../src/git-sync/native-transactions";
-import { entryFromBytes } from "../src/git-sync/codec";
+import { NativePathPolicy } from "../src/git-sync/native-path-policy";
+import { compileScope } from "../src/git-sync/scope";
+import { entryFromBytes, hashBlob } from "../src/git-sync/codec";
 import type { JournalFiles } from "../src/git-sync/store";
 import type { App } from "obsidian";
 const temporary = mkdtempSync(join(tmpdir(), "git-native-vault-"));
@@ -40,7 +42,8 @@ const inspectHidden = (vault: Adapter) => vault.recover({ replay: [], cancel: []
 const replayPending = async (vault: Adapter) => vault.recover({
   replay: (await vault.pendingIntents()).map(intent => intent.id), cancel: [],
 });
-async function harness(modes = new Map<string, "100644" | "100755">()) {
+async function harness(modes = new Map<string, "100644" | "100755">(),
+  nativePolicy = NativePathPolicy.legacy) {
   const files = new Map<
     string,
     { file: InstanceType<typeof loaded.TFile>; data: Uint8Array }
@@ -55,7 +58,11 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
   const strings = new Map<string, string>();
   const folders = new Set<string>();
   let holdReads = 0;
+  let processCalls = 0;
+  const adapterReads: string[] = [];
   const put = (path: string, data: Uint8Array) => {
+    const parts = path.split("/");
+    for (let index = 1; index < parts.length; index++) folders.add(parts.slice(0, index).join("/"));
     const old = files.get(path)?.file;
     const file =
       old ??
@@ -87,13 +94,31 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
     write: async (path, value) => { journalWrite?.(path); strings.set(path, value); },
     rename,
     remove: async path => { strings.delete(path); files.delete(path); },
-    list: async path => ({ files: [...files.keys(), ...strings.keys()].filter(p => p.startsWith(`${path}/`) && !p.slice(path.length + 1).includes("/")), folders: [] }),
+    list: async listedPath => {
+      const path = listedPath === "/" ? "" : listedPath;
+      const foundFiles = new Set<string>(), foundFolders = new Set<string>();
+      for (const item of [...files.keys(), ...strings.keys(), ...folders]) {
+        if (path && !item.startsWith(`${path}/`)) continue;
+        const rest = path ? item.slice(path.length + 1) : item;
+        if (!rest) continue;
+        const child = rest.split("/")[0];
+        const name = path ? `${path}/${child}` : child;
+        if (rest.includes("/") || folders.has(item)) foundFolders.add(name);
+        else foundFiles.add(name);
+      }
+      return { files: [...foundFiles], folders: [...foundFolders] };
+    },
   };
   const app = {
     workspace: { iterateAllLeaves: (visit: (leaf: { view: InstanceType<typeof loaded.FileView> }) => void) => views.forEach(visit) },
     vault: {
+      configDir: ".obsidian",
       getFiles: () => [...files.values()].map((x) => x.file),
-      getAbstractFileByPath: (p: string) => files.get(p)?.file ?? null,
+      getAbstractFileByPath: (p: string) => {
+        if (p.startsWith(".") || p.split("/").some(part => part.startsWith(".")))
+          throw new Error(`Hidden TFile lookup: ${p}`);
+        return files.get(p)?.file ?? null;
+      },
       readBinary: async (f: { path: string }) =>
         files.get(f.path)!.data.slice().buffer,
       adapter: {
@@ -101,14 +126,21 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
         rename: async (from: string, to: string) => { await queuedRename?.(from, to); await rename(from, to); },
         stat: async (path: string) => {
           const item = files.get(path);
-          return item ? { type: "file", size: item.file.stat.size, mtime: item.file.stat.mtime } : null;
+          return item ? { type: "file", size: item.file.stat.size, mtime: item.file.stat.mtime }
+            : folders.has(path) ? { type: "folder", size: 0, mtime: 1 } : null;
         },
         copy: async (from: string, to: string) => {
           const item = files.get(from);
           if (!item) throw new Error("missing copy source");
           put(to, item.data);
         },
-        readBinary: async (path: string) => { if (path.includes("/hold/")) holdReads++; const data = files.get(path)!.data.slice().buffer; afterRead?.(path); return data; },
+        readBinary: async (path: string) => {
+          adapterReads.push(path);
+          if (path.includes("/hold/")) holdReads++;
+          const data = files.get(path)!.data.slice().buffer;
+          afterRead?.(path);
+          return data;
+        },
         writeBinary: async (path: string, data: ArrayBuffer) => { put(path, new Uint8Array(data)); },
         remove: async (path: string) => { files.delete(path); },
       },
@@ -118,6 +150,7 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
         put(p, new Uint8Array(d));
       },
       process: async (f: { path: string }, fn: (s: string) => string) => {
+        processCalls++;
         beforeProcess?.();
         const next = fn(text(files.get(f.path)!.data));
         put(f.path, bytes(next));
@@ -125,13 +158,15 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
       },
     },
   };
-  const open = async (hostLifetime = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") => {
-    const journal = await NativeTransactionJournal.open(journalFiles, "12345678-1234-1234-1234-123456789abc");
+  const open = async (hostLifetime = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    policy = nativePolicy) => {
+    const journal = await NativeTransactionJournal.open(journalFiles,
+      "12345678-1234-1234-1234-123456789abc", policy);
     const vault = new loaded.GitObsidianVault(app as unknown as App, {
       get: path => modes.get(path) ?? "100644",
       set: (path, mode) => { modes.set(path, mode); },
       remove: path => { modes.delete(path); },
-    }, () => {}, journal, hostLifetime);
+    }, () => {}, journal, hostLifetime, policy);
     return { vault, journal };
   };
   const { vault } = await open();
@@ -140,6 +175,9 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
     openView: (path: string) => { const view = new loaded.FileView(files.get(path)?.file ?? null); views.push({ view }); return view; },
     closeViews: () => { views.length = 0; },
     holdReads: () => holdReads,
+    processCalls: () => processCalls,
+    adapterReads,
+    setConfigDir: (configDir: string) => { app.vault.configDir = configDir; },
     put,
     files,
     strings,
@@ -867,3 +905,308 @@ for (const boundary of ["before-write", "after-record-rename"] as const) {
     assert.deepEqual(h.files.get(hold)!.data, replacement);
   });
 }
+
+async function configScope(gitignore: string | null = null) {
+  return compileScope({ rules: "config/1", configDir: ".obsidian",
+    gitignore: gitignore === null ? null : await hashBlob(bytes(gitignore)) }, gitignore);
+}
+
+test("scoped capture combines visible and adapter-only configuration while legacy remains visible", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  h.put("note.md", bytes("note"));
+  h.put(".gitignore", bytes("*.tmp\n"));
+  h.put(".obsidian/app.json", bytes('{"theme":"dark"}'));
+  h.put(".obsidian/plugins/example/data.json", bytes('{"enabled":true}'));
+  h.put(".obsidian/workspace.json", bytes("private workspace"));
+  h.put(".obsidian/plugins/github-vault-sync/data.json", bytes("private sync state"));
+  assert.deepEqual(Object.keys(await h.vault.capture()), ["note.md"]);
+  h.adapterReads.length = 0;
+  const captured = await h.vault.capture(await configScope());
+  assert.deepEqual(Object.keys(captured).sort(), [".gitignore", ".obsidian/app.json",
+    ".obsidian/plugins/example/data.json", "note.md"]);
+  assert.equal(h.adapterReads.includes(".obsidian/workspace.json"), false);
+  assert.equal(h.adapterReads.includes(".obsidian/plugins/github-vault-sync/data.json"), false);
+});
+
+test("hidden configuration and root ignore apply by adapter rename, retain holds, and survive restart", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const path = ".obsidian/app.json";
+  const before = await entryFromBytes(bytes("old")), next = await entryFromBytes(bytes("new"));
+  h.put(path, bytes("old"));
+  assert.equal((await h.vault.apply(path, before, next)).kind, "applied");
+  assert.deepEqual(h.files.get(path)?.data, bytes("new"));
+  assert.ok([...h.files.keys()].some(name => name.includes("/hold/")));
+  assert.equal(h.processCalls(), 0);
+  const restarted = (await h.open()).vault;
+  assert.equal((await restarted.scan(await configScope())).files[path].oid, next.oid);
+  assert.equal((await restarted.apply(path, next, null)).kind, "applied");
+  assert.equal(h.files.has(path), false);
+  const ignore = await entryFromBytes(bytes("*.tmp\n"));
+  assert.equal((await restarted.apply(".gitignore", null, ignore)).kind, "applied");
+  assert.deepEqual(h.files.get(".gitignore")?.data, bytes("*.tmp\n"));
+  assert.equal(h.processCalls(), 0);
+});
+
+test("hidden replay resumes after displacement crash without clobber or TFile process", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const path = ".obsidian/app.json";
+  const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
+  h.put(path, bytes("before"));
+  h.setRenameHook(from => { if (from === path) throw new Error("crash after hidden displacement"); });
+  await assert.rejects(h.vault.apply(path, before, next), /crash after hidden displacement/);
+  assert.equal(h.files.has(path), false);
+  h.setRenameHook();
+  const restarted = (await h.open()).vault;
+  await replayPending(restarted);
+  assert.deepEqual(h.files.get(path)?.data, bytes("after"));
+  assert.equal(h.processCalls(), 0);
+});
+
+test("hidden replay preserves a destination created during the crash window", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const path = ".obsidian/app.json";
+  const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
+  h.put(path, bytes("before"));
+  h.setRenameHook(from => { if (from === path) throw new Error("crash after hidden displacement"); });
+  await assert.rejects(h.vault.apply(path, before, next), /crash after hidden displacement/);
+  h.setRenameHook();
+  h.put(path, bytes("new local edit"));
+  const restarted = (await h.open()).vault;
+  await replayPending(restarted);
+  assert.deepEqual(h.files.get(path)?.data, bytes("new local edit"));
+  assert.ok(restarted.nativeRecoveries().some(issue => issue.path === path && issue.kind === "interrupted"));
+});
+
+for (const choice of ["replay", "cancel"] as const) {
+  test(`oversized hidden source blocks pending ${choice} locally and keeps its bytes`, async () => {
+    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    const path = ".obsidian/app.json";
+    const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
+    h.put(path, bytes("before"));
+    h.setBeforeRenameHook(from => { if (from === path) throw new Error("before hidden displacement"); });
+    await assert.rejects(h.vault.apply(path, before, next), /before hidden displacement/);
+    h.setBeforeRenameHook();
+    const large = new Uint8Array(8 * 1024 * 1024 + 1);
+    h.put(path, large);
+    const restarted = (await h.open()).vault;
+    const [intent] = await restarted.pendingIntents();
+    await restarted.recover({ replay: choice === "replay" ? [intent.id] : [],
+      cancel: choice === "cancel" ? [intent.id] : [] });
+    assert.deepEqual(h.files.get(path)?.data, large);
+    assert.equal((await restarted.pendingIntents()).length, 1);
+    assert.ok(restarted.nativeRecoveries().some(issue => issue.kind === "oversize" && issue.path === path));
+    assert.equal((await restarted.apply("unrelated.md", null,
+      await entryFromBytes(bytes("progress")))).kind, "applied");
+  });
+}
+
+test("retained oversized hidden hold becoming missing durably replaces stale metadata", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const path = ".obsidian/app.json";
+  const before = await entryFromBytes(new Uint8Array([0, 255]));
+  const next = await entryFromBytes(new Uint8Array([1, 254]));
+  h.put(path, new Uint8Array([0, 255]));
+  assert.equal((await h.vault.apply(path, before, next)).kind, "applied");
+  const hold = [...h.files.keys()].find(name => name.includes("/hold/"));
+  assert.ok(hold);
+  h.put(hold, new Uint8Array(8 * 1024 * 1024 + 1));
+  await inspectHidden(h.vault);
+  const old = h.vault.nativeRecoveries().find(issue => issue.kind === "oversize" && issue.sourcePath === hold);
+  assert.ok(old);
+  h.files.delete(hold);
+  const restarted = (await h.open()).vault;
+  await inspectHidden(restarted);
+  const missing = restarted.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+  assert.ok(missing && missing.kind === "displaced" && missing.found === null);
+  assert.equal(restarted.nativeRecoveries().some(issue => issue.id === old.id), false);
+  await assert.rejects(restarted.acknowledgeRecovery([old.id]), /source changed/);
+  assert.deepEqual(h.files.get(path)?.data, new Uint8Array([1, 254]));
+});
+
+test("ignored confidential paths are inventoried by name but never read", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  h.put(".obsidian/app.json", bytes("included"));
+  h.put(".obsidian/private.txt", bytes("confidential"));
+  h.put("content/private.bin", bytes("confidential"));
+  h.put("content/public.bin", bytes("public"));
+  h.setReadHook(path => {
+    if (path.endsWith("private.txt") || path.endsWith("private.bin")) throw new Error("ignored bytes read");
+  });
+  const result = await h.vault.scan(await configScope(".obsidian/private.txt\ncontent/private.bin\n"));
+  assert.deepEqual(Object.keys(result.files).sort(), [".obsidian/app.json", "content/public.bin"]);
+  assert.equal(h.adapterReads.some(path => path.endsWith("private.txt") || path.endsWith("private.bin")), false);
+});
+
+test("nested ignore in an ordinary content directory blocks before byte reads", async () => {
+  for (const control of [".gitignore", ".GITIGNORE", ".ＧＩＴＩＧＮＯＲＥ"]) {
+    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    h.put("note.md", bytes("safe"));
+    h.put(`ordinary/deep/${control}`, bytes("*.md\n"));
+    await assert.rejects(h.vault.scan(await configScope()), /Nested .gitignore/);
+    assert.deepEqual(h.adapterReads, []);
+  }
+});
+
+test("hidden and visible bytes share one 128 MiB capture limit", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const chunk = new Uint8Array(8 * 1024 * 1024);
+  for (let index = 0; index < 16; index++) h.put(`.obsidian/part-${index}.bin`, chunk);
+  h.put("one.md", bytes("x"));
+  await assert.rejects(h.vault.scan(await configScope()), /Vault content exceeds the 128 MiB safety limit/);
+  assert.equal(h.adapterReads.includes("one.md"), true);
+});
+
+test("case and Unicode aliases across excluded names and path prefixes block scoped capture and apply", async () => {
+  for (const pair of [
+    [".obsidian/app.json", ".OBSIDIAN/app.json", null],
+    ["Docs/keep.md", "docs/secret.txt", "docs/secret.txt\n"],
+    ["Notes/Ａ.md", "Notes/A.md", "Notes/A.md\n"],
+  ] as const) {
+    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    h.put(pair[0], bytes("included"));
+    h.put(pair[1], bytes("excluded"));
+    await assert.rejects(h.vault.scan(await configScope(pair[2])), /Case or Unicode path collision/);
+    assert.deepEqual(h.adapterReads, []);
+    await assert.rejects(h.vault.apply(pair[0], null, await entryFromBytes(bytes("remote"))),
+      /Case or Unicode path collision/);
+    assert.deepEqual(h.files.get(pair[0])?.data, bytes("included"));
+  }
+});
+
+test("legacy journal refuses config scope and configured journal refuses another binding", async () => {
+  const policy = await NativePathPolicy.forConfig(".obsidian");
+  const legacy = await harness();
+  legacy.put("note.bin", bytes("old"));
+  await legacy.vault.apply("note.bin", await entryFromBytes(bytes("old")),
+    await entryFromBytes(bytes("new")));
+  await assert.rejects(legacy.open(undefined, policy), /policy does not match/);
+  await assert.rejects(legacy.vault.apply(".obsidian/app.json", null,
+    await entryFromBytes(bytes("hidden"))), /Unsupported vault path/);
+  const configured = await harness(undefined, policy);
+  configured.put(".obsidian/app.json", bytes("old"));
+  await configured.vault.apply(".obsidian/app.json", await entryFromBytes(bytes("old")),
+    await entryFromBytes(bytes("new")));
+  await assert.rejects(configured.open(undefined, NativePathPolicy.legacy), /policy does not match/);
+  configured.setConfigDir(".settings");
+  await assert.rejects(configured.open(), /configuration directory does not match/);
+  await assert.rejects(configured.vault.apply(".obsidian/app.json", null,
+    await entryFromBytes(bytes("changed"))), /configuration directory does not match/);
+});
+
+test("reviewed policy upgrade retains the same journal and historical native holds", async () => {
+  const h = await harness();
+  const before = new Uint8Array([0, 255]), next = new Uint8Array([1, 254]);
+  h.put("note.bin", before);
+  assert.equal((await h.vault.apply("note.bin", await entryFromBytes(before),
+    await entryFromBytes(next))).kind, "applied");
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  const policy = await NativePathPolicy.forConfig(".obsidian");
+  const { journal } = await h.open();
+  let checked = false;
+  await journal.upgradePolicy(policy, async () => { checked = true; });
+  assert.equal(checked, true);
+  assert.equal(journal.matchesPolicy(policy), true);
+  assert.deepEqual(h.files.get(hold)?.data, before);
+  const configured = await h.open(undefined, policy);
+  assert.ok(configured.journal.trackedPaths().includes(hold));
+  assert.deepEqual(h.files.get(hold)?.data, before);
+  await assert.rejects(h.open(), /policy does not match/);
+  assert.equal((await configured.vault.apply(".obsidian/app.json", null,
+    await entryFromBytes(bytes("ready")))).kind, "applied");
+});
+
+test("policy upgrade requires the durable review gate and no unresolved intent or issue", async () => {
+  const h = await harness();
+  const policy = await NativePathPolicy.forConfig(".obsidian");
+  const { journal } = await h.open();
+  await assert.rejects(journal.upgradePolicy(policy, async () => { throw new Error("review pause absent"); }),
+    /review pause absent/);
+  await assert.rejects(h.open(undefined, policy), /policy does not match/);
+  const before = await entryFromBytes(bytes("old")), next = await entryFromBytes(bytes("new"));
+  await journal.begin("note.bin", before, next, "rename");
+  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /Resolve native intents/);
+  await journal.cancel("note.bin");
+  const issue = await journal.retainBytes(bytes("evidence"), "note.bin", "historical-source", "displaced", null, null);
+  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /Resolve native intents/);
+  await journal.acknowledge([issue.id]);
+  await journal.upgradePolicy(policy, async () => {});
+  assert.equal((await h.open(undefined, policy)).journal.matchesPolicy(policy), true);
+});
+
+test("policy upgrade checks historical paths and physical stage files at commit time", async () => {
+  const h = await harness();
+  const before = new Uint8Array([0, 255]), next = new Uint8Array([1, 254]);
+  h.put("Thumbs.db", before);
+  await h.vault.apply("Thumbs.db", await entryFromBytes(before),
+    await entryFromBytes(next));
+  const { journal } = await h.open();
+  const policy = await NativePathPolicy.forConfig(".obsidian");
+  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /outside configuration policy/);
+  assert.equal(journal.matchesPolicy(NativePathPolicy.legacy), true);
+  const clean = await harness();
+  const opened = await clean.open();
+  const untracked = `${opened.journal.root}/stage/${crypto.randomUUID()}`;
+  clean.put(untracked, bytes("untracked"));
+  await assert.rejects(opened.journal.upgradePolicy(policy, async () => {}), /Untracked native stage/);
+  assert.deepEqual(clean.files.get(untracked)?.data, bytes("untracked"));
+});
+
+for (const boundary of ["before-write", "after-record-rename"] as const) {
+  test(`policy upgrade resolves ${boundary} interruption from durable binding`, async () => {
+    const h = await harness();
+    const policy = await NativePathPolicy.forConfig(".obsidian");
+    const { journal } = await h.open();
+    if (boundary === "before-write") h.setJournalWriteHook(path => {
+      if (path.includes("/native/records/")) throw new Error("upgrade crash before record");
+    });
+    else h.setRenameHook((_from, to) => {
+      if (to.includes("/native/records/")) throw new Error("upgrade crash after record");
+    });
+    await assert.rejects(journal.upgradePolicy(policy, async () => {}), /upgrade crash/);
+    assert.throws(() => journal.pending(), /persistence is uncertain/);
+    h.setJournalWriteHook();
+    h.setRenameHook();
+    if (boundary === "before-write") {
+      await assert.rejects(h.open(undefined, policy), /policy does not match/);
+      const legacy = await h.open();
+      await legacy.journal.upgradePolicy(policy, async () => {});
+    } else await assert.rejects(h.open(), /policy does not match/);
+    assert.equal((await h.open(undefined, policy)).journal.matchesPolicy(policy), true);
+  });
+}
+
+test("a protected directory alias introduced after a hidden crash blocks replay", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const path = ".obsidian/app.json";
+  const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
+  h.put(path, bytes("before"));
+  h.setRenameHook(from => { if (from === path) throw new Error("crash after hidden displacement"); });
+  await assert.rejects(h.vault.apply(path, before, next), /crash after hidden displacement/);
+  h.setRenameHook();
+  h.put(".OBSIDIAN/foreign.json", bytes("foreign"));
+  const restarted = (await h.open()).vault;
+  await assert.rejects(replayPending(restarted), /Case or Unicode path collision/);
+  assert.equal(h.files.has(path), false);
+  assert.deepEqual(h.files.get(".OBSIDIAN/foreign.json")?.data, bytes("foreign"));
+  assert.equal((await restarted.pendingIntents()).length, 1);
+});
+
+test("oversized scoped config can export only under a dedicated hidden recovery directory", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const source = ".obsidian/app.json";
+  const large = new Uint8Array(8 * 1024 * 1024 + 1);
+  h.put(source, large);
+  const { vault, journal } = await h.open();
+  const record = await journal.retainOversize(source, source, null, null, large.length, 1);
+  assert.ok(record);
+  const output = `.git-vault-sync-export-${crypto.randomUUID()}/.obsidian/app.json`;
+  const exported = await vault.exportOversize(record.id, output);
+  assert.equal(exported.path, output);
+  assert.deepEqual(h.files.get(output)?.data, large);
+  assert.deepEqual(h.files.get(source)?.data, large);
+  await assert.rejects(vault.exportOversize(record.id,
+    `.git-vault-sync-export-${crypto.randomUUID()}/.obsidian/workspace.json`), /Unsupported vault path/);
+  await assert.rejects(vault.exportOversize(record.id,
+    `.git-vault-sync-export-${crypto.randomUUID()}/.git-vault-sync/state.json`), /Unsupported vault path/);
+});

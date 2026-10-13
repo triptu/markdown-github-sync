@@ -1,8 +1,12 @@
 import type { Entry, NativeIssue } from "./contracts";
 import { decodeBase64, entryFromBytes, hashBlob, isOid, isSyncablePath, verifyEntry } from "./codec";
 import { FileJournalStore, type JournalFiles } from "./store";
+import { assertLocalNamespace, inventoryLocal, NativePathPolicy, type NativePolicyBinding } from "./native-path-policy";
 
 export type NativeMethod = "text-process" | "rename";
+export class NativePolicyMismatchError extends Error {
+  constructor() { super("Native transaction journal policy does not match this vault."); }
+}
 export interface FileIntent {
   id: string;
   path: string;
@@ -54,6 +58,7 @@ interface TrackedHidden {
 }
 interface JournalState {
   format: 3;
+  policy: NativePolicyBinding;
   intents: Record<string, FileIntent>;
   tracked: Record<string, TrackedHidden>;
   recoveries: NativeRecovery[];
@@ -64,8 +69,16 @@ const uuid = /^[0-9a-f-]{36}$/;
 function isHiddenPath(root: string, path: string): boolean {
   return new RegExp(`^${root.replaceAll(".", "\\.")}/(?:stage|hold)/[0-9a-f-]{36}$`).test(path);
 }
-function isRecoverySource(root: string, path: string, sourcePath: string): boolean {
-  return isHiddenPath(root, sourcePath) || (sourcePath === path && isSyncablePath(sourcePath));
+function isRecoverySource(root: string, path: string, sourcePath: string, policy: NativePathPolicy): boolean {
+  return isHiddenPath(root, sourcePath) || (sourcePath === path && policy.allows(sourcePath));
+}
+function isBytesRecoverySource(root: string, path: string, sourcePath: string, policy: NativePathPolicy): boolean {
+  // Legacy beta records admitted arbitrary source labels. Keep them readable;
+  // config/1 records are created only with a native source or its held file.
+  return policy.binding.rules === "visible-only" || isRecoverySource(root, path, sourcePath, policy);
+}
+function samePolicy(a: NativePolicyBinding, b: NativePolicyBinding): boolean {
+  return a.rules === b.rules && (a.rules === "visible-only" || b.rules === "config/1" && a.configDir === b.configDir);
 }
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,15 +90,20 @@ function optionalEntry(value: unknown): value is Entry | null { return value ===
 async function validateEntry(path: string, value: Entry | null): Promise<void> {
   if (value) await verifyEntry(path, value);
 }
-async function parseState(value: unknown, root: string): Promise<JournalState> {
+async function parseState(value: unknown, root: string, policy: NativePathPolicy): Promise<JournalState> {
   if (!object(value) || value.format !== 3 || !object(value.intents) || !object(value.tracked)
     || !Array.isArray(value.recoveries)
     || (value.acknowledgedOversize !== undefined && !Array.isArray(value.acknowledgedOversize))
     || (value.supersededRecoveryIds !== undefined && !Array.isArray(value.supersededRecoveryIds)))
     throw new Error("Native transaction journal is corrupt.");
+  const storedPolicy = value.policy ?? { rules: "visible-only" };
+  if (!object(storedPolicy) || (storedPolicy.rules !== "visible-only" && storedPolicy.rules !== "config/1")
+    || (policy.binding.rules === "visible-only" ? storedPolicy.rules !== "visible-only" :
+      storedPolicy.rules !== "config/1" || storedPolicy.configDir !== policy.binding.configDir))
+    throw new NativePolicyMismatchError();
   const intents: Record<string, FileIntent> = Object.create(null);
   for (const [path, raw] of Object.entries(value.intents)) {
-    if (!object(raw) || !isSyncablePath(path) || raw.path !== path || typeof raw.id !== "string"
+    if (!object(raw) || !policy.allows(path) || raw.path !== path || typeof raw.id !== "string"
       || !uuid.test(raw.id) || !optionalEntry(raw.expectedEntry) || !optionalEntry(raw.nextEntry)
       || (raw.expected !== null && !isOid(raw.expected)) || (raw.next !== null && !isOid(raw.next))
       || raw.expected !== (raw.expectedEntry?.oid ?? null) || raw.next !== (raw.nextEntry?.oid ?? null)
@@ -94,7 +112,7 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
       || (raw.hostLifetime !== null && (typeof raw.hostLifetime !== "string" || !uuid.test(raw.hostLifetime)))
       || raw.stage !== (raw.method === "rename" && raw.next ? `${root}/stage/${raw.id}` : null)
       || raw.hold !== (raw.method === "rename" && raw.expected ? `${root}/hold/${raw.id}` : null)
-      || (raw.method === "text-process" && (!raw.expected || !raw.next)))
+      || (raw.method === "text-process" && (!raw.expected || !raw.next || !isSyncablePath(path))))
       throw new Error("Native transaction intent is corrupt.");
     await validateEntry(path, raw.expectedEntry);
     await validateEntry(path, raw.nextEntry);
@@ -109,7 +127,7 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
   }
   const tracked: Record<string, TrackedHidden> = Object.create(null);
   for (const [hidden, raw] of Object.entries(value.tracked)) {
-    if (!object(raw) || typeof raw.path !== "string" || !isSyncablePath(raw.path)
+    if (!object(raw) || typeof raw.path !== "string" || !policy.allows(raw.path)
       || !optionalEntry(raw.expected) || !optionalEntry(raw.next)
       || (raw.hostLifetime !== null && (typeof raw.hostLifetime !== "string" || !uuid.test(raw.hostLifetime)))
       || (raw.observed !== null && !isOid(raw.observed))
@@ -123,21 +141,22 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
   }
   const recoveries: NativeRecovery[] = [];
   for (const raw of value.recoveries) {
-    if (!object(raw) || typeof raw.id !== "string" || !uuid.test(raw.id)
-      || !isSyncablePath(raw.path) || typeof raw.sourcePath !== "string"
+    if (!object(raw) || typeof raw.id !== "string" || !uuid.test(raw.id) || typeof raw.path !== "string"
+      || !policy.allows(raw.path) || typeof raw.sourcePath !== "string"
       || !optionalEntry(raw.expected) || !optionalEntry(raw.next))
       throw new Error("Native recovery record is corrupt.");
     await validateEntry(raw.path, raw.expected);
     await validateEntry(raw.path, raw.next);
     if (raw.kind === "oversize") {
-      if (!isRecoverySource(root, raw.path, raw.sourcePath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0
+      if (!isRecoverySource(root, raw.path, raw.sourcePath, policy) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0
         || (raw.mtime !== undefined && raw.mtime !== null
           && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
         throw new Error("Native recovery record is corrupt.");
       recoveries.push({ id: raw.id, kind: "oversize", path: raw.path, sourcePath: raw.sourcePath,
         expected: raw.expected, next: raw.next, size: raw.size, mtime: raw.mtime ?? null });
     } else if (raw.kind === "interrupted" || raw.kind === "displaced") {
-      if (!optionalEntry(raw.found)) throw new Error("Native recovery record is corrupt.");
+      if (!isBytesRecoverySource(root, raw.path, raw.sourcePath, policy) || !optionalEntry(raw.found))
+        throw new Error("Native recovery record is corrupt.");
       await validateEntry(raw.path, raw.found);
       recoveries.push({ id: raw.id, kind: raw.kind, path: raw.path, sourcePath: raw.sourcePath,
         expected: raw.expected, next: raw.next, found: raw.found });
@@ -146,7 +165,7 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
   const acknowledgedOversize: AcknowledgedOversize[] = [];
   for (const raw of value.acknowledgedOversize ?? []) {
     if (!object(raw) || typeof raw.sourcePath !== "string"
-      || (!isHiddenPath(root, raw.sourcePath) && !isSyncablePath(raw.sourcePath))
+      || (!isHiddenPath(root, raw.sourcePath) && !policy.allows(raw.sourcePath))
       || !Number.isSafeInteger(raw.size) || typeof raw.size !== "number" || raw.size <= 0
       || (raw.mtime !== null && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
       throw new Error("Native oversize acknowledgement is corrupt.");
@@ -155,33 +174,73 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
   const supersededRecoveryIds = value.supersededRecoveryIds ?? [];
   if (!supersededRecoveryIds.every((id: unknown) => typeof id === "string" && uuid.test(id)))
     throw new Error("Native superseded recovery IDs are corrupt.");
-  return { format: 3, intents, tracked, recoveries, acknowledgedOversize, supersededRecoveryIds };
+  return { format: 3, policy: policy.binding, intents, tracked, recoveries, acknowledgedOversize, supersededRecoveryIds };
 }
 
 /** Native intent and evidence state in the same verified, compactable journal implementation as engine state. */
 export class NativeTransactionJournal {
   readonly root: string;
-  private state: JournalState = { format: 3, intents: Object.create(null), tracked: Object.create(null), recoveries: [], acknowledgedOversize: [], supersededRecoveryIds: [] };
+  private state: JournalState;
   private uncertain = false;
-  private constructor(private files: JournalFiles, private store: FileJournalStore, installationId: string) {
+  private constructor(private files: JournalFiles, private store: FileJournalStore, installationId: string,
+    private policy: NativePathPolicy) {
     this.root = `.git-vault-sync/${installationId}`;
+    this.state = { format: 3, policy: policy.binding, intents: Object.create(null), tracked: Object.create(null),
+      recoveries: [], acknowledgedOversize: [], supersededRecoveryIds: [] };
   }
-  static async open(files: JournalFiles, installationId: string): Promise<NativeTransactionJournal> {
+  static async open(files: JournalFiles, installationId: string,
+    policy: NativePathPolicy = NativePathPolicy.legacy): Promise<NativeTransactionJournal> {
     const store = new FileJournalStore(files, installationId, "native");
-    const journal = new NativeTransactionJournal(files, store, installationId);
+    const journal = new NativeTransactionJournal(files, store, installationId, policy);
     // Old experimental journals contain evidence we cannot silently abandon.
     const legacy = `${journal.root}/native-records`;
     if (await files.exists(legacy) && (await files.list(legacy)).files.some(path => path.endsWith(".json")))
       throw new Error("Legacy native transaction journal needs migration before syncing.");
     const loaded = await store.load();
-    if (loaded !== null) journal.state = await parseState(loaded, journal.root);
+    if (loaded !== null) journal.state = await parseState(loaded, journal.root, policy);
     for (const path of [journal.root, `${journal.root}/stage`, `${journal.root}/hold`]) {
       if (!(await files.exists(path))) await files.mkdir(path);
+    }
+    if (loaded === null) {
+      if (policy.binding.rules === "config/1") for (const kind of ["stage", "hold"] as const) {
+        const listed = await files.list(`${journal.root}/${kind}`);
+        if (listed.files.length || listed.folders.length)
+          throw new Error(`Untracked native ${kind} files block configuration enrollment.`);
+      }
+      await journal.save(journal.state);
     }
     return journal;
   }
   private trusted(): void {
     if (this.uncertain) throw new Error("Native transaction persistence is uncertain. Reload before syncing.");
+  }
+  matchesPolicy(policy: NativePathPolicy): boolean { return samePolicy(this.state.policy, policy.binding); }
+  /** Explicit, review-gated upgrade of an existing journal in its original namespace. */
+  async upgradePolicy(next: NativePathPolicy, assertDurableReviewedPause: () => Promise<void>): Promise<void> {
+    this.trusted();
+    if (this.policy.binding.rules !== "visible-only" || next.binding.rules !== "config/1")
+      throw new Error("Native policy upgrade requires a legacy journal and a config policy.");
+    await assertDurableReviewedPause();
+    this.trusted();
+    if (Object.keys(this.state.intents).length || this.state.recoveries.length)
+      throw new Error("Resolve native intents and recovery issues before configuration enrollment.");
+    for (const tracked of Object.values(this.state.tracked)) if (!next.allows(tracked.path))
+      throw new Error(`Retained native path is outside configuration policy: ${tracked.path}`);
+    for (const acknowledged of this.state.acknowledgedOversize)
+      if (!isHiddenPath(this.root, acknowledged.sourcePath) && !next.allows(acknowledged.sourcePath))
+        throw new Error(`Acknowledged native source is outside configuration policy: ${acknowledged.sourcePath}`);
+    const inventory = await inventoryLocal(this.files, () => this.trusted());
+    assertLocalNamespace(inventory, next);
+    for (const kind of ["stage", "hold"] as const) {
+      const directory = `${this.root}/${kind}`;
+      if ([...inventory.folders].some(path => path.startsWith(`${directory}/`)) ||
+        [...inventory.files].some(path => path.startsWith(`${directory}/`) && !this.state.tracked[path]))
+        throw new Error(`Untracked native ${kind} files block configuration enrollment.`);
+    }
+    // The record is the commit point. A failed save leaves this instance
+    // uncertain; reopen under whichever policy the durable record contains.
+    await this.save({ ...this.state, policy: next.binding });
+    this.policy = next;
   }
   private async save(state: JournalState): Promise<void> {
     this.trusted();
@@ -218,12 +277,12 @@ export class NativeTransactionJournal {
   issues(): NativeIssue[] { this.trusted(); return [...this.state.recoveries]; }
   async begin(path: string, expected: Entry | null, next: Entry | null, method: NativeMethod, hostLifetime: string | null = null): Promise<FileIntent> {
     this.trusted();
-    if (!isSyncablePath(path) || (!expected && !next)) throw new Error(`Unsupported native transaction path: ${path}`);
+    if (!this.policy.allows(path) || (!expected && !next)) throw new Error(`Unsupported native transaction path: ${path}`);
     if (hostLifetime !== null && !uuid.test(hostLifetime)) throw new Error("Invalid host lifetime identity.");
     if (this.state.intents[path]) throw new Error(`Unresolved native transaction: ${path}`);
     await validateEntry(path, expected);
     await validateEntry(path, next);
-    if (method === "text-process" && (!expected || !next)) throw new Error("Invalid text transaction.");
+    if (method === "text-process" && (!expected || !next || !isSyncablePath(path))) throw new Error("Invalid text transaction.");
     const id = crypto.randomUUID();
     const intent: FileIntent = { id, path, expected: expected?.oid ?? null, next: next?.oid ?? null,
       expectedEntry: expected, nextEntry: next, method, attempted: false, hostLifetime,
@@ -280,7 +339,8 @@ export class NativeTransactionJournal {
   }
   async retainIssue(input: Omit<NativeBytesRecovery, "id">): Promise<NativeBytesRecovery> {
     this.trusted();
-    if (!isSyncablePath(input.path)) throw new Error("Invalid native issue path.");
+    if (!this.policy.allows(input.path) || !isBytesRecoverySource(this.root, input.path, input.sourcePath, this.policy))
+      throw new Error("Invalid native issue path.");
     await validateEntry(input.path, input.expected);
     await validateEntry(input.path, input.next);
     await validateEntry(input.path, input.found);
@@ -303,6 +363,8 @@ export class NativeTransactionJournal {
   async retainOversize(path: string, sourcePath: string, expected: Entry | null, next: Entry | null,
     size: number, mtime: number | null = null): Promise<NativeOversizeRecovery | null> {
     this.trusted();
+    if (!this.policy.allows(path) || !isRecoverySource(this.root, path, sourcePath, this.policy))
+      throw new Error(`Unsupported native recovery source: ${sourcePath}`);
     if (this.state.acknowledgedOversize.some(item => item.sourcePath === sourcePath && item.size === size && item.mtime === mtime)) return null;
     const prior = this.state.recoveries.find(item => item.kind === "oversize" && item.sourcePath === sourcePath && item.size === size && item.mtime === mtime);
     if (prior?.kind === "oversize") return prior;

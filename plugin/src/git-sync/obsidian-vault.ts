@@ -3,6 +3,9 @@ import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, ve
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
+import { HiddenConfigPort } from "./hidden-config";
+import { assertLocalNamespace, inventoryLocal, NativePathPolicy } from "./native-path-policy";
+import { canonicalFilesystemPath, type Scope } from "./scope";
 
 export interface RecoveryAuthorization { replay: string[]; cancel: string[] }
 export interface UnreadableNativeFile { path: string; size: number; mtime: number | null; reason: "oversize" }
@@ -14,17 +17,17 @@ class OversizeReadError extends Error {
   constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
 }
 function visible(path: string): boolean { return path.split("/").every(part => !part.startsWith(".")); }
-function safePath(path: string): void {
-  if (!isSyncablePath(path) || path.split("/").some(part => !part || part === "." || part === ".."
+function safePath(path: string, policy: NativePathPolicy = NativePathPolicy.legacy): void {
+  if (!policy.allows(path) || path.split("/").some(part => !part || part === "." || part === ".."
     || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
     || /[\\:\x00-\x1f\x7f]/.test(path)) throw new Error(`Unsupported vault path: ${path}`);
 }
-function safeExportPath(path: string): void {
+function safeExportPath(path: string, policy: NativePathPolicy): void {
   if (!isValidPath(path)) throw new Error(`Unsupported export path: ${path}`);
   const [directory, ...suffix] = path.split("/");
   if (!/^\.git-vault-sync-export-[0-9a-f-]{36}$/.test(directory) || suffix.length === 0)
     throw new Error(`Export must use a dedicated hidden directory: ${path}`);
-  safePath(suffix.join("/"));
+  safePath(suffix.join("/"), policy);
 }
 function exactText(bytes: Uint8Array): string | null {
   try {
@@ -40,7 +43,18 @@ export class GitObsidianVault implements LocalVault {
     private assertActive: () => void = () => {},
     private transactions?: NativeTransactionJournal,
     private hostLifetime: string | null = null,
-  ) {}
+    private nativePolicy: NativePathPolicy = NativePathPolicy.legacy,
+  ) {
+    if (transactions && !transactions.matchesPolicy(nativePolicy))
+      throw new Error("Native transaction journal policy does not match the vault.");
+    if (nativePolicy.binding.rules === "config/1" && app.vault.configDir !== nativePolicy.binding.configDir)
+      throw new Error("Vault configuration directory does not match native policy.");
+  }
+  private assertConfigDir(): void {
+    if (this.nativePolicy.binding.rules === "config/1" &&
+      this.app.vault.configDir !== this.nativePolicy.binding.configDir)
+      throw new Error("Vault configuration directory does not match native policy.");
+  }
   private openView(path: string): boolean {
     let open = false;
     this.app.workspace.iterateAllLeaves(leaf => {
@@ -69,7 +83,7 @@ export class GitObsidianVault implements LocalVault {
       this.oversized.set(path, stat.size);
       return "oversize";
     }
-    const file = this.app.vault.getAbstractFileByPath(path);
+    const file = visible(path) ? this.app.vault.getAbstractFileByPath(path) : null;
     if (file instanceof TFile && file.stat.size > maxFileBytes) {
       this.oversized.set(path, file.stat.size);
       return "oversize";
@@ -153,6 +167,7 @@ export class GitObsidianVault implements LocalVault {
   }
   private async renameTransaction(intent: FileIntent): Promise<ApplyResult> {
     if (!this.transactions) throw new Error("Native transaction journal is unavailable.");
+    await this.assertWritableNamespace(intent.path);
     const source = await this.pendingSource(intent);
     if (source) return source;
     const adapter = this.app.vault.adapter;
@@ -180,16 +195,16 @@ export class GitObsidianVault implements LocalVault {
       return this.finish(intent, await this.preserve(intent.path, intent, "interrupted"));
     }
     if (held === null && intent.expected !== null) {
-      if (this.openView(intent.path)) return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
+      if (visible(intent.path) && this.openView(intent.path)) return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
       const staged = await this.stage(intent);
       if (staged) return this.finish(intent, staged);
       await this.transactions.markAttempted(intent.path);
-      if (this.openView(intent.path)) return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
+      if (visible(intent.path) && this.openView(intent.path)) return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
       this.assertActive();
       await adapter.rename(intent.path, intent.hold!);
       // The adapter may queue a rename while a view opens. Undo the retargeting
       // before proceeding; the no-clobber reverse rename preserves later edits.
-      if (this.openView(intent.hold!)) {
+      if (visible(intent.path) && this.openView(intent.hold!)) {
         await this.rollbackHeld(intent);
         if (await this.oid(intent.path) === intent.expected && await this.hiddenOid(intent.hold!) === null)
           await this.transactions.clearAttempt(intent.path);
@@ -278,6 +293,7 @@ export class GitObsidianVault implements LocalVault {
   }
   private async cancelIntent(intent: FileIntent): Promise<void> {
     if (!this.transactions) return;
+    await this.assertWritableNamespace(intent.path);
     if (!intent.attempted) { await this.transactions.cancel(intent.path); return; }
     if (await this.pendingSource(intent)) return;
     const live = await this.oid(intent.path);
@@ -315,6 +331,7 @@ export class GitObsidianVault implements LocalVault {
   /** Only an engine-authorized call may replay/cancel intents or persist hidden evidence. */
   async recoverNative(authorization: RecoveryAuthorization): Promise<NativeRecovery[]> {
     this.assertActive();
+    this.assertConfigDir();
     if (!this.transactions) return [];
     const replay = new Set(authorization.replay), cancel = new Set(authorization.cancel);
     for (const id of replay) if (cancel.has(id)) throw new Error(`Conflicting native recovery authorization: ${id}`);
@@ -381,6 +398,7 @@ export class GitObsidianVault implements LocalVault {
   }
   async acknowledgeRecovery(ids: string[]): Promise<void> {
     this.assertActive();
+    this.assertConfigDir();
     const selected = new Set(ids);
     for (const record of this.transactions?.recoveries() ?? []) {
       if (record.kind !== "oversize" || !selected.has(record.id)) continue;
@@ -407,9 +425,10 @@ export class GitObsidianVault implements LocalVault {
   /** Copy to an excluded export directory, then publish by no-clobber rename. The source remains retained. */
   async exportOversize(id: string, destination?: string): Promise<{ path: string; size: number }> {
     this.assertActive();
+    this.assertConfigDir();
     const { recovery, currentSize, currentMtime } = await this.inspectOversize(id);
     const output = destination ?? `.git-vault-sync-export-${crypto.randomUUID()}/${recovery.id}.bin`;
-    safeExportPath(output);
+    safeExportPath(output, this.nativePolicy);
     if (currentSize !== recovery.size || currentMtime !== recovery.mtime)
       throw new Error("Oversized source changed. Recover again before exporting.");
     const adapter = this.app.vault.adapter;
@@ -452,22 +471,48 @@ export class GitObsidianVault implements LocalVault {
     this.oversizeRecord(id);
     await this.acknowledgeRecovery([id]);
   }
-  async capture(): Promise<Snapshot> {
-    const { files, unreadable } = await this.scan();
+  async capture(scope?: Scope): Promise<Snapshot> {
+    const { files, unreadable } = await this.scan(scope);
     if (unreadable.length) throw new Error(`File exceeds 8 MiB: ${unreadable[0].path}`);
     return files;
   }
   /** Read-only survey; oversized visible files are reported without reading their bytes. */
-  async scan(): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
+  async scan(scope?: Scope): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
     this.assertActive();
-    const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path));
-    const snapshot: Snapshot = Object.create(null);
-    const unreadable: UnreadableNativeFile[] = [];
-    const paths = new Set<string>();
+    this.assertConfigDir();
+    if (scope?.rules.rules === "config/1") {
+      if (this.nativePolicy.binding.rules !== "config/1" ||
+        scope.rules.configDir !== this.nativePolicy.binding.configDir ||
+        this.app.vault.configDir !== scope.rules.configDir)
+        throw new Error("Configuration scope does not match the native vault policy.");
+    }
+    const scoped = scope?.rules.rules === "config/1" ? scope : null;
+    let snapshot: Snapshot = Object.create(null);
+    let unreadable: UnreadableNativeFile[] = [];
     let total = 0;
+    let inventoryFiles: ReadonlySet<string> | null = null;
+    if (scoped) {
+      const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
+      assertLocalNamespace(inventory, scoped);
+      inventoryFiles = inventory.files;
+      for (const file of this.app.vault.getFiles()) if (visible(file.path) && scoped.includes(file.path)
+        && !inventory.files.has(file.path))
+        throw new Error(`Visible file missing from local inventory: ${file.path}`);
+      const hidden = await new HiddenConfigPort(this.app.vault.adapter, scoped.rules.configDir,
+        this.assertActive).scan(scoped, path => this.modes.get(path));
+      snapshot = hidden.files;
+      unreadable = hidden.unreadable;
+      total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
+        - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
+    }
+    const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path));
+    const paths = new Set<string>();
     for (const file of visibleFiles) {
-      safePath(file.path);
-      const folded = file.path.normalize("NFC").toLowerCase();
+      if (scoped && !scoped.includes(file.path)) continue;
+      if (inventoryFiles && !inventoryFiles.has(file.path))
+        throw new Error(`Visible file missing from local inventory: ${file.path}`);
+      safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
+      const folded = canonicalFilesystemPath(file.path);
       if (paths.has(folded)) throw new Error(`Case or Unicode path collision: ${file.path}`);
       paths.add(folded);
       const stat = await this.app.vault.adapter.stat(file.path);
@@ -498,13 +543,26 @@ export class GitObsidianVault implements LocalVault {
     for (const part of parts) {
       prefix = prefix ? `${prefix}/${part}` : part;
       if (!(await this.app.vault.adapter.exists(prefix))) {
-        try { this.assertActive(); await this.app.vault.createFolder(prefix); }
+        try {
+          this.assertActive();
+          if (visible(path)) await this.app.vault.createFolder(prefix);
+          else await this.app.vault.adapter.mkdir(prefix);
+        }
         catch (error) { if (!(await this.app.vault.adapter.exists(prefix))) throw error; }
       }
+      if ((await this.app.vault.adapter.stat(prefix))?.type !== "folder")
+        throw new Error(`File blocks vault directory: ${prefix}`);
     }
   }
+  private async assertWritableNamespace(path: string): Promise<void> {
+    this.assertConfigDir();
+    if (this.nativePolicy.binding.rules !== "config/1") return;
+    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
+    assertLocalNamespace(inventory, this.nativePolicy, path);
+  }
   async apply(path: string, expected: Entry | null, next: Entry | null): Promise<ApplyResult> {
-    safePath(path);
+    safePath(path, this.nativePolicy);
+    await this.assertWritableNamespace(path);
     if (this.transactions?.recoveries().some(item => item.kind === "oversize" && item.path === path))
       return { kind: "blocked", reason: `Review oversized native recovery file for ${path} before writing this path.` };
     const pending = this.transactions?.intent(path);
@@ -532,10 +590,10 @@ export class GitObsidianVault implements LocalVault {
     if (next && decodeBase64(next.data).length > maxFileBytes) throw new Error(`Invalid incoming bytes: ${path}`);
     if (!this.transactions) return { kind: "blocked", reason: `Native transaction journal is required for ${path}.` };
     if (next) await this.folders(path);
-    const method = expected && next
+    const method = visible(path) && expected && next
       && exactText(decodeBase64(expected.data)) !== null && exactText(decodeBase64(next.data)) !== null
       ? "text-process" : "rename";
-    if (method === "rename" && expected && this.openView(path))
+    if (method === "rename" && expected && visible(path) && this.openView(path))
       return { kind: "blocked", reason: `Close the open view before replacing or deleting ${path}.` };
     const intent = await this.transactions.begin(path, expected, next, method, this.hostLifetime);
     return method === "rename" ? this.renameTransaction(intent) : this.textTransaction(intent);

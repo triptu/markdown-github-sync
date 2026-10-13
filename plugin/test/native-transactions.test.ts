@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile, access } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NativeTransactionJournal } from "../src/git-sync/native-transactions";
+import { NativePathPolicy } from "../src/git-sync/native-path-policy";
 import { entryFromBytes } from "../src/git-sync/codec";
 import type { JournalFiles } from "../src/git-sync/store";
 const installation = "12345678-1234-1234-1234-123456789abc";
@@ -21,10 +22,12 @@ async function filesystem() {
       await rename(absolute(from), absolute(to));
       if (loseAck && to.includes("/native/records/")) { loseAck = false; throw new Error("lost acknowledgment"); }
     },
-    list: async path => {
+    list: async listedPath => {
+      const path = listedPath === "/" ? "" : listedPath;
       const rows = await readdir(absolute(path), { withFileTypes: true });
-      return { files: rows.filter(row => row.isFile()).map(row => `${path}/${row.name}`),
-        folders: rows.filter(row => row.isDirectory()).map(row => `${path}/${row.name}`) };
+      const child = (name: string) => path ? `${path}/${name}` : name;
+      return { files: rows.filter(row => row.isFile()).map(row => child(row.name)),
+        folders: rows.filter(row => row.isDirectory()).map(row => child(row.name)) };
     },
   };
   return { files, root, loseNextRecordAck: () => { loseAck = true; }, close: () => rm(root, { recursive: true, force: true }) };
@@ -91,5 +94,24 @@ test("lost cancellation acknowledgment reopens as cancelled, never replayable", 
     assert.deepEqual(reopened.pendingIntents(), []);
     await reopened.cancel("n.md");
     assert.deepEqual((await NativeTransactionJournal.open(fs.files, installation)).pendingIntents(), []);
+  } finally { await fs.close(); }
+});
+
+test("real filesystem policy upgrade preserves historical hold bytes and tracking", async () => {
+  const fs = await filesystem();
+  try {
+    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const before = await entryFromBytes(new Uint8Array([0, 255]));
+    const after = await entryFromBytes(new Uint8Array([1, 254]));
+    const intent = await journal.begin("note.bin", before, after, "rename");
+    assert.ok(intent.hold);
+    await fs.files.write(intent.hold, "held original");
+    await journal.finish("note.bin");
+    const policy = await NativePathPolicy.forConfig(".obsidian");
+    await journal.upgradePolicy(policy, async () => {});
+    const reopened = await NativeTransactionJournal.open(fs.files, installation, policy);
+    assert.ok(reopened.trackedPaths().includes(intent.hold));
+    assert.equal(await fs.files.read(intent.hold), "held original");
+    await assert.rejects(NativeTransactionJournal.open(fs.files, installation), /policy does not match/);
   } finally { await fs.close(); }
 });
