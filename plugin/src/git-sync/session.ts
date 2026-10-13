@@ -1814,13 +1814,14 @@ export class SyncSession {
     }
     if (configurationReplay.length > 0) {
       // Recovery may install `next` before the resumed step observes it. Make
-      // the current host's guard durable first when replay can write from the
-      // still-present preimage. Already-applied bytes need no new-host guard.
+      // the current host's guard durable first unless `next` is already
+      // visible. A missing or unreadable path can still be restored from a
+      // native hold during replay.
       const local = await this.#capture(state, "native configuration replay preimage", false);
       let changed = false;
       for (const step of configurationReplay) {
         const observed = this.#observeLocal(state, local, step.path);
-        if (observed.kind !== "known" || !sameEntry(observed.entry, step.expected) || sameEntry(observed.entry, step.next)) continue;
+        if (observed.kind === "known" && sameEntry(observed.entry, step.next)) continue;
         this.#setConfigurationGuard(state, step, this.#hostLifetimeId);
         changed = true;
       }

@@ -3092,6 +3092,73 @@ test("native replay on a new host guards the host that completed the write", asy
   assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
 });
 
+test("native replay from a held preimage guards a missing visible configuration path", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: configurationPath, mode: "refuse" };
+  assert.equal((await h1.applyConfiguration({ token: preview.token })).kind, "blocked");
+
+  // Model a crash after path -> hold: the preimage survives in the native
+  // hold, while the visible path is absent until recovery stages `next`.
+  const intent = a.vault.intents.get(configurationPath);
+  const held = a.vault.files.get(configurationPath);
+  assert.ok(intent && intent.next && held);
+  const next = intent.next;
+  assert.equal(held.oid, intent.expected?.oid);
+  intent.attempted = true;
+  a.vault.files.delete(configurationPath);
+  const nativeRecover = a.vault.recover.bind(a.vault);
+  a.vault.recover = async (authorization) => {
+    if (!authorization.replay.includes(intent.id)) return nativeRecover(authorization);
+    assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2", "guard is durable before replay installs next");
+    assert.equal(a.vault.files.has(configurationPath), false);
+    assert.equal(held.oid, intent.expected?.oid);
+    a.vault.files.set(configurationPath, next);
+    a.vault.intents.delete(configurationPath);
+    return [];
+  };
+
+  const calls = a.vault.applyCalls;
+  const h2 = session("host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal(a.vault.applyCalls, calls, "recovery, not a later apply, installed next");
+  assert.equal(a.vault.text(configurationPath), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  await a.vault.write(configurationPath, "old configuration");
+  assert.equal((await h2.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+});
+
+test("unreadable pre-replay configuration stays guarded when native recovery installs it", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: configurationPath, mode: "refuse" };
+  assert.equal((await h1.applyConfiguration({ token: preview.token })).kind, "blocked");
+  a.vault.unreadable.add(configurationPath);
+  const nativeRecover = a.vault.recover.bind(a.vault);
+  a.vault.recover = async (authorization) => {
+    assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+    a.vault.unreadable.delete(configurationPath);
+    return nativeRecover(authorization);
+  };
+
+  const h2 = session("host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal(a.vault.text(configurationPath), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  await a.vault.write(configurationPath, "old configuration");
+  assert.equal((await h2.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+});
+
 test("an already landed native write retires cleanly on restart", async () => {
   const { repository, device: a } = await deferredConfiguration("old configuration");
   const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
