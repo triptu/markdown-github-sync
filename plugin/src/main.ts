@@ -60,6 +60,7 @@ export default class GitVaultSync extends Plugin {
   private lastCleanup = 0;
   private modes: NativeModeStore | null = null;
   private nativeJournal: NativeTransactionJournal | null = null;
+  private nativeVault: GitObsidianVault | null = null;
   private owner(): PluginOwnership {
     if (this.unloaded) throw new Error("This sync instance has retired.");
     return this.ownership ??= new PluginOwnership(this.app);
@@ -179,6 +180,7 @@ export default class GitVaultSync extends Plugin {
     this.session = null;
     this.modes = null;
     this.nativeJournal = null;
+    this.nativeVault = null;
     if (
       !this.settings.owner ||
       !this.settings.repository ||
@@ -249,12 +251,14 @@ export default class GitVaultSync extends Plugin {
     const nativeJournal = await NativeTransactionJournal.open(files, installation);
     this.nativeJournal = nativeJournal;
     await this.transferRenamesOwned();
+    const nativeVault = new GitObsidianVault(this.app, owner.fence(this.modes), () => {
+      owner.assertActive();
+      if (owner.hasPendingRenames()) throw new Error("A vault rename is pending. Retry after its mode metadata is saved.");
+    }, owner.fence(nativeJournal), hostLifetimeId(this.app));
+    this.nativeVault = nativeVault;
     const rawSession = new SyncSession({
       repository: owner.fence(repository),
-      vault: owner.fence(new GitObsidianVault(this.app, owner.fence(this.modes), () => {
-        owner.assertActive();
-        if (owner.hasPendingRenames()) throw new Error("A vault rename is pending. Retry after its mode metadata is saved.");
-      }, owner.fence(nativeJournal), hostLifetimeId(this.app))),
+      vault: owner.fence(nativeVault),
       store: owner.fence(store),
       deviceName: this.settings.deviceName,
     });
@@ -410,6 +414,27 @@ export default class GitVaultSync extends Plugin {
       this.settings = parseSettings(saved);
       if (!binding || !this.rawSession) await this.initializeOwned();
       else this.scheduler?.schedule();
+    });
+  }
+  nativeRecoveryOverview() {
+    return this.owner().run(async () => {
+      if (!this.nativeVault) throw new Error("Connect this vault before inspecting native recovery.");
+      return {
+        oversized: this.nativeVault.nativeRecoveries().filter(record => record.kind === "oversize"),
+        retained: await this.nativeVault.retainedHiddenSummary(),
+      };
+    });
+  }
+  inspectOversizeRecovery(id: string) {
+    return this.owner().run(async () => {
+      if (!this.nativeVault) throw new Error("Native recovery is unavailable.");
+      return this.nativeVault.inspectOversize(id);
+    });
+  }
+  exportOversizeRecovery(id: string) {
+    return this.owner().run(async () => {
+      if (!this.nativeVault) throw new Error("Native recovery is unavailable.");
+      return this.nativeVault.exportOversize(id);
     });
   }
   exportRecoveryCopy(id: string): Promise<string> {
@@ -1088,9 +1113,9 @@ class RecoveryModal extends Modal {
     el.createEl("p", {
       text: "Captured drafts and preimages stay on this device. Export creates a separate hidden folder and does not overwrite notes.",
     });
-    new Setting(el).setName("Clean up unused storage")
-      .setDesc("Remove superseded journal records and unreferenced copies. Listed recovery versions and pending work stay available. Also runs automatically after successful sync.")
-      .addButton(button => button.setButtonText("Clean up").onClick(async () => {
+    new Setting(el).setName("Compact recovery journals")
+      .setDesc("Remove superseded journal records and unreferenced journal objects. Retained original files and exports are not deleted. Also runs automatically after successful sync.")
+      .addButton(button => button.setButtonText("Compact journals").onClick(async () => {
         button.setDisabled(true);
         try {
           const result = await this.plugin.compactRecovery();
@@ -1099,6 +1124,38 @@ class RecoveryModal extends Modal {
         finally { button.setDisabled(false); }
       }));
     try {
+      const native = await this.plugin.nativeRecoveryOverview();
+      el.createEl("h3", { text: "Retained original files" });
+      el.createEl("p", { text: `${native.retained.files.toLocaleString()} files · ${native.retained.bytes.toLocaleString()} known bytes${native.retained.missingStats ? ` · ${native.retained.missingStats} sizes unavailable` : ""}` });
+      el.createEl("p", { text: "These originals are not deleted automatically and can accumulate. Close editors and other writers before managing them in your file manager. Export and inspect anything you need to keep first.", cls: "git-sync-muted" });
+      if (native.oversized.length) el.createEl("h3", { text: "Large files needing review" });
+      for (const record of native.oversized) {
+        const details = el.createEl("details");
+        details.createEl("summary", { text: `${record.path} · ${record.size.toLocaleString()} bytes` });
+        details.createEl("p", { text: "The original remains on this device. Export makes a separate copy excluded from sync. Choose the version to sync in Changes; inspecting or exporting does not resolve the conflict." });
+        details.createEl("pre", { text: record.sourcePath, cls: "git-sync-preview" });
+        const status = details.createEl("p", { text: "Inspect to check whether this saved version is still present." });
+        new Setting(details)
+          .addButton(button => button.setButtonText("Inspect source").onClick(async () => {
+            button.setDisabled(true);
+            try {
+              const inspection = await this.plugin.inspectOversizeRecovery(record.id);
+              status.setText(inspection.currentSize === null ? "Source is missing. Review its location before resolving."
+                : inspection.currentSize === record.size && inspection.currentMtime === inspection.recovery.mtime
+                  ? `${inspection.currentSize.toLocaleString()} bytes · size and modification time match the saved record.`
+                  : "Source has changed. Sync now to refresh recovery before choosing a version.");
+            } catch (error) { status.setText(failure(error)); }
+            finally { button.setDisabled(false); }
+          }))
+          .addButton(button => button.setButtonText("Export copy").onClick(async () => {
+            button.setDisabled(true);
+            try {
+              const exported = await this.plugin.exportOversizeRecovery(record.id);
+              status.setText(`Exported ${exported.size.toLocaleString()} bytes to ${exported.path}. The original remains. Open this hidden folder in your file manager to inspect the copy.`);
+            } catch (error) { status.setText(failure(error)); }
+            finally { button.setDisabled(false); }
+          }));
+      }
       const records = await this.plugin.session?.listRecovery();
       if (!Array.isArray(records)) {
         el.createEl("p", { text: "No accessible recovery records." });
