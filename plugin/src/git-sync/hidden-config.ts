@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 import type { FileMode, Snapshot, UnreadableFile } from "./contracts";
 import { dictionary, entryFromBytes, isValidPath } from "./codec";
-import { assertNoNestedGitignore, assertValidConfigDir, type Scope } from "./scope";
+import { assertNoNestedGitignore, assertValidConfigDir, canonicalFilesystemPath, type Scope } from "./scope";
 
 type ReadFiles = Pick<DataAdapter, "exists" | "list" | "stat" | "readBinary">;
 const FILE_LIMIT = 8 * 1024 * 1024;
@@ -23,6 +23,13 @@ export class HiddenConfigPort {
     const seen = new Set<string>();
     const pending: string[] = [];
     this.assertActive();
+    // `exists(".gitignore")` can resolve `.GITIGNORE` on a case-insensitive
+    // adapter. Enumerate names first so that spelling cannot be hidden.
+    const root = await this.files.list("/");
+    for (const path of [...root.files, ...root.folders]) {
+      const name = path.replace(/^\/+/, "");
+      if (canonicalFilesystemPath(name) === ".gitignore") assertNoNestedGitignore([name]);
+    }
     if (await this.files.exists(".gitignore")) paths.add(".gitignore");
     if (await this.files.exists(this.configDir)) pending.push(this.configDir);
     while (pending.length) {

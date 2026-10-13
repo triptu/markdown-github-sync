@@ -143,6 +143,25 @@ test("root .gitignore is a control file even when its own rules match it", async
   }
 });
 
+test("canonical aliases of root and nested ignore controls fail closed", async () => {
+  const compiled = await scope();
+  for (const path of ["folder/.GITIGNORE", ".obsidian/cache/.GitIgnore", ".obsidian/plugins/custom/.ＧＩＴＩＧＮＯＲＥ"]) {
+    assert.throws(() => assertNoNestedGitignore([path]), UnsupportedNestedGitignoreError);
+    assert.throws(() => compiled.classify(path), UnsupportedNestedGitignoreError);
+    await assert.rejects(scopeForTree([{ path, type: "blob", sha: "0".repeat(40) }], async () => {
+      throw new Error("nested control bytes must not be read");
+    }, ".obsidian", "config/1"), UnsupportedNestedGitignoreError);
+  }
+  for (const path of [".GITIGNORE", ".GitIgnore", ".ＧＩＴＩＧＮＯＲＥ"]) {
+    assert.throws(() => assertNoNestedGitignore([path]), ScopeError);
+    assert.throws(() => compiled.classify(path), ScopeError);
+    await assert.rejects(scopeForTree([{ path, type: "blob", sha: "0".repeat(40) }], async () => {
+      throw new Error("root alias bytes must not be read");
+    }, ".obsidian", "config/1"), ScopeError);
+  }
+  assert.equal(compiled.classify(".gitignore"), "config-inert");
+});
+
 test("transaction scope is the intersection of parent, remote and local exclusions", async () => {
   const parent = await scope();
   const remote = await scope("remote.md\n");
@@ -190,7 +209,7 @@ test("digest is SHA-1 of canonical rules and policy version, independent of obje
   const text = "*.tmp\n";
   const oid = await hashBlob(new TextEncoder().encode(text));
   const rules: ScopeRules = { rules: "config/1", configDir: ".obsidian", gitignore: oid };
-  const expected = createHash("sha1").update(JSON.stringify(["scope-policy/3", rules])).digest("hex");
+  const expected = createHash("sha1").update(JSON.stringify(["scope-policy/4", rules])).digest("hex");
   assert.equal((await compileScope(rules, text)).digest, expected);
   assert.equal((await compileScope({ ...rules }, text)).digest, expected);
   assert.notEqual((await scope("!*.tmp\n")).digest, expected);
@@ -203,7 +222,7 @@ test("digest is SHA-1 of canonical rules and policy version, independent of obje
     gitignore: await hashBlob(new TextEncoder().encode(maximumText)),
   };
   assert.equal((await compileScope(maximumRules, maximumText)).digest,
-    createHash("sha1").update(JSON.stringify(["scope-policy/3", maximumRules])).digest("hex"));
+    createHash("sha1").update(JSON.stringify(["scope-policy/4", maximumRules])).digest("hex"));
   const overflowText = `${maximumText}x`;
   const overflowOid = await hashBlob(new TextEncoder().encode(overflowText));
   await assert.rejects(() => compileScope({ ...maximumRules, gitignore: overflowOid },

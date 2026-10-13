@@ -747,6 +747,66 @@ test("proposed full namespace rejects an included alias before any blob POST", a
   }
 });
 
+test("a candidate ignore edit that unignores aliases fails before every POST", async () => {
+  const first = ".obsidian/plugins/custom/Data.json", second = ".obsidian/plugins/custom/data.json";
+  const privateA = file("synthetic private A"), privateB = file("synthetic private B");
+  const api = new FakeGitHub({ ".gitignore": file(`${first}\n${second}\n`), [first]: privateA, [second]: privateB, "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  await assert.rejects(repo.prepare(parent, { ".gitignore": file("") }, "unignore aliases", L), /collision/);
+  assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+  for (const secret of [privateA, privateB])
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+});
+
+test("removed parent directories do not block case and Unicode directory renames", async () => {
+  const cases = [
+    ["Folder/note.md", "folder/note.md"],
+    ["café/note.md", "cafe\u0301/note.md"],
+    [".obsidian/snippets/Custom/theme.css", ".obsidian/snippets/custom/theme.css"],
+  ] as const;
+  for (const [from, to] of cases) {
+    const original = file("unchanged");
+    const api = new FakeGitHub({ [from]: original }), repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const candidate = await repo.prepare(parent, { [from]: null, [to]: original }, "rename", L);
+    assert.deepEqual(Object.keys(candidate.files), [to]);
+    assert.deepEqual(Array.from(api.files.get(candidate.treeOid)!.keys()), [to]);
+  }
+});
+
+test("a genuinely empty preserved tree still blocks an included directory alias", async () => {
+  const note = file("safe"), api = new FakeGitHub({ "note.md": note });
+  const emptyTree = hash("tree", Buffer.alloc(0));
+  const rootBody = Buffer.concat([
+    Buffer.from("40000 Empty\0"), Buffer.from(emptyTree, "hex"),
+    Buffer.from("100644 note.md\0"), Buffer.from(note.oid, "hex"),
+  ]);
+  const rootTree = hash("tree", rootBody);
+  api.trees.set(rootTree, { sha: rootTree, truncated: false, tree: [
+    { path: "Empty", mode: "040000", type: "tree", sha: emptyTree },
+    { path: "note.md", mode: "100644", type: "blob", sha: note.oid, size: 4 },
+  ] });
+  api.files.set(rootTree, new Map([["note.md", note]]));
+  api.commits.get(api.head)!.tree.sha = rootTree;
+  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  await assert.rejects(repo.prepare(parent, { "empty/new.md": file("new") }, "unsafe alias", L), /collision/);
+  assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+});
+
+test("canonical aliases of root and nested ignore controls block GitHub reads and changes", async () => {
+  const hidden = ".obsidian/plugins/custom/data.json", secret = file("synthetic private bytes");
+  for (const control of [".GITIGNORE", ".obsidian/plugins/custom/.GITIGNORE"]) {
+    const api = new FakeGitHub({ [control]: file("data.json\n"), [hidden]: secret });
+    await assert.rejects(client(api, undefined, INSTALLATION, "config/1").head(), ScopeError);
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+    assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+
+    const clean = new FakeGitHub({ "note.md": file("safe") });
+    const repo = client(clean, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    await assert.rejects(repo.prepare(parent, { [control]: file("data.json\n") }, "control alias", L), ScopeError);
+    assert.equal(clean.requests.filter(request => request.method === "POST").length, 0);
+  }
+});
+
 test("an excluded-only alias namespace remains readable without downloading excluded bytes", async () => {
   const first = ".obsidian/plugins/custom/Data.json", second = ".obsidian/plugins/custom/data.json";
   const api = new FakeGitHub({ ".gitignore": file(`${first}\n${second}\n`), [first]: file("first private"), [second]: file("second private"), "note.md": file("safe") });

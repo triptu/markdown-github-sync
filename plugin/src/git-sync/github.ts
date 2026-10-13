@@ -452,12 +452,13 @@ export class GitHubRepository implements Repository {
       if (next === null) { delete files[path]; checked.set(path, null); }
       else { const verified = await entry(next); files[path] = verified.entry; checked.set(path, verified.entry); }
     }
+    let candidateScope = parentScope;
     if (this.ruleVersion === "config/1") {
       const rootIgnore = checked.get(".gitignore");
       const ignoreText = rootIgnore === undefined ? await this.readRootGitignore(value.oid) :
         rootIgnore === null ? null : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(rootIgnore.data));
       const ignoreOid = rootIgnore === undefined ? parentScope.rules.gitignore : rootIgnore?.oid ?? null;
-      const candidateScope = await compileScope({ rules: "config/1", configDir: this.configDir, gitignore: ignoreOid }, ignoreText);
+      candidateScope = await compileScope({ rules: "config/1", configDir: this.configDir, gitignore: ignoreOid }, ignoreText);
       for (const path of checked.keys()) if (!candidateScope.includes(path))
         throw new GitHubError("Change excluded by candidate .gitignore");
       assertNoNestedGitignore(Array.from(new Set([...items.map(item => item.path), ...checked.keys()])));
@@ -468,7 +469,14 @@ export class GitHubRepository implements Repository {
       else expected.set(path, `${next.mode}:blob:${next.oid}`);
     }
     const finalPaths = Array.from(expected.keys());
-    validatePaths([...items.filter(item => item.type === "tree").map(item => item.path), ...finalPaths], Object.keys(files));
+    const occupiedParentDirs = new Set<string>();
+    for (const item of items) if (item.type !== "tree") {
+      for (let slash = item.path.indexOf("/"); slash >= 0; slash = item.path.indexOf("/", slash + 1))
+        occupiedParentDirs.add(item.path.slice(0, slash));
+    }
+    const preservedEmptyTrees = items.filter(item => item.type === "tree" && !occupiedParentDirs.has(item.path)).map(item => item.path);
+    const newlyIncluded = finalPaths.filter(path => candidateScope.includes(path));
+    validatePaths([...preservedEmptyTrees, ...finalPaths], [...Object.keys(files), ...newlyIncluded]);
     for (const path of finalPaths) for (let slash = path.indexOf("/"); slash >= 0; slash = path.indexOf("/", slash + 1)) {
       if (expected.has(path.slice(0, slash))) throw new GitHubError("File/directory path collision");
     }

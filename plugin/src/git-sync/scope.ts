@@ -38,7 +38,7 @@ export class UnsupportedNestedGitignoreError extends ScopeError {
   }
 }
 
-const BUILTIN_VERSION = "scope-policy/3";
+const BUILTIN_VERSION = "scope-policy/4";
 const MAX_GITIGNORE_BYTES = 64 * 1024;
 const COMPETING_SYNC_PLUGINS = new Set([
   "obsidian-git", "obsidian-livesync", "remotely-save", "remotely-sync", "cloud-vault-sync",
@@ -70,15 +70,18 @@ export function assertValidConfigDir(configDir: string): void {
     canonical.startsWith(".git-vault-sync-export-")) throw new ScopeError("Invalid configuration directory");
 }
 
-function isNestedGitignore(path: string): boolean {
-  return path !== ".gitignore" && path.endsWith("/.gitignore");
+function assertSupportedGitignorePath(path: string): void {
+  const canonical = canonicalFilesystemPath(path);
+  if (canonical === ".gitignore" && path !== ".gitignore")
+    throw new ScopeError(`Root .gitignore alias is unsupported: ${path}`);
+  if (canonical.endsWith("/.gitignore")) throw new UnsupportedNestedGitignoreError(path);
 }
 
-/** Run over the full remote tree and the full local path inventory before config/1 activation. */
+/** Reject nested controls and ambiguous root aliases in the full path inventory. */
 export function assertNoNestedGitignore(paths: Iterable<string>): void {
   for (const path of paths) {
     if (!isValidPath(path)) throw new ScopeError(`Invalid tree path: ${JSON.stringify(path)}`);
-    if (isNestedGitignore(path)) throw new UnsupportedNestedGitignoreError(path);
+    assertSupportedGitignorePath(path);
   }
 }
 
@@ -130,7 +133,7 @@ export async function compileScope(rules: ScopeRules, gitignoreText: string | nu
   const digest = await digestText(JSON.stringify([BUILTIN_VERSION, frozenRules]));
   const classify = (path: string): HiddenClass => {
     if (!isValidPath(path)) return "denied";
-    if (frozenRules.rules === "config/1" && isNestedGitignore(path)) throw new UnsupportedNestedGitignoreError(path);
+    if (frozenRules.rules === "config/1") assertSupportedGitignorePath(path);
     if (denied(path, frozenRules.configDir)) return "denied";
     if (frozenRules.rules === "visible-only") {
       return path.split("/").some((segment) => segment.startsWith(".")) ? "outside" : "content";

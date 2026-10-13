@@ -59,6 +59,24 @@ test("configuration scan never reads canonical aliases of protected plugin bytes
   });
 });
 
+test("configuration scan refuses nested ignore aliases before reading hidden bytes", async () => {
+  await fixture(async ({ files, reads, put }) => {
+    await put(".obsidian/plugins/custom/.GITIGNORE", "data.json\n");
+    await put(".obsidian/plugins/custom/data.json", "synthetic private bytes");
+    await assert.rejects(new HiddenConfigPort(files, ".obsidian", () => {}).scan(await policy()), /Nested .gitignore is unsupported/);
+    assert.deepEqual(reads, []);
+  });
+});
+
+test("root ignore aliases are detected by name before a case-insensitive adapter resolves them", async () => {
+  await fixture(async ({ files, reads, put }) => {
+    await put(".GITIGNORE", ".obsidian/plugins/custom/data.json\n");
+    await put(".obsidian/plugins/custom/data.json", "synthetic private bytes");
+    await assert.rejects(new HiddenConfigPort(files, ".obsidian", () => {}).scan(await policy()), /Root .gitignore alias is unsupported/);
+    assert.deepEqual(reads, []);
+  });
+});
+
 test("configuration port refuses canonical aliases of reserved directory names", async () => {
   await fixture(async ({ files, reads }) => {
     for (const name of [".GIT", ".Git-Vault-Sync", ".GIT-VAULT-SYNC-EXPORT-copy", ".ENV", ".ds_store"]) {
