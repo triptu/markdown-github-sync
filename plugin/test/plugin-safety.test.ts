@@ -66,7 +66,7 @@ class Files implements JournalFiles {
   async read(path: string) { const value = this.values.get(path); if (value === undefined) throw Error("Missing file"); return value; }
   async write(path: string, text: string) { this.writes.push(path); this.values.set(path, text); }
   async rename(from: string, to: string) { this.writes.push(to); const value = await this.read(from); this.values.set(to, value); this.values.delete(from); }
-  async list(path: string) { return { files: [...this.values.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")), folders: [] }; }
+  async list(path: string): ReturnType<JournalFiles["list"]> { return { files: [...this.values.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")), folders: [] }; }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 const settings = { format: 2 as const, owner: "me", repository: "vault", branch: "main", secretId: "secret", deviceName: "Lab", automatic: false };
@@ -78,7 +78,7 @@ function harness() {
   let beforeProcess: (() => Promise<void>) | null = null;
   const events = new Map<string, (file: { path: string }, oldPath?: string) => void>();
   const put = (path: string, text: string) => { const data = new TextEncoder().encode(text); docs.set(path, { file: new loaded.TFile(path, { size: data.length, mtime: 1 }), data }); };
-  const exists = files.exists.bind(files), rename = files.rename.bind(files), list = files.list.bind(files);
+  const exists = files.exists.bind(files), rename = files.rename.bind(files);
   files.exists = async path => docs.has(path) || exists(path);
   files.rename = async (from, to) => {
     if (await files.exists(to)) throw Error("Destination exists");
@@ -88,8 +88,15 @@ function harness() {
     events.get("rename")?.(value.file, from);
   };
   files.list = async path => {
-    const listing = await list(path);
-    return { ...listing, files: [...listing.files, ...docs.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")) };
+    const prefix = path === "/" || path === "" ? "" : path + "/";
+    const names = [...files.values.keys(), ...docs.keys()];
+    const folders = new Set(files.folders);
+    for (const name of names) {
+      const parts = name.split("/");
+      for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join("/"));
+    }
+    const immediate = (name: string) => name.startsWith(prefix) && !name.slice(prefix.length).includes("/") && name !== path;
+    return { files: names.filter(immediate), folders: [...folders].filter(immediate) };
   };
   const adapter = Object.assign(files, {
     stat: async (path: string) => {
@@ -466,4 +473,42 @@ test("the first interrupted-write decision applies without a second review", asy
   assert.ok(result.kind === "synced" || result.kind === "up-to-date", JSON.stringify(result));
   assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), remote);
   assert.equal(entryText(repo.headFiles()["a.md"]), remote);
+});
+
+
+test("configuration migration resumes fresh enrollment with the bound native policy across reload", async () => {
+  const { repo, host, plugin } = await setup();
+  assert.equal(loaded.options().scopeRules, "visible-only");
+  repo.scopeRules = "config/1";
+  const upgrade = await plugin.previewConfigurationUpgrade();
+  assert.equal(loaded.options().scopeRules, "config/1");
+  assert.equal((await upgrade.confirm())?.kind, "preview");
+  plugin.onunload();
+  const next = host.create(true);
+  await next.initialize();
+  assert.equal(reloaded.options().scopeRules, "config/1");
+  const resumed = await next.session!.previewEnrollment();
+  assert.equal(resumed.kind, "preview");
+  if (resumed.kind !== "preview") throw Error("missing resumed enrollment");
+  assert.equal((await next.session!.enroll({ token: resumed.token })).kind, "enrolled");
+  const listing = await next.session!.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind !== "configuration") throw Error("missing listing");
+  assert.equal(listing.rules, "config/1");
+  assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), "base\n");
+});
+
+test("a configuration migration preview cannot authorize a replacement plugin instance", async () => {
+  const { repo, host, plugin } = await setup();
+  repo.scopeRules = "config/1";
+  const upgrade = await plugin.previewConfigurationUpgrade();
+  plugin.onunload();
+  const next = host.create(true);
+  await next.initialize();
+  assert.equal(reloaded.options().scopeRules, "visible-only");
+  await assert.rejects(upgrade.confirm(), /retired/);
+  const listing = await next.session!.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind !== "configuration") throw Error("missing listing");
+  assert.equal(listing.rules, "visible-only");
 });
