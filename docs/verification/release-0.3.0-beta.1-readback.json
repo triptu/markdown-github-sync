@@ -1,0 +1,40 @@
+{
+  "release": {
+    "isDraft": false,
+    "isPrerelease": true,
+    "tagName": "0.3.0-beta.1",
+    "url": "https://github.com/triptu/cloud-vault-sync/releases/tag/0.3.0-beta.1"
+  },
+  "checks": [
+    {
+      "asset": "styles.css",
+      "sha256": "b5459f70bfaaccc71a0671182666fdab6144ef4f262b881eab2fc086972b8184",
+      "exact": true
+    },
+    {
+      "asset": "main.js",
+      "sha256": "dc3984a2da5298d8e3a651c19b8702f0999f901e6809ec2d8cc7f64e7a83d103",
+      "exact": true
+    },
+    {
+      "asset": "github-vault-sync.zip",
+      "sha256": "d5ac0bdb839e6fde38df07a7b56aeaad2022f4802ac8c193a70fe619113c9a5d",
+      "exact": true
+    },
+    {
+      "asset": "manifest.json",
+      "sha256": "30e0dc4d5e3b034620f6382be9ba0d16ef390dae5d60a149b748cb25a0e50062",
+      "exact": true
+    },
+    {
+      "asset": "github-sync-proposal.html",
+      "sha256": "98cc1dd7169e00bfb2ece840d0dba6ca4c6305d8d94efee94b9836fdc75cffaa",
+      "exact": true
+    },
+    {
+      "asset": "SHA256SUMS.txt",
+      "sha256": "2398c4f79fdfe32d57e069e4464c6f14c1888344c358f98aae99cdc6b2daf625",
+      "exact": true
+    }
+  ]
+}
