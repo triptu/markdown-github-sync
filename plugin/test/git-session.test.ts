@@ -5,8 +5,9 @@
 //   candidates remain held", "unknown publication stays held after rewind",
 //   "head-moved ... held", "ancestry lookup failure ...") is replaced by the
 //   ledger protocol tests (receipt / seal / delayed delivery / outage /
-//   divergence / rewind-without-replay) and kept only for legacy /2
-//   publications ("... uncertain publication stays a reviewed legacy hold").
+//   divergence / rewind-without-replay). Legacy /2 publications are fenced
+//   through the ledger before their review ("... uncertain publication is
+//   fenced through the ledger before review ...").
 // - Deletion approvals: v2 required review for every one-sided deletion and
 //   revoked approvals on observation ("invalidates deletion approval ...",
 //   "a recreated file invalidates deletion approval ...", "deletions always
@@ -1031,18 +1032,35 @@ for (const tamper of ["deleted", "foreign", "older"] as const) {
       return publish(input, ledger);
     };
     const head = repository.branchHead;
-    const paused = await a.session.sync();
-    assert.ok(paused.kind === "paused" && paused.pause.reason === "ledger-diverged", JSON.stringify(paused));
-    assert.equal(count(repository, "seal"), 0, "a diverged ledger is never written");
+    const anchor = repository.ledger("A")!;
+    const outcome = await a.session.sync();
+    if (tamper === "foreign") {
+      assert.ok(outcome.kind === "paused" && outcome.pause.reason === "ledger-diverged", JSON.stringify(outcome));
+    } else {
+      // Absent or older than the anchor is explainable by a stale replica: it
+      // never becomes a verdict, and nothing is sent while it persists.
+      assert.ok(outcome.kind === "settling" && outcome.reason === "stale-ledger", JSON.stringify(outcome));
+      assert.equal((await parseState(await a.store.load())).pause, null);
+    }
+    assert.equal(count(repository, "seal") + count(repository, "createSeal"), 0, "a diverged ledger is never written");
     assert.equal(repository.branchHead, head);
     assert.equal(a.vault.text("n.md"), "third");
     repository.publish = publish;
-    assert.equal((await a.restart().sync()).kind, "paused", "never auto-dismissed");
+    const again = await a.restart().sync();
+    assert.equal(again.kind, tamper === "foreign" ? "paused" : "settling", "never auto-dismissed, never written");
     assert.equal(count(repository, "publish"), 3);
+    assert.equal(count(repository, "seal") + count(repository, "createSeal"), 0);
+    if (tamper === "foreign") return;
+    // A fresh read of the real anchor resumes ordinary settlement: seal, then republish once.
+    repository.refs.set(ref, anchor);
+    const resumed = await a.session.sync();
+    assert.ok(resumed.kind === "synced" && resumed.published, JSON.stringify(resumed));
+    assert.equal(count(repository, "seal"), 1);
+    assert.equal(entryText(repository.headFiles()["n.md"]!), "third");
   });
 }
 
-test("one stale older ledger read is reread before failing closed", async () => {
+test("one stale older ledger read is reread and settles without a write", async () => {
   const { repository, a } = await editedDevice("first");
   assert.equal((await a.session.sync()).kind, "synced");
   const older = repository.ledger("A")!;
@@ -1060,6 +1078,55 @@ test("one stale older ledger read is reread before failing closed", async () => 
   const outcome = await a.session.sync();
   assert.ok(outcome.kind === "synced" && outcome.published, JSON.stringify(outcome));
   assert.equal(count(repository, "createSeal"), 0);
+});
+
+for (const stale of ["absent once", "older twice", "older on every read of one sync"] as const) {
+  test(`F2: a landed publication read as ${stale} settles from a later fresh read, never pausing or writing`, async () => {
+    const { repository, a } = await editedDevice("first");
+    assert.equal((await a.session.sync()).kind, "synced");
+    const older = repository.ledger("A")!;
+    await a.vault.write("n.md", "second");
+    assert.equal((await a.session.sync()).kind, "synced");
+    await a.vault.write("n.md", "third");
+    repository.publishQueue = ["after"]; // lands, response lost
+    const read = repository.readLedger.bind(repository);
+    let remaining = stale === "absent once" ? 1 : stale === "older twice" ? 2 : 1 + 3 + 1;
+    repository.readLedger = async (ledger) => {
+      if (remaining <= 0) return read(ledger);
+      remaining--;
+      return stale === "absent once" ? { kind: "absent" } : { kind: "present", value: older };
+    };
+    let outcome = await a.session.sync();
+    if (stale === "older on every read of one sync") {
+      assert.ok(outcome.kind === "settling" && outcome.reason === "stale-ledger", JSON.stringify(outcome));
+      assert.equal((await parseState(await a.store.load())).pause, null, "never a sticky pause");
+      outcome = await a.restart().sync();
+    }
+    assert.ok(outcome.kind === "synced" && outcome.published, JSON.stringify(outcome));
+    assert.equal(count(repository, "createSeal") + count(repository, "seal"), 0, "a stale read never triggers a write");
+    assert.equal(count(repository, "publish"), 3, "never republished");
+    assert.equal(entryText(repository.headFiles()["n.md"]!), "third");
+    await assertConverged(repository, a);
+  });
+}
+
+test("F2: a ledger-diverged pause rereads read-only each sync and settles on a fresh receipt", async () => {
+  const { repository, a } = await editedDevice("candidate");
+  repository.publishQueue = ["after"];
+  const foreign = await repository.orphan("glitch");
+  const read = repository.readLedger.bind(repository);
+  let glitch = true;
+  repository.readLedger = async (ledger) => (glitch ? { kind: "present", value: foreign } : read(ledger));
+  const paused = await a.session.sync();
+  assert.ok(paused.kind === "paused" && paused.pause.reason === "ledger-diverged", JSON.stringify(paused));
+  assert.equal((await a.restart().sync()).kind, "paused", "still diverged: stays paused");
+  assert.equal(count(repository, "seal") + count(repository, "createSeal"), 0);
+  glitch = false;
+  const settled = await a.session.sync();
+  assert.ok(settled.kind === "synced" && settled.published, JSON.stringify(settled));
+  assert.equal((await parseState(await a.store.load())).pause, null);
+  assert.equal(count(repository, "publish"), 1);
+  await assertConverged(repository, a);
 });
 
 test("another installation advancing past our receipt yields the accepted verdict and a duplicate-installation hold", async () => {
@@ -1099,8 +1166,9 @@ for (const choice of ["discard", "republish"] as const) {
     assert.equal((await a.session.sync()).kind, "synced");
     await a.vault.write("n.md", "held draft");
     const publish = repository.publish.bind(repository);
+    const foreign = await repository.orphan("foreign");
     repository.publish = async (input, ledger) => {
-      repository.refs.delete("refs/vault-sync/devices/A");
+      repository.refs.set("refs/vault-sync/devices/A", foreign);
       repository.publish = publish;
       return publish(input, ledger);
     };
@@ -1114,7 +1182,7 @@ for (const choice of ["discard", "republish"] as const) {
     assert.ok(enrollment.kind === "preview");
     assert.equal(enrollment.items.find((item) => item.path === "n.md")?.action, choice === "republish" ? "upload" : "update-local");
     await a.session.enroll({ token: enrollment.token });
-    assert.equal((await parseState(await a.store.load())).ledger.anchor, null, "anchored at the observed (absent) ledger");
+    assert.equal((await parseState(await a.store.load())).ledger.anchor, foreign, "anchored at the observed ledger");
     assert.equal((await a.session.sync()).kind, "synced");
     assert.equal(entryText(repository.headFiles()["n.md"]!), choice === "republish" ? "held draft" : "first");
     const records = await a.session.listRecovery();
@@ -1420,6 +1488,42 @@ for (const direction of ["local", "remote"] as const) {
 }
 
 
+test("F4: a whole top-level folder vanishing (3+ files, below the bulk floor) needs one review in each direction; exact paths", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "attachments/a.md": "a", "attachments/b.md": "b", "attachments/sub/c.md": "c", "keep.md": "k", "loose.md": "l" }));
+  const a = await enrolled(repository, "A");
+  const b = await enrolled(repository, "B");
+  for (const path of ["attachments/a.md", "attachments/b.md", "attachments/sub/c.md", "loose.md"]) a.vault.files.delete(path);
+  const reviewed = await a.session.sync();
+  const [bulk] = reviewed.kind === "needs-decision" ? reviewed.conflicts : [];
+  assert.ok(bulk?.kind === "bulk-deletion" && bulk.direction === "local", JSON.stringify(reviewed));
+  assert.deepEqual(bulk.paths, ["attachments/a.md", "attachments/b.md", "attachments/sub/c.md", "loose.md"], "exactly this side's deletions");
+  assert.ok("attachments/a.md" in repository.headFiles(), "nothing deleted before the decision");
+  await a.session.resolve({ conflictId: bulk.id, choice: { kind: "mine" } });
+  assert.equal((await a.session.sync()).kind, "synced");
+  assert.deepEqual(Object.keys(repository.headFiles()).sort(), ["keep.md"]);
+  const incoming = await b.session.sync();
+  const [remote] = incoming.kind === "needs-decision" ? incoming.conflicts : [];
+  assert.ok(remote?.kind === "bulk-deletion" && remote.direction === "remote" && remote.paths.length === 4, JSON.stringify(incoming));
+  assert.equal(b.vault.text("attachments/a.md"), "a");
+  await b.session.resolve({ conflictId: remote.id, choice: { kind: "remote" } });
+  assert.equal((await b.session.sync()).kind, "synced");
+  await assertConverged(repository, a, b);
+});
+
+test("F4: a two-file folder deletion and a pure folder move stay automatic", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "pair/a.md": "a", "pair/b.md": "b", "photos/1.md": "1", "photos/2.md": "2", "photos/3.md": "3", "keep.md": "k" }));
+  const a = await enrolled(repository, "A");
+  a.vault.files.delete("pair/a.md");
+  a.vault.files.delete("pair/b.md");
+  for (const index of [1, 2, 3]) {
+    a.vault.files.set(`media/${index}.md`, a.vault.files.get(`photos/${index}.md`)!);
+    a.vault.files.delete(`photos/${index}.md`);
+  }
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced" && outcome.published, JSON.stringify(outcome));
+  assert.deepEqual(Object.keys(repository.headFiles()).sort(), ["keep.md", "media/1.md", "media/2.md", "media/3.md"]);
+});
+
 // ---- Migration /1 and /2 -> /3 ---------------------------------------------
 
 type Raw = Record<string, unknown> & { operation: Record<string, unknown> | null; review: Record<string, unknown> | null };
@@ -1431,12 +1535,13 @@ function toLegacy(state: string, format: "github-vault-sync/1" | "github-vault-s
   delete old.ledger;
   delete old.holds;
   delete old.unacknowledged;
+  delete old.nativeErrors;
   if (format === "github-vault-sync/2" && observation) old.observation = observation;
   if (old.review && format === "github-vault-sync/2") Object.assign(old.review, { scope: "review-1", local: {} });
   const op = old.operation;
   if (op) {
     const incoming = op.incomingRecoveryId;
-    for (const key of ["incomingRecoveryId", "receipt", "anchor", "publication", "replan"]) delete op[key];
+    for (const key of ["incomingRecoveryId", "receipt", "anchor", "publication", "replan", "fence"]) delete op[key];
     op.steps = (op.steps as Array<Record<string, unknown>>).map(({ decision, ...step }) =>
       format === "github-vault-sync/2" ? { ...step, consent: decision ? { kind: "reviewed", base: null } : { kind: "automatic" } } : step);
     if (format === "github-vault-sync/2") {
@@ -1458,7 +1563,7 @@ async function recordedPublication(a: Device) {
 }
 
 for (const format of ["github-vault-sync/1", "github-vault-sync/2"] as const) {
-  test(`${format} uncertain publication stays a reviewed legacy hold that no seal claims to fence`, async () => {
+  test(`${format} uncertain publication is fenced through the ledger before review, so a late request can never land`, async () => {
     const repository = await MemoryRepository.create(await snapshot({ "n.md": "base" }));
     const a = await enrolled(repository);
     await a.vault.write("n.md", "legacy candidate");
@@ -1466,35 +1571,78 @@ for (const format of ["github-vault-sync/1", "github-vault-sync/2"] as const) {
     a.store.raw = toLegacy(a.store.raw!, format);
     const migrated = await parseState(await a.store.load());
     assert.ok(migrated.operation?.kind === "publish" && migrated.operation.publication.phase === "legacy" && migrated.operation.receipt === null);
-    const publishes = repository.calls.filter((call) => call === "publish").length;
+    // The /2 request moved only the branch; model it as still in flight.
+    const legacyRequest = () => repository.updateRefs([{ name: "refs/heads/main", before: operation.parent, after: operation.candidate.commit }]);
+    assert.equal((await a.restart().previewPublicationRecovery()).kind, "unfenced", "no release while the branch sits at the parent");
+    const publishes = count(repository, "publish");
     repository.ancestorFault = true;
-    assert.equal((await a.restart().sync()).kind, "publication-unknown", "inconclusive ancestry holds");
+    const fenced = await a.session.sync();
     repository.ancestorFault = false;
-    assert.equal((await a.session.sync()).kind, "publication-unknown");
+    assert.ok(fenced.kind === "publication-unknown" && fenced.fenced, JSON.stringify(fenced));
+    assert.equal(count(repository, "publish"), publishes + 1, "exactly one fence publication");
+    assert.equal(count(repository, "seal") + count(repository, "createSeal"), 0);
+    const fence = repository.commits.get(repository.branchHead)!;
+    assert.deepEqual(fence.parents, [operation.parent]);
+    assert.equal(fence.tree, repository.commits.get(operation.parent)!.tree, "the fence changes no file");
+    const saved = await parseState(await a.store.load());
+    assert.ok(saved.operation?.kind === "publish" && saved.operation.fence === null && saved.ledger.anchor === repository.ledger("A"));
+    assert.equal(legacyRequest(), false, "the late /2 request can never land");
+    assert.equal((await a.session.sync()).kind, "publication-unknown", "a fence proves nothing about the candidate; review stays");
+    assert.equal(count(repository, "publish"), publishes + 1, "no second fence once the branch left the parent");
     const status = await a.session.status();
     assert.ok(status.kind === "enrolled" && status.phase === "publication-unknown");
-    assert.equal(repository.calls.filter((call) => call === "publish").length, publishes);
-    assert.equal(repository.calls.filter((call) => call === "seal" || call === "createSeal").length, 0, "a legacy request is never sealed");
     const preview = await a.session.previewPublicationRecovery();
     assert.ok(preview.kind === "preview");
     const released = await a.session.recoverPublication({ token: preview.token });
-    assert.ok(released.kind === "released" && released.pause.detail.includes("cannot be cancelled"), "the release never claims to fence the old request");
+    assert.ok(released.kind === "released" && released.pause.detail.includes("can no longer land"));
     const enrollment = await a.session.previewEnrollment();
     assert.ok(enrollment.kind === "preview");
     await a.session.enroll({ token: enrollment.token });
     assert.equal((await a.session.sync()).kind, "synced");
     assert.equal(a.vault.text("n.md"), "base");
-    // Unresolved adoption hazard, recorded on purpose: the unfenced legacy
-    // request may still land while the branch sits at its parent. It then
-    // arrives as an ordinary remote change and is adopted locally.
-    assert.equal(repository.branchHead, operation.parent);
-    repository.branchHead = operation.candidate.commit;
-    assert.equal((await a.session.sync()).kind, "synced");
-    assert.equal(a.vault.text("n.md"), "legacy candidate", "late legacy delivery reappears as remote content (documented hazard)");
-    const saved = await parseState(await a.store.load());
+    assert.equal(legacyRequest(), false);
+    assert.equal((await a.session.sync()).kind, "up-to-date");
+    assert.equal(a.vault.text("n.md"), "base", "the discard is never reversed by the old request");
     const candidate = await entryFromText("legacy candidate");
-    assert.ok(saved.recovery.some((record) => record.files["n.md"]?.oid === candidate.oid), "the archived candidate stays recoverable");
+    assert.ok((await parseState(await a.store.load())).recovery.some((record) => record.files["n.md"]?.oid === candidate.oid), "the archived candidate stays recoverable");
+    await assertConverged(repository, a);
   });
+
+  for (const order of ["fence-first", "legacy-first"] as const) {
+    test(`${format} a fence crash-recorded before dispatch and delayed (${order}) settles by its receipt or seal only`, async () => {
+      const repository = await MemoryRepository.create(await snapshot({ "n.md": "base" }));
+      const a = await enrolled(repository);
+      await a.vault.write("n.md", "legacy candidate");
+      const operation = await recordedPublication(a);
+      a.store.raw = toLegacy(a.store.raw!, format);
+      const legacyRequest = () => repository.updateRefs([{ name: "refs/heads/main", before: operation.parent, after: operation.candidate.commit }]);
+      // Crash right after the fence identity is durable, before its dispatch.
+      failSaveMatching(a.store, (state) => state.operation?.kind === "publish" && state.operation.fence !== null, "after");
+      await assert.rejects(a.restart().sync(), Crash);
+      a.store.fault = null;
+      const recorded = await parseState(await a.store.load());
+      assert.ok(recorded.operation?.kind === "publish" && recorded.operation.fence);
+      const prepares = count(repository, "prepare");
+      // The fence was never sent: the restart seals it (never re-dispatches it).
+      repository.sealFault = "delay";
+      assert.equal((await a.restart().sync()).kind, "settling");
+      repository.sealFault = null;
+      assert.equal(count(repository, "publish"), 0, "the recorded fence is never dispatched after the crash");
+      if (order === "legacy-first") assert.equal(legacyRequest(), true, "the branch is still at the parent");
+      repository.deliver();
+      const settled = await a.session.sync();
+      if (order === "legacy-first") {
+        assert.ok(settled.kind === "synced" && settled.published, "a reachable legacy candidate is accepted");
+        assert.equal(a.vault.text("n.md"), "legacy candidate");
+      } else {
+        assert.ok(settled.kind === "publication-unknown" && settled.fenced, JSON.stringify(settled));
+        assert.equal(legacyRequest(), false);
+        assert.ok(count(repository, "prepare") === prepares + 1, "one new fence after the sealed one");
+      }
+      assert.equal((await parseState(await a.store.load())).ledger.anchor, repository.ledger("A"), "the anchor follows only settled ledger values");
+      assert.equal(count(repository, "createSeal"), 1, "one durable seal identity for the crashed fence");
+    });
+  }
 
   test(`${format} publication found reachable is accepted and its steps re-planned`, async () => {
     const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "m.md": "m" }));
@@ -1693,11 +1841,8 @@ for (const delivery of ["result", "crash"] as const) {
       a.restart();
     }
     const head = repository.branchHead;
-    let outcome = await a.session.sync();
-    for (let round = 0; round < 2; round++) {
-      assert.equal(outcome.kind, "needs-decision", JSON.stringify(outcome));
-      outcome = await a.restart().sync();
-    }
+    const outcome = await a.session.sync();
+    assert.equal(outcome.kind, "needs-decision", JSON.stringify(outcome));
     assert.equal(repository.branchHead, head, "the torn bytes never reach GitHub");
     assert.equal(entryText(repository.headFiles()["n.md"]!), lines(10, { 1: "B one" }));
     const conflict = outcome.kind === "needs-decision" ? outcome.conflicts.find((item) => item.kind === "interrupted-write") : undefined;
@@ -1731,6 +1876,54 @@ for (const delivery of ["result", "crash"] as const) {
     await assertConverged(repository, a, b);
   });
 }
+
+for (const between of ["nothing", "restart", "unrelated apply", "unrelated publish"] as const) {
+  test(`F1: the first held conflict's decision is applied by the next sync (${between} in between)`, async () => {
+    const { repository, a, b, torn } = await tornSetup();
+    a.vault.native = { path: "n.md", kind: "interrupted", bytes: torn };
+    const first = await a.session.sync();
+    const conflict = first.kind === "needs-decision" ? first.conflicts.find((item) => item.kind === "interrupted-write") : undefined;
+    assert.ok(conflict && conflict.kind === "interrupted-write", JSON.stringify(first));
+    assert.equal(entryText(conflict.base!), lines(10), "the review shows the version the write started from");
+    assert.equal((await a.session.resolve({ conflictId: conflict.id, choice: { kind: "next" } })).kind, "recorded");
+    if (between === "restart") a.restart();
+    if (between === "unrelated apply") {
+      await b.vault.write("other.md", "o from B");
+      assert.equal((await b.session.sync()).kind, "synced");
+    }
+    if (between === "unrelated publish") await a.vault.write("fresh.md", "fresh");
+    const second = await a.session.sync();
+    assert.ok(second.kind === "synced", JSON.stringify(second));
+    assert.equal(a.vault.text("n.md"), lines(10, { 1: "B one" }));
+    assert.deepEqual(Object.keys((await parseState(await a.store.load())).holds), []);
+    await b.session.sync();
+    await assertConverged(repository, a, b);
+  });
+}
+
+test("F1: a hold's base is fixed at ingestion, durable and parsed back", async () => {
+  const { a, torn } = await tornSetup();
+  a.vault.native = { path: "n.md", kind: "interrupted", bytes: torn };
+  await a.session.sync();
+  const saved = await parseState(await a.store.load());
+  const base = await entryFromText(lines(10));
+  assert.equal(saved.holds["n.md"]?.base?.oid, base.oid);
+  assert.equal(saved.blobs[base.oid], base.data, "the base bytes are pinned while the hold exists");
+  assert.notEqual(saved.base.files["n.md"]?.oid, base.oid, "the checkpoint advanced; the hold's base did not");
+  const legacy = JSON.parse(a.store.raw!);
+  delete legacy.holds["n.md"].base;
+  delete legacy.holds["n.md"].oversize;
+  assert.equal((await parseState(legacy)).holds["n.md"]?.base, null, "holds stored before bases were recorded still load");
+});
+
+test("F6: a sync that publishes and then stops for a held decision reports both", async () => {
+  const { a, torn } = await tornSetup();
+  a.vault.native = { path: "n.md", kind: "interrupted", bytes: torn };
+  await a.vault.write("fresh.md", "fresh");
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "needs-decision" && outcome.published, JSON.stringify(outcome));
+  assert.deepEqual(outcome.carried, ["n.md"], "the interrupted step's path is reported as carried, not applied");
+});
 
 test("a held note edited after its decision asks again instead of auto-resolving", async () => {
   const { repository, a, torn } = await tornSetup();
@@ -1784,12 +1977,41 @@ test("native ingestion is idempotent across a failed acknowledgement and verifie
   assert.deepEqual(saved.holds["n.md"]?.ids, ["issue-1"], "the re-reported issue is not ingested twice");
   assert.deepEqual(saved.unacknowledged, []);
   assert.deepEqual(a.vault.acknowledged, ["issue-1"]);
-  a.vault.issues.push({ id: "forged", path: "n.md", kind: "interrupted", expected: null, next: null, found: { ...torn, oid: "f".repeat(40) } });
-  await assert.rejects(a.session.sync(), /does not match its object ID/);
+});
+
+test("F5: an unverifiable native issue is never acknowledged and holds its path (or the vault, when its path is unknown) with a readable error", async () => {
+  const { repository, a, b } = await tornSetup();
+  // A forged issue for a known path quarantines that path; everything else syncs.
+  a.vault.issues.push({ id: "forged", path: "n.md", kind: "interrupted", expected: null, next: null, found: { ...(await entryFromText("x")), oid: "f".repeat(40) } });
+  await b.vault.write("other.md", "o from B");
+  assert.equal((await b.session.sync()).kind, "synced");
+  await a.vault.write("fresh.md", "fresh");
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced" && outcome.published, JSON.stringify(outcome));
+  assert.equal(a.vault.text("other.md"), "o from B");
+  assert.equal(a.vault.text("n.md"), lines(10), "the quarantined path is never written");
+  assert.equal(entryText(repository.headFiles()["n.md"]!), lines(10, { 1: "B one" }));
   assert.ok(!(a.vault.acknowledged as string[]).includes("forged"));
-  a.vault.issues.pop();
-  a.vault.issues.push({ id: "escape", path: "../n.md", kind: "displaced", expected: null, next: null, found: torn });
-  await assert.rejects(a.session.sync(), /unexpected path/);
+  let status = await a.restart().status();
+  assert.ok(status.kind === "enrolled" && status.nativeErrors.length === 1 && status.nativeErrors[0]!.path === "n.md" && status.nativeErrors[0]!.id === "forged", JSON.stringify(status));
+  assert.match(status.nativeErrors[0]!.detail, /does not match its object ID/);
+  // An issue whose path is unknown blocks the whole vault before any capture or plan.
+  a.vault.issues.push({ id: "escape", path: "../n.md", kind: "displaced", expected: null, next: null, found: await entryFromText("x") });
+  const prepares = count(repository, "prepare");
+  await a.vault.write("fresh.md", "edited");
+  const blocked = await a.session.sync();
+  assert.ok(blocked.kind === "native-error" && blocked.errors.some((item) => item.id === "escape" && item.path === null), JSON.stringify(blocked));
+  assert.equal(count(repository, "prepare"), prepares);
+  status = await a.session.status();
+  assert.ok(status.kind === "enrolled" && status.phase === "native-error");
+  // Once the vault stops reporting them (fixed or withdrawn), both errors clear and the vault converges.
+  a.vault.issues = a.vault.issues.filter((issue) => issue.id !== "forged" && issue.id !== "escape");
+  const cleared = await a.session.sync();
+  assert.ok(cleared.kind === "synced" && cleared.published, JSON.stringify(cleared));
+  status = await a.session.status();
+  assert.ok(status.kind === "enrolled" && status.nativeErrors.length === 0);
+  await b.session.sync();
+  await assertConverged(repository, a, b);
 });
 
 test("restore ingests native evidence first and refuses a held path", async () => {
@@ -1805,3 +2027,177 @@ test("restore ingests native evidence first and refuses a held path", async () =
   assert.equal(a.vault.text("n.md"), lines(10));
 });
 
+
+// ---- Native cancellation, fences, oversize and unreadable files (native R2) --
+
+async function refusedDeletion() {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "draft to keep", "other.md": "o" }));
+  const a = await enrolled(repository, "A");
+  const b = await enrolled(repository, "B");
+  b.vault.files.delete("n.md");
+  assert.equal((await b.session.sync()).kind, "synced");
+  // The native intent is durable, then an open view refuses the write.
+  a.vault.pendingNext = { path: "n.md", mode: "refuse" };
+  const blocked = await a.session.sync();
+  assert.ok(blocked.kind === "blocked" && blocked.steps[0]?.path === "n.md", JSON.stringify(blocked));
+  assert.equal(a.vault.intents.size, 1);
+  return { repository, a, b };
+}
+
+test("R2-A: keepLocal durably cancels the pending native intent; the deletion never resurrects", async () => {
+  const { repository, a, b } = await refusedDeletion();
+  assert.equal((await a.session.keepLocal({ path: "n.md" })).kind, "recorded");
+  assert.equal(a.vault.intents.size, 1, "keepLocal itself never touches the vault");
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced", JSON.stringify(outcome));
+  assert.equal(a.vault.text("n.md"), "draft to keep");
+  assert.equal(a.vault.intents.size, 0);
+  const intentId = a.vault.authorizations.flatMap((item) => item.cancel)[0];
+  assert.ok(intentId && !a.vault.authorizations.some((item) => item.replay.includes(intentId)), "never authorized for replay");
+  // Keep-local republishes the kept note (documented consequence).
+  assert.equal(entryText(repository.headFiles()["n.md"]!), "draft to keep");
+  assert.equal((await a.restart().sync()).kind, "up-to-date");
+  assert.equal(a.vault.text("n.md"), "draft to keep");
+  await b.session.sync();
+  await assertConverged(repository, a, b);
+});
+
+for (const crash of ["before native cancel", "after native cancel, before engine save"] as const) {
+  test(`R2-A: a crash ${crash} converges without resurrecting the intent`, async () => {
+    const { repository, a } = await refusedDeletion();
+    await a.session.keepLocal({ path: "n.md" });
+    const recover = a.vault.recover.bind(a.vault);
+    if (crash === "before native cancel") {
+      a.vault.recover = async () => { a.vault.recover = recover; throw new Crash("died before the native save"); };
+    } else {
+      a.vault.recover = async (authorization) => {
+        a.vault.recover = recover;
+        await recover(authorization);
+        throw new Crash("died after the native save");
+      };
+    }
+    await assert.rejects(a.restart().sync(), Crash);
+    assert.equal(a.vault.text("n.md"), "draft to keep");
+    const saved = await parseState(await a.store.load());
+    assert.ok(saved.operation?.kind === "apply" && saved.operation.steps.find((step) => step.path === "n.md")?.status === "kept");
+    assert.equal((await a.restart().sync()).kind, "synced");
+    assert.equal(a.vault.text("n.md"), "draft to keep");
+    assert.equal(a.vault.intents.size, 0);
+    assert.equal(entryText(repository.headFiles()["n.md"]!), "draft to keep");
+  });
+}
+
+test("R2-A: a stale intent whose step is no longer pending is refused by apply and cancelled, never replayed", async () => {
+  const { a } = await refusedDeletion();
+  // An apply call for different versions while the intent is pending is refused without mutation.
+  const result = await a.vault.apply("n.md", await entryFromText("draft to keep"), await entryFromText("other"));
+  assert.equal(result.kind, "blocked");
+  assert.equal(a.vault.text("n.md"), "draft to keep");
+});
+
+test("R2-A: an accepted operation's pending intent is replayed only when it matches an unfinished step", async () => {
+  const { repository, a, b } = await refusedDeletion();
+  // The view closes; the next sync authorizes exactly that intent.
+  const intent = [...a.vault.intents.values()][0]!;
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced" || outcome.kind === "up-to-date", JSON.stringify(outcome));
+  assert.equal(a.vault.text("n.md"), null);
+  assert.deepEqual(a.vault.authorizations.at(-1), { replay: [intent.id], cancel: [] });
+  await b.session.sync();
+  await assertConverged(repository, a, b);
+});
+
+test("R2-F: no native recovery runs while paused, under another repository, or for a duplicate installation", async () => {
+  const { repository, a } = await refusedDeletion();
+  const calls = () => a.vault.authorizations.length;
+  const before = calls();
+  repository.identityValue = { ...repository.identityValue, id: "R_other" };
+  assert.equal((await a.session.sync()).kind, "paused");
+  assert.equal((await a.restart().sync()).kind, "paused");
+  assert.equal(calls(), before, "identity change: nothing native was replayed or cancelled");
+  assert.equal(a.vault.intents.size, 1);
+  repository.identityValue = { ...repository.identityValue, id: "R_1" };
+  // A durable duplicate-installation pause also fences every later sync.
+  const raw = JSON.parse(a.store.raw!);
+  raw.pause = { reason: "duplicate-installation", detail: "shared" };
+  raw.operation = null;
+  a.store.raw = JSON.stringify(raw);
+  for (let round = 0; round < 2; round++) assert.equal((await a.restart().sync()).kind, "paused");
+  assert.equal(calls(), before);
+  assert.equal(a.vault.intents.size, 1);
+  assert.equal(a.vault.text("n.md"), "draft to keep");
+  // Status, inspect and previews are read-only.
+  await a.session.inspect();
+  await a.session.previewEnrollment();
+  assert.equal(calls(), before);
+});
+
+test("R2-F: enrollment previews a pending intent, cancels it only on confirmation, then asks again", async () => {
+  const { a } = await refusedDeletion();
+  const raw = JSON.parse(a.store.raw!);
+  raw.pause = { reason: "history-rewritten", detail: "re-enroll" };
+  raw.operation = null;
+  a.store.raw = JSON.stringify(raw);
+  const preview = await a.restart().previewEnrollment();
+  assert.ok(preview.kind === "preview" && preview.items.some((item) => item.path === "n.md" && item.action === "native-pending"), JSON.stringify(preview));
+  assert.equal(a.vault.intents.size, 1);
+  const first = await a.session.enroll({ token: preview.token });
+  assert.ok(first.kind === "stale", "cancelling may change the vault, so a fresh confirmation follows");
+  assert.equal(a.vault.intents.size, 0);
+  assert.equal(a.vault.text("n.md"), "draft to keep", "cancellation never installs the intent");
+  assert.ok(first.kind === "stale" && !first.preview.items.some((item) => item.action === "native-pending"));
+  assert.equal((await a.session.enroll({ token: first.kind === "stale" ? first.preview.token : "" })).kind, "enrolled");
+});
+
+test("oversize evidence is a metadata-only hold, acknowledged only after a durable decision, while other paths progress", async () => {
+  const { repository, a, b } = await tornSetup();
+  const expected = await entryFromText(lines(10));
+  a.vault.issues.push({ id: "big-1", path: "n.md", kind: "oversize", sourcePath: ".git-vault-sync/A/hold/x", size: 9_000_000, mtime: 5, expected, next: null });
+  await b.vault.write("other.md", "o from B");
+  await b.session.sync();
+  const outcome = await a.session.sync();
+  assert.equal(outcome.kind, "needs-decision", JSON.stringify(outcome));
+  const conflict = outcome.kind === "needs-decision" ? outcome.conflicts.find((item) => item.kind === "oversize-write") : undefined;
+  assert.ok(conflict && conflict.kind === "oversize-write", JSON.stringify(outcome));
+  assert.equal(conflict.found, null);
+  assert.deepEqual(conflict.oversize, [{ id: "big-1", sourcePath: ".git-vault-sync/A/hold/x", size: 9_000_000, mtime: 5 }]);
+  assert.deepEqual(conflict.choices, ["mine", "expected", "next", "remote", "edit"]);
+  assert.equal((await a.session.resolve({ conflictId: conflict.id, choice: { kind: "found" } })).kind, "invalid");
+  assert.equal(a.vault.text("other.md"), "o from B", "unrelated paths progress");
+  assert.equal(a.vault.text("n.md"), lines(10), "the held path is untouched");
+  assert.ok(!(a.vault.acknowledged as string[]).includes("big-1"), "never acknowledged before a decision");
+  // Restarts re-report the same id without duplicating the hold or changing its identity.
+  const again = await a.restart().sync();
+  assert.ok(again.kind === "needs-decision" && again.conflicts.some((item) => item.id === conflict.id));
+  await a.session.resolve({ conflictId: conflict.id, choice: { kind: "remote" } });
+  const settled = await a.session.sync();
+  assert.ok(settled.kind === "synced", JSON.stringify(settled));
+  assert.ok((a.vault.acknowledged as string[]).includes("big-1"));
+  assert.equal(a.vault.text("n.md"), lines(10, { 1: "B one" }));
+  assert.deepEqual(Object.keys((await parseState(await a.store.load())).holds), []);
+  await assertConverged(repository, a, b);
+});
+
+test("an unreadable visible file is never deleted, published or overwritten, and is compared once readable", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "big.md": "base", "other.md": "o" }));
+  const a = await enrolled(repository, "A");
+  const b = await enrolled(repository, "B");
+  await a.vault.write("big.md", "local edit while huge");
+  a.vault.unreadable.add("big.md");
+  await b.vault.write("big.md", "remote edit");
+  await b.vault.write("other.md", "o from B");
+  await b.session.sync();
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced" && !outcome.published, JSON.stringify(outcome));
+  assert.equal(a.vault.text("other.md"), "o from B");
+  assert.equal(a.vault.text("big.md"), "local edit while huge", "never written");
+  assert.equal(entryText(repository.headFiles()["big.md"]!), "remote edit", "never deleted or replaced remotely");
+  const status = await a.session.inspect();
+  assert.ok(status.kind === "enrolled" && status.unreadable?.[0]?.path === "big.md", JSON.stringify(status));
+  assert.equal((await a.restart().sync()).kind, "up-to-date");
+  // Readable again: both sides changed from the preserved origin, so it is a reviewed conflict.
+  a.vault.unreadable.clear();
+  const conflict = conflictsOf(await a.session.sync())[0]!;
+  assert.equal(conflict.path, "big.md");
+  assert.equal(entryText(conflict.base!), "base");
+});

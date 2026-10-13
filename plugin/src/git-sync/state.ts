@@ -2,7 +2,7 @@
 // DurableStore is untrusted until `parseState` has checked shape, scope,
 // references and blob hashes.
 import type { RepositoryIdentity } from "./contracts";
-import type { ChoiceKind, VersionConflictKind } from "./reconcile";
+import type { ChoiceKind, NativeConflictKind, VersionConflictKind } from "./reconcile";
 import { choicesFor } from "./reconcile";
 import { dictionary as safeDictionary, decodeBase64, hashBlob, isFileMode, isOid, isSyncablePath } from "./codec";
 import type { Manifest, Ref } from "./codec";
@@ -35,15 +35,40 @@ export type StoredChoice =
   | { kind: "next" }
   | { kind: "found" };
 
+/** Retained hidden bytes too large to ingest; only the vault holds them. */
+export interface OversizeEvidence {
+  id: string;
+  sourcePath: string;
+  size: number;
+  mtime: number | null;
+}
+
 /** A durable per-path native hold; its versions' bytes are pinned in recovery. */
 export interface StoredHold {
   /** Every vault issue id merged into this hold. */
   ids: string[];
-  kind: "interrupted" | "displaced";
+  /** `oversize`: every issue so far was oversize evidence (no ingested `found`). */
+  kind: "interrupted" | "displaced" | "oversize";
+  /**
+   * The effective base of the path when the hold was created. Fixed for the
+   * hold's lifetime so its conflict identity does not drift with the
+   * checkpoint. Null for an absent base (or a hold stored before bases were).
+   */
+  base: Ref | null;
   expected: Ref | null;
   next: Ref | null;
   /** The latest unexpected version; earlier ones stay in pinned recovery records. */
   found: Ref | null;
+  oversize: OversizeEvidence[];
+}
+
+/** A native issue the engine could not verify. It is never acknowledged; its scope stays held. */
+export interface NativeError {
+  /** Issue id when readable. */
+  id: string | null;
+  /** The affected syncable path; null when unknown, which fails the whole vault closed. */
+  path: string | null;
+  detail: string;
 }
 
 export type StoredConflict =
@@ -60,7 +85,7 @@ export type StoredConflict =
   | { kind: "collision"; id: string; paths: string[] }
   | { kind: "bulk-deletion"; id: string; direction: "local" | "remote"; paths: string[] }
   | {
-      kind: "interrupted-write" | "displaced-write";
+      kind: NativeConflictKind;
       id: string;
       path: string;
       base: Ref | null;
@@ -69,6 +94,7 @@ export type StoredConflict =
       expected: Ref | null;
       next: Ref | null;
       found: Ref | null;
+      oversize: OversizeEvidence[];
     };
 
 export interface CommitRef {
@@ -83,6 +109,19 @@ export interface CommitRef {
  * `legacy`: a /2 publication sent without a ledger update; it cannot be sealed.
  */
 export type Publication = { phase: "dispatched" } | { phase: "sealing"; seal: string } | { phase: "legacy" };
+
+/**
+ * One ledger-protocol publication: an atomic `branch parent -> candidate`,
+ * `ledger anchor -> receipt` request settled only by the ledger value.
+ */
+export interface LedgerPublication {
+  id: string;
+  parent: string;
+  candidate: CommitRef;
+  receipt: string;
+  anchor: string | null;
+  publication: { phase: "dispatched" } | { phase: "sealing"; seal: string };
+}
 
 /** A candidate recorded before publication. */
 export interface PublishOperation {
@@ -99,6 +138,12 @@ export interface PublishOperation {
   steps: StoredStep[];
   recoveryId: string | null;
   incomingRecoveryId: string | null;
+  /**
+   * Legacy only: a same-tree fence commit on the legacy parent, published
+   * through the ledger so the branch leaves the parent and the unfenced /2
+   * request (`parent -> candidate`) can never land. Durable before dispatch.
+   */
+  fence: LedgerPublication | null;
 }
 
 /** Local application of a commit known to be accepted. */
@@ -164,6 +209,8 @@ export interface StoredState {
   holds: Record<string, StoredHold>;
   /** Ingested vault issue ids not yet acknowledged to the vault. */
   unacknowledged: string[];
+  /** Unverifiable native issues from the latest recovery pass. */
+  nativeErrors: NativeError[];
   recovery: RecoveryRecord[];
   /** Content-addressed bytes (base64) referenced by carry, decisions, review, holds and recovery. */
   blobs: Record<string, string>;
@@ -290,6 +337,23 @@ function legacySteps(value: unknown, at: string): void {
   }
 }
 
+function ledgerPublication(value: unknown, at: string): LedgerPublication {
+  const raw = object(value, at, ["id", "parent", "candidate", "receipt", "anchor", "publication"]);
+  const phase = publication(field(raw, "publication"), `${at}.publication`);
+  if (phase.phase === "legacy") fail(`${at}.publication`, "a ledger publication cannot be legacy");
+  const item: LedgerPublication = {
+    id: text(field(raw, "id"), `${at}.id`),
+    parent: oid(field(raw, "parent"), `${at}.parent`),
+    candidate: commitRef(object(field(raw, "candidate"), `${at}.candidate`, ["commit", "tree"]), `${at}.candidate`),
+    receipt: oid(field(raw, "receipt"), `${at}.receipt`),
+    anchor: nullable(field(raw, "anchor"), `${at}.anchor`, oid),
+    publication: phase,
+  };
+  const identities = [item.parent, item.candidate.commit, item.receipt, item.anchor, phase.phase === "sealing" ? phase.seal : null].filter((entry) => entry !== null);
+  if (new Set(identities).size !== identities.length) fail(at, "publication identities must be distinct");
+  return item;
+}
+
 function publication(value: unknown, at: string): Publication {
   if (typeof value !== "object" || value === null) fail(at, "expected publication state");
   const phase = literal(field(value, "phase"), `${at}.phase`, ["dispatched", "sealing", "legacy"] as const);
@@ -321,7 +385,7 @@ function operation(value: unknown, at: string, version: Version): Operation {
         candidate: commitRef(object(field(raw, "candidate"), `${at}.candidate`, ["commit", "tree"]), `${at}.candidate`),
         receipt: null, anchor: null, publication: { phase: "legacy" },
         target: manifest(field(raw, "target"), `${at}.target`),
-        steps: [], recoveryId, incomingRecoveryId: null,
+        steps: [], recoveryId, incomingRecoveryId: null, fence: null,
       };
     }
     const target = object(field(raw, "target"), `${at}.target`, ["commit", "tree", "files"]);
@@ -332,7 +396,8 @@ function operation(value: unknown, at: string, version: Version): Operation {
     };
   }
   if (kind === "publish") {
-    const raw = object(value, at, ["kind", "id", "parent", "candidate", "receipt", "anchor", "publication", "target", "steps", "recoveryId", "incomingRecoveryId"]);
+    // `fence` was added within /3; journals written before it have none.
+    const raw = object(value, at, ["kind", "id", "parent", "candidate", "receipt", "anchor", "publication", "target", "steps", "recoveryId", "incomingRecoveryId", ...(Object.hasOwn(value, "fence") ? ["fence"] : [])]);
     const op: PublishOperation = {
       kind,
       id: text(field(raw, "id"), `${at}.id`),
@@ -345,8 +410,12 @@ function operation(value: unknown, at: string, version: Version): Operation {
       steps: steps(field(raw, "steps"), `${at}.steps`),
       recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text),
       incomingRecoveryId: nullable(field(raw, "incomingRecoveryId"), `${at}.incomingRecoveryId`, text),
+      fence: nullable(field(raw, "fence") ?? null, `${at}.fence`, ledgerPublication),
     };
     const legacy = op.publication.phase === "legacy";
+    if (op.fence && !legacy) fail(`${at}.fence`, "only legacy publications are fenced");
+    if (op.fence && op.fence.parent !== op.parent) fail(`${at}.fence.parent`, "a fence extends the legacy parent");
+    if (op.fence && [op.candidate.commit, op.fence.candidate.commit, op.fence.receipt].some((item, index, all) => all.indexOf(item) !== index)) fail(`${at}.fence`, "fence identities must be distinct from the legacy candidate");
     if (legacy !== (op.receipt === null)) fail(`${at}.receipt`, "only legacy publications lack a receipt");
     if (legacy && op.steps.length > 0) fail(`${at}.steps`, "legacy publications re-plan their steps");
     const identities = [op.parent, op.candidate.commit, op.receipt, op.anchor, op.publication.phase === "sealing" ? op.publication.seal : null].filter((item) => item !== null);
@@ -385,15 +454,19 @@ function conflict(value: unknown, at: string): StoredConflict {
     return { kind: "bulk-deletion", id: oid(field(raw, "id"), `${at}.id`), direction: literal(field(raw, "direction"), `${at}.direction`, ["local", "remote"] as const), paths };
   }
   const nativeKind = field(value, "kind");
-  if (nativeKind === "interrupted-write" || nativeKind === "displaced-write") {
-    const raw = object(value, at, ["kind", "id", "path", "base", "local", "remote", "expected", "next", "found"]);
+  if (nativeKind === "interrupted-write" || nativeKind === "displaced-write" || nativeKind === "oversize-write") {
+    const hasOversize = Object.hasOwn(value, "oversize");
+    const raw = object(value, at, ["kind", "id", "path", "base", "local", "remote", "expected", "next", "found", ...(hasOversize ? ["oversize"] : [])]);
     const version = (key: string) => nullable(field(raw, key), `${at}.${key}`, ref);
+    const found = version("found");
+    if (nativeKind === "oversize-write" && found !== null) fail(`${at}.found`, "oversize evidence has no ingested bytes");
     return {
       kind: nativeKind,
       id: oid(field(raw, "id"), `${at}.id`),
       path: path(field(raw, "path"), `${at}.path`),
       base: version("base"), local: version("local"), remote: version("remote"),
-      expected: version("expected"), next: version("next"), found: version("found"),
+      expected: version("expected"), next: version("next"), found,
+      oversize: hasOversize ? oversizeList(field(raw, "oversize"), `${at}.oversize`) : [],
     };
   }
   const raw = object(value, at, ["kind", "id", "path", "base", "local", "remote", "choices", "sibling"]);
@@ -425,16 +498,48 @@ function choice(value: unknown, at: string): StoredChoice {
   return { kind };
 }
 
+function oversizeList(value: unknown, at: string): OversizeEvidence[] {
+  const items = array(value, at).map((item, index) => {
+    const where = `${at}[${index}]`;
+    const raw = object(item, where, ["id", "sourcePath", "size", "mtime"]);
+    const size = field(raw, "size");
+    if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) fail(`${where}.size`, "expected a positive size");
+    const mtime = field(raw, "mtime");
+    if (mtime !== null && (typeof mtime !== "number" || !Number.isFinite(mtime))) fail(`${where}.mtime`, "expected a timestamp or null");
+    return { id: text(field(raw, "id"), `${where}.id`), sourcePath: text(field(raw, "sourcePath"), `${where}.sourcePath`), size, mtime };
+  });
+  if (new Set(items.map((item) => item.id)).size !== items.length) fail(at, "duplicate oversize id");
+  return items;
+}
+
 function hold(value: unknown, at: string): StoredHold {
-  const raw = object(value, at, ["ids", "kind", "expected", "next", "found"]);
+  // `base` and `oversize` were added within /3; older holds have neither.
+  const optional = (["base", "oversize"] as const).filter((key) => typeof value === "object" && value !== null && Object.hasOwn(value, key));
+  const raw = object(value, at, ["ids", "kind", "expected", "next", "found", ...optional]);
   const ids = array(field(raw, "ids"), `${at}.ids`).map((item, index) => text(item, `${at}.ids[${index}]`));
   if (ids.length === 0 || new Set(ids).size !== ids.length) fail(`${at}.ids`, "expected distinct issue ids");
+  const kind = literal(field(raw, "kind"), `${at}.kind`, ["interrupted", "displaced", "oversize"] as const);
+  const found = nullable(field(raw, "found"), `${at}.found`, ref);
+  const oversize = optional.includes("oversize") ? oversizeList(field(raw, "oversize"), `${at}.oversize`) : [];
+  if (kind === "oversize" && (found !== null || oversize.length === 0)) fail(at, "an oversize hold has evidence metadata and no ingested bytes");
+  if (oversize.some((item) => !ids.includes(item.id))) fail(`${at}.oversize`, "oversize evidence must belong to the hold");
   return {
     ids,
-    kind: literal(field(raw, "kind"), `${at}.kind`, ["interrupted", "displaced"] as const),
+    kind,
+    base: optional.includes("base") ? nullable(field(raw, "base"), `${at}.base`, ref) : null,
     expected: nullable(field(raw, "expected"), `${at}.expected`, ref),
     next: nullable(field(raw, "next"), `${at}.next`, ref),
-    found: nullable(field(raw, "found"), `${at}.found`, ref),
+    found,
+    oversize,
+  };
+}
+
+function nativeError(value: unknown, at: string): NativeError {
+  const raw = object(value, at, ["id", "path", "detail"]);
+  return {
+    id: nullable(field(raw, "id"), `${at}.id`, text),
+    path: nullable(field(raw, "path"), `${at}.path`, path),
+    detail: text(field(raw, "detail"), `${at}.detail`),
   };
 }
 
@@ -478,10 +583,10 @@ export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> 
   for (const decision of Object.values(state.decisions)) if (decision.kind === "edit") oids.add(decision.entry.oid);
   for (const item of state.review?.conflicts ?? []) {
     if (item.kind === "collision" || item.kind === "bulk-deletion") continue;
-    const native = item.kind === "interrupted-write" || item.kind === "displaced-write" ? [item.expected, item.next, item.found] : [];
+    const native = item.kind === "interrupted-write" || item.kind === "displaced-write" || item.kind === "oversize-write" ? [item.expected, item.next, item.found] : [];
     for (const entry of [item.base, item.local, item.remote, ...native]) if (entry) oids.add(entry.oid);
   }
-  for (const item of Object.values(state.holds)) for (const entry of [item.expected, item.next, item.found]) if (entry) oids.add(entry.oid);
+  for (const item of Object.values(state.holds)) for (const entry of [item.base, item.expected, item.next, item.found]) if (entry) oids.add(entry.oid);
   for (const record of state.recovery) for (const entry of Object.values(record.files)) oids.add(entry.oid);
   return oids;
 }
@@ -505,6 +610,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     "review",
     "decisions",
     ...(version === "3" ? ["holds", "unacknowledged"] : []),
+    ...(version === "3" && Object.hasOwn(value, "nativeErrors") ? ["nativeErrors"] : []),
     "recovery",
     "blobs",
     "counter",
@@ -546,6 +652,10 @@ export async function parseState(value: unknown): Promise<StoredState> {
   }
   const holds: Record<string, StoredHold> = safeDictionary();
   const unacknowledged: string[] = [];
+  const nativeErrors: NativeError[] = [];
+  if (version === "3" && Object.hasOwn(raw, "nativeErrors")) {
+    for (const [index, item] of array(field(raw, "nativeErrors"), `${at}.nativeErrors`).entries()) nativeErrors.push(nativeError(item, `${at}.nativeErrors[${index}]`));
+  }
   if (version === "3") {
     for (const [key, entry] of dictionary(field(raw, "holds"), `${at}.holds`)) holds[path(key, `${at}.holds`)] = hold(entry, `${at}.holds[${key}]`);
     for (const [index, item] of array(field(raw, "unacknowledged"), `${at}.unacknowledged`).entries()) unacknowledged.push(text(item, `${at}.unacknowledged[${index}]`));
@@ -562,6 +672,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
       fail(`${at}.operation.anchor`, "publication anchor differs from the ledger anchor");
     }
     if (op.kind === "publish" && op.publication.phase !== "legacy" && stateLedger.ref === null) fail(`${at}.ledger.ref`, "a ledger publication needs a bound ledger");
+    if (op.kind === "publish" && op.fence && (op.fence.anchor !== stateLedger.anchor || stateLedger.ref === null)) fail(`${at}.operation.fence.anchor`, "a fence publishes from the bound ledger anchor");
     // Every byte an operation may overwrite must be in its recovery record.
     const record = records.find((item) => item.id === op.recoveryId);
     if (op.recoveryId && !record) fail(`${at}.operation.recoveryId`, "missing recovery record");
@@ -632,6 +743,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     decisions: retireReview ? safeDictionary() : decisions,
     holds,
     unacknowledged,
+    nativeErrors,
     recovery: records,
     blobs,
     counter,

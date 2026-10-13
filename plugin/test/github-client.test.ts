@@ -299,6 +299,19 @@ test("prepare preserves excluded paths, binaries, modes and parent without advan
   const mutation = api.requests.find(r => r.url.endsWith("graphql")); assert.ok(mutation?.body?.includes(`"beforeOid":"${parent.oid}"`));
   assert.ok(api.requests.filter(r => r.method === "POST").every(r => !r.url.includes("/git/refs")));
 });
+test("an empty change set prepares a same-tree fence without creating a tree and publishes through the ledger", async () => {
+  const api = new FakeGitHub(); const repo = client(api), parent = await repo.head();
+  api.requests = [];
+  const fence = await repo.prepare(parent, {}, "fence", { anchor: null, operation: "fence-1" });
+  assert.ok(!api.requests.some(r => r.method === "POST" && r.url.endsWith("/git/trees")), "GitHub rejects an empty tree edit list");
+  assert.equal(fence.treeOid, parent.treeOid);
+  assert.notEqual(fence.oid, parent.oid);
+  assert.deepEqual(api.commits.get(fence.oid)!.parents, [{ sha: parent.oid }]);
+  assert.deepEqual(Object.keys(fence.files), Object.keys(parent.files));
+  assert.equal(await repo.publish({ parent: parent.oid, candidate: fence.oid, anchor: null, receipt: fence.receipt }), "acknowledged");
+  assert.equal(api.head, fence.oid);
+  assert.deepEqual(await repo.readLedger(), { kind: "present", value: fence.receipt });
+});
 test("deletes only visible paths and supports executable mode-only edits", async () => {
   const api = new FakeGitHub(); const repo = client(api), parent = await repo.head();
   const candidate = await repo.prepare(parent, { "note.md": null, "run.sh": file("run", "100755") }, "delete and executable", L);

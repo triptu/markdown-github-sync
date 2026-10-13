@@ -61,30 +61,47 @@ export interface BulkDeletionConflict {
   choices: ["mine", "remote"];
 }
 
+/** Retained hidden bytes too large to ingest; only the vault holds them. */
+export interface OversizeEvidence {
+  id: string;
+  sourcePath: string;
+  size: number;
+  mtime: number | null;
+}
+
 /** Durable evidence for one path from the vault's native transactions. */
 export interface NativeHold {
   id: string;
-  kind: "interrupted" | "displaced";
+  kind: "interrupted" | "displaced" | "oversize";
+  /** The path's effective base when the hold was created; fixed for its lifetime. */
+  base: Entry | null;
   expected: Entry | null;
   next: Entry | null;
   found: Entry | null;
+  oversize: OversizeEvidence[];
 }
+
+export type NativeConflictKind = "interrupted-write" | "displaced-write" | "oversize-write";
 
 /**
  * A path held by native evidence: never merged or resolved automatically. The
  * id binds every version, so any later change asks again.
  */
 export interface NativeConflict {
-  kind: "interrupted-write" | "displaced-write";
+  kind: NativeConflictKind;
   id: string;
   path: string;
+  /** The path's effective base when the hold was created. */
   base: Entry | null;
   /** The current live bytes. */
   local: Entry | null;
   remote: Entry | null;
   expected: Entry | null;
   next: Entry | null;
+  /** Null for `oversize-write`: those bytes stay in the vault (see `oversize`). */
   found: Entry | null;
+  /** Retained oversized evidence; inspect or export it through the vault. */
+  oversize: OversizeEvidence[];
   choices: ChoiceKind[];
 }
 
@@ -110,6 +127,11 @@ export interface ReconcileInput {
   guardScope?: string;
   /** Native holds by path. Held paths are excluded from automatic planning. */
   holds?: Readonly<Record<string, NativeHold>>;
+  /**
+   * Paths whose local bytes are unknown (unreadable or quarantined): never
+   * published, deleted or written; the target keeps the remote version.
+   */
+  untouched?: readonly string[];
 }
 
 export type Plan =
@@ -183,14 +205,14 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   const decided = new Map<string, string>();
   const holds = dictionary(Object.entries(input.holds ?? {}));
   const held: NativeConflict[] = [];
-  const untouched = new Set<string>();
+  const untouched = new Set<string>(input.untouched ?? []);
   // Pure rename on one side against an edit of the old path on the other: the
   // edit moves to the new name. Anything ambiguous stays an ordinary conflict.
   const moved = new Map<string, Entry | null>();
   for (const [side, other, sideIsLocal] of [[local, remote, true], [remote, local, false]] as const) {
     for (const [from, to] of pureRenames(base, side, other)) {
       const edited = other[from];
-      if (!edited || sameEntry(edited, base[from]) || Object.hasOwn(base, to) || moved.has(from) || moved.has(to) || holds[from] || holds[to]) continue;
+      if (!edited || sameEntry(edited, base[from]) || Object.hasOwn(base, to) || moved.has(from) || moved.has(to) || holds[from] || holds[to] || untouched.has(from) || untouched.has(to)) continue;
       // The renaming side holds base bytes at `to`; the editing side's version wins there.
       if (!sameEntry(sideIsLocal ? local[to] : remote[to], base[from])) continue;
       moved.set(from, null);
@@ -206,9 +228,13 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
     let kind: VersionConflictKind | null = null;
     let result: Entry | null = null;
 
+    if (untouched.has(path) && !holds[path]) {
+      if (r) target[path] = r;
+      continue;
+    }
     const hold = holds[path];
     if (hold) {
-      const conflict = await nativeConflict(path, hold, b, l, r);
+      const conflict = await nativeConflict(path, hold, l, r);
       const choice = decisions[conflict.id];
       if (!choice || !conflict.choices.includes(choice.kind)) {
         held.push(conflict);
@@ -268,9 +294,10 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   const relocated = (side: Snapshot) => new Set(Object.entries(side).filter(([path]) => !Object.hasOwn(base, path)).map(([, entry]) => `${entry.mode}:${entry.oid}`));
   const threshold = bulkThreshold(Object.keys(base).length);
   for (const direction of ["local", "remote"] as const) {
-    const additions = relocated(direction === "local" ? local : remote);
+    const side = direction === "local" ? local : remote;
+    const additions = relocated(side);
     const deleted = automaticDeletions[direction].filter((path) => !additions.has(`${base[path]!.mode}:${base[path]!.oid}`));
-    if (deleted.length < threshold) continue;
+    if (deleted.length < threshold && !vanishedFolder(side, untouched, deleted)) continue;
     const pathsDeleted = automaticDeletions[direction];
     const id = await digestText(JSON.stringify(["bulk-deletion/1", input.guardScope ?? "", direction, pathsDeleted.map((path) => [path, base[path]!.mode, base[path]!.oid])]));
     const conflict: BulkDeletionConflict = { kind: "bulk-deletion", id, direction, paths: pathsDeleted, choices: ["mine", "remote"] };
@@ -307,17 +334,42 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   return { kind: "ready", target, outgoing, incoming: orderSteps(incoming), merged, resolved, held };
 }
 
+/** Files a whole vanished top-level folder must have lost (not moved) to need one confirmation. */
+export const FOLDER_DELETION_MINIMUM = 3;
+
+/**
+ * A top-level folder of the base that has no file left on `side`, with at
+ * least FOLDER_DELETION_MINIMUM of its files deleted rather than moved: a
+ * legitimate folder deletion, or unmounted storage. Either way, one review.
+ */
+function vanishedFolder(side: Snapshot, kept: ReadonlySet<string>, deleted: readonly string[]): boolean {
+  const top = (path: string) => (path.includes("/") ? path.slice(0, path.indexOf("/")) : null);
+  const remaining = new Set([...Object.keys(side), ...kept].map(top));
+  const counts = new Map<string, number>();
+  for (const path of deleted) {
+    const folder = top(path);
+    if (folder !== null && !remaining.has(folder)) counts.set(folder, (counts.get(folder) ?? 0) + 1);
+  }
+  return [...counts.values()].some((count) => count >= FOLDER_DELETION_MINIMUM);
+}
+
 const NATIVE_CHOICES: ChoiceKind[] = ["mine", "expected", "next", "found", "remote", "edit"];
 
 export function nativeChoices(hold: { found: object | null }): ChoiceKind[] {
   return NATIVE_CHOICES.filter((choice) => choice !== "found" || hold.found !== null);
 }
 
-async function nativeConflict(path: string, hold: NativeHold, base: Entry | null, local: Entry | null, remote: Entry | null): Promise<NativeConflict> {
+/**
+ * The id binds the hold's own base (fixed at ingestion, so checkpoint
+ * advances never invalidate a recorded decision), the live and remote
+ * versions, every recorded version and the oversize evidence.
+ */
+async function nativeConflict(path: string, hold: NativeHold, local: Entry | null, remote: Entry | null): Promise<NativeConflict> {
   const version = (entry: Entry | null) => (entry ? `${entry.mode}:${entry.oid}` : "absent");
-  const kind = hold.kind === "interrupted" ? "interrupted-write" : "displaced-write";
-  const id = await digestText(JSON.stringify(["native/1", hold.id, kind, path, ...[base, local, remote, hold.expected, hold.next, hold.found].map(version)]));
-  return { kind, id, path, base, local, remote, expected: hold.expected, next: hold.next, found: hold.found, choices: nativeChoices(hold) };
+  const kind: NativeConflictKind = hold.kind === "interrupted" ? "interrupted-write" : hold.kind === "displaced" ? "displaced-write" : "oversize-write";
+  const evidence = hold.oversize.map((item) => [item.id, item.sourcePath, item.size, item.mtime]);
+  const id = await digestText(JSON.stringify(["native/2", hold.id, kind, path, ...[hold.base, local, remote, hold.expected, hold.next, hold.found].map(version), evidence]));
+  return { kind, id, path, base: hold.base, local, remote, expected: hold.expected, next: hold.next, found: hold.found, oversize: hold.oversize, choices: nativeChoices(hold) };
 }
 
 async function versionConflict(

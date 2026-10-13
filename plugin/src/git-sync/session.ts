@@ -2,7 +2,7 @@
 // Durable transactions run one at a time. Publication follows the
 // per-installation ledger protocol; local mutation is compare-and-swap against
 // exact captured versions, so vault events only schedule work.
-import type { CommitSnapshot, DurableStore, Entry, FileMode, LocalVault, NativeIssue, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+import type { CommitSnapshot, DurableStore, Entry, FileMode, LocalVault, NativeIssue, PendingIntent, Repository, RepositoryIdentity, Snapshot, UnreadableFile } from "./contracts";
 import {
   IntegrityError,
   decodeBase64,
@@ -25,6 +25,9 @@ import type { Choice, Conflict, NativeHold } from "./reconcile";
 import { CorruptStateError, STATE_FORMAT, parseState, referencedBlobs } from "./state";
 import type {
   ApplyOperation,
+  LedgerPublication,
+  NativeError,
+  OversizeEvidence,
   Pause,
   PauseReason,
   PublishOperation,
@@ -60,17 +63,34 @@ export type SyncOutcome =
   | { kind: "up-to-date"; commit: string }
   /** The checkpoint advanced to `commit`; `carried` lists newer local edits kept as drafts. */
   | { kind: "synced"; commit: string; published: boolean; carried: string[] }
-  | { kind: "needs-decision"; conflicts: Conflict[]; merged: string[] }
+  /** `published`/`carried` report what this same sync accomplished before stopping for decisions. */
+  | { kind: "needs-decision"; conflicts: Conflict[]; merged: string[]; published: boolean; carried: string[] }
   /** Commit `commit` is partly applied; the listed paths need `keepLocal` or a manual change. */
   | { kind: "blocked"; commit: string; steps: BlockedStep[] }
   /** Cancelled publications lost to other devices in every round of this sync; the scheduler retries. */
   | { kind: "contended" }
-  /** A dispatched publication awaits a decisive ledger read (GitHub unreachable); the next sync resumes it. */
-  | { kind: "settling"; operationId: string }
-  /** A /2 publication sent without a ledger, held until reachable or reviewed. */
-  | { kind: "publication-unknown"; operationId: string; parent: string; candidate: string; head: string };
+  /**
+   * A dispatched publication awaits a decisive ledger read; the next sync
+   * resumes it read-only first. `stale-ledger`: every read in this sync
+   * returned an older value than this device settled, which only a stale
+   * replica (or an out-of-contract rewind) explains; nothing is sent meanwhile.
+   */
+  | { kind: "settling"; operationId: string; reason: "unreachable" | "stale-ledger" }
+  /**
+   * A /2 publication sent without a ledger, held until reachable or reviewed.
+   * `fenced`: the branch has left the legacy parent (through this device's
+   * ledger fence or other commits), so the old request can no longer land and
+   * publication recovery is available.
+   */
+  | { kind: "publication-unknown"; operationId: string; parent: string; candidate: string; head: string; fenced: boolean }
+  /** Native recovery evidence of unknown scope could not be verified; nothing was planned. */
+  | { kind: "native-error"; errors: NativeError[] };
 
 export type EnrollmentAction =
+  /** A native transaction is unfinished here; enrolling cancels it without installing its intent (recoverable). */
+  | "native-pending"
+  /** The local file cannot be read (over 8 MiB); it is left untouched and compared once readable. */
+  | "unreadable"
   | "download"
   | "upload"
   | "update-local"
@@ -146,10 +166,12 @@ export type PublicationRecoveryRefusal =
   | { kind: "reachable"; candidate: string }
   | { kind: "paused"; pause: Pause }
   /** The ledger protocol settles this publication automatically; no review applies. */
-  | { kind: "settling" };
+  | { kind: "settling" }
+  /** A /2 publication whose branch still sits at its parent: sync first, which fences it. */
+  | { kind: "unfenced" };
 export type PublicationRecoveryOutcome = PublicationRecoveryRefusal | { kind: "stale" } | { kind: "released"; pause: Pause };
 
-export type Phase = "idle" | "local-changes" | "needs-decision" | "publication-unknown" | "settling" | "applying" | "blocked" | "paused";
+export type Phase = "idle" | "local-changes" | "needs-decision" | "publication-unknown" | "settling" | "applying" | "blocked" | "paused" | "native-error";
 
 export interface PendingChange {
   path: string;
@@ -171,6 +193,10 @@ export type SessionStatus =
       /** Present only from `inspect()`, which scans the vault. */
       pending: PendingChange[] | null;
       recovery: number;
+      /** Unverifiable native issues; a null path blocks synchronization, a path is held untouched. */
+      nativeErrors: NativeError[];
+      /** Present only from `inspect()`: visible files left untouched because they cannot be read. */
+      unreadable: UnreadableFile[] | null;
     };
 
 export interface RecoverySummary {
@@ -186,10 +212,18 @@ export interface RecoverySummary {
 type Loaded = Unavailable | { kind: "enrolled"; state: StoredState };
 type Applied = { kind: "complete"; commit: string; carried: string[] } | { kind: "blocked"; outcome: SyncOutcome };
 type Settlement = { kind: "accepted"; operation: ApplyOperation } | { kind: "cancelled" } | { kind: "held"; outcome: SyncOutcome };
+/** The ledger's verdict on one publication. */
+type Verdict = { kind: "receipt" } | { kind: "seal"; seal: string } | { kind: "held"; outcome: SyncOutcome } | { kind: "diverged"; value: string | null };
 type Cancelled = { kind: "cancelled" };
 
 /** Ledger reads per settlement call before returning `settling`. */
 const SETTLE_ROUNDS = 4;
+/**
+ * Extra reads, with jittered backoff, of a ledger value older than the anchor
+ * before this sync gives up. No count makes a stale read definitive: the
+ * operation stays settling and the next sync reads again.
+ */
+const STALE_REREADS = 3;
 /** Cancelled publications reconciled again within one `sync()`. */
 const RECONCILE_ROUNDS = 3;
 const LEDGER_PAUSES: ReadonlySet<PauseReason> = new Set(["ledger-diverged", "duplicate-installation"]);
@@ -210,6 +244,8 @@ export class SyncSession {
   #queue: Promise<unknown> = Promise.resolve();
   readonly #previewSession = crypto.randomUUID();
   #holdPass = false;
+  /** Visible files the latest capture could not read; they are untouched until readable. */
+  #unreadable: UnreadableFile[] = [];
 
   constructor(ports: SessionPorts) {
     this.#repository = ports.repository;
@@ -257,7 +293,9 @@ export class SyncSession {
 
   /**
    * Binds this vault to the repository head shown in the confirmed preview and
-   * anchors the device ledger at its current value. Mutates no vault files.
+   * anchors the device ledger at its current value. The confirmation also
+   * authorizes cancelling unfinished native intents (never installing them);
+   * when any existed, the vault may have changed, so a fresh preview returns.
    */
   enroll(input: { token: string }): Promise<EnrollOutcome> {
     return this.#exclusive(async () => {
@@ -267,6 +305,9 @@ export class SyncSession {
       if (prior && (!prior.pause || prior.operation)) return { kind: "already-enrolled" };
       const survey = await this.#survey(prior);
       if (survey.preview.token !== input.token) return { kind: "stale", preview: survey.preview };
+      // Evidence is ingested into the new state below; until then it stays unacknowledged in the vault.
+      const issues = this.#vault.recover ? await this.#vault.recover({ replay: [], cancel: survey.pending.map((intent) => intent.id) }) : [];
+      if (survey.pending.length > 0) return { kind: "stale", preview: (await this.#survey(prior)).preview };
       // Adopting the observed value is safe: an older request of this device can
       // only land while the ledger still equals its own anchor, and any landing
       // after this point makes the next settlement fail closed as divergence.
@@ -284,6 +325,7 @@ export class SyncSession {
         // Native evidence outlives re-enrollment: it may be the only copy of an edit.
         holds: dictionary(Object.entries(prior?.holds ?? {})),
         unacknowledged: prior?.unacknowledged ?? [],
+        nativeErrors: [],
         recovery: prior?.recovery ?? [],
         blobs: dictionary(Object.entries(prior?.blobs ?? {})),
         counter: prior?.counter ?? 0,
@@ -291,6 +333,7 @@ export class SyncSession {
       // Every carried version is a local draft, so the record also pins its bytes.
       this.#record(state, "enrollment", survey.drafts);
       await this.#save(state);
+      await this.#ingest(state, issues, { replaceErrors: true, known: [survey.head.files, survey.local] });
       return { kind: "enrolled", commit: survey.head.oid };
     });
   }
@@ -300,31 +343,44 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
-      await this.#recoverNative(state);
+      // Every fence precedes native recovery: nothing native is replayed,
+      // cancelled or persisted for a vault that is paused, bound to another
+      // repository or sharing its installation.
       const identity = await this.#repository.identity();
       const sameRepository = sameIdentity(identity, state.repository);
+      let published = false;
       if (state.pause) {
-        if (state.pause.reason !== "repository-changed" || !state.operation || !sameRepository) {
+        if (sameRepository && state.pause.reason === "ledger-diverged" && state.operation?.kind === "publish" && state.operation.publication.phase !== "legacy") {
+          // Read-only: a fresh receipt or seal settles the publication; nothing is sent.
+          const rechecked = await this.#recheckDiverged(state, state.operation);
+          if (rechecked) return rechecked;
+          published = (state.operation as StoredState["operation"])?.kind === "apply";
+        } else if (state.pause.reason !== "repository-changed" || !state.operation || !sameRepository) {
           // Finishing an accepted commit locally needs no remote write, so a ledger hold allows it.
           if (sameRepository && LEDGER_PAUSES.has(state.pause.reason) && state.operation?.kind === "apply") {
             const pause = state.pause;
+            const native = await this.#recoverNative(state);
+            if (native) return native;
             const applied = await this.#resumeApply(state, state.operation);
             if (applied.kind === "blocked") return applied.outcome;
             return { kind: "paused", pause };
           }
           return { kind: "paused", pause: state.pause };
+        } else {
+          state.pause = null;
+          await this.#save(state);
         }
-        state.pause = null;
-        await this.#save(state);
       }
       if (!sameRepository) {
         return this.#pause(state, "repository-changed", `Expected ${describe(state.repository)}, found ${describe(identity)}`);
       }
       const bound = await this.#bindLedger(state);
       if (bound) return bound;
-      let published = false;
+      const native = await this.#recoverNative(state);
+      if (native) return native;
       let cancellations = 0;
       const carried = new Set<string>();
+      const report = () => ({ published, carried: [...carried].sort() });
       for (;;) {
         let cancelled = false;
         if (state.operation) {
@@ -344,12 +400,13 @@ export class SyncSession {
           await this.#delay(1000 + Math.floor(this.#random() * 3000));
           continue;
         }
-        if (outcome.kind === "synced") {
+        if (outcome.kind === "synced" || outcome.kind === "needs-decision") {
+          published ||= outcome.published;
           outcome.carried.forEach((path) => carried.add(path));
-          return { ...outcome, published: outcome.published || published, carried: [...carried].sort() };
+          return { ...outcome, ...report() };
         }
         if (outcome.kind === "up-to-date" && (published || carried.size > 0)) {
-          return { kind: "synced", commit: outcome.commit, published, carried: [...carried].sort() };
+          return { kind: "synced", commit: outcome.commit, ...report() };
         }
         return outcome;
       }
@@ -428,8 +485,13 @@ export class SyncSession {
       const ready = await this.#loadIdle();
       if (ready.kind !== "ready") return ready.outcome;
       const { state } = ready;
-      await this.#recoverNative(state);
-      if (state.holds[input.path]) return { kind: "stale", preview: null };
+      if (!sameIdentity(await this.#repository.identity(), state.repository)) {
+        return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before restoring history" } };
+      }
+      // No operation is in flight, so every pending native intent is cancelled.
+      const native = await this.#recoverNative(state);
+      if (native) return { kind: "blocked", reason: "Native recovery evidence could not be verified; open Changes" };
+      if (state.holds[input.path] || this.#quarantined(state).has(input.path)) return { kind: "stale", preview: null };
       const preview = await this.#restorePreview(state, input);
       if (preview.kind !== "preview") return preview;
       if (preview.token !== input.token) return { kind: "stale", preview };
@@ -441,7 +503,7 @@ export class SyncSession {
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
       if (result.kind === "applied") return { kind: "restored" };
       if (result.kind === "blocked") return { kind: "blocked", reason: result.reason };
-      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], preview.path);
+      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], { requiredPath: preview.path });
       return { kind: "stale", preview: null };
     });
   }
@@ -489,8 +551,9 @@ export class SyncSession {
 
   /**
    * Review abandonment of a held candidate: a legacy /2 publication sent
-   * without a ledger, or a publication held by ledger divergence. This never
-   * asserts nonpublication and never cancels a request already sent.
+   * without a ledger (only after the branch left its parent, see
+   * `#settleLegacy`), or a publication held by ledger divergence. This never
+   * asserts nonpublication.
    */
   previewPublicationRecovery(): Promise<PublicationRecoveryPreview | PublicationRecoveryRefusal> {
     return this.#exclusive(async () => {
@@ -530,7 +593,7 @@ export class SyncSession {
       state.review = null;
       state.decisions = dictionary();
       const sent = legacy
-        ? "Its request was sent without a ledger and cannot be cancelled: if GitHub still applies it while the branch is at its parent, it appears later as an ordinary remote change"
+        ? `Its request was sent without a ledger; the branch has left its parent ${operation.parent}, so that request can no longer land`
         : "Re-enrollment anchors this device to the ledger value it then observes";
       state.pause = { reason: "history-rewritten", detail: `Archived unresolved candidate ${preview.candidate} after review. ${sent}. Re-enroll against the current head` };
       await this.#save(state);
@@ -551,6 +614,8 @@ export class SyncSession {
     if (legacy && (head.oid === operation.candidate.commit || await this.#repository.isAncestor(operation.candidate.commit, head.oid))) {
       return { kind: "reachable", candidate: operation.candidate.commit };
     }
+    // Releasing before the branch leaves the parent would let the old request land later as remote content.
+    if (legacy && (head.oid === operation.parent || operation.fence)) return { kind: "unfenced" };
     const candidate = await this.#repository.readCommit(operation.candidate.commit);
     const candidateFiles = await verifySnapshot(candidate.files, "recovery candidate");
     if (candidate.oid !== operation.candidate.commit || candidate.treeOid !== operation.candidate.tree || !sameManifest(candidateFiles, operation.target)) {
@@ -577,13 +642,14 @@ export class SyncSession {
     if (base.kind === "paused") return base.outcome;
     const guardScope = await digestText(JSON.stringify(["guard/1", head.oid, sortedManifest(local)]));
     const holds = nativeHolds(state);
-    const unresolved = await reconcile({ base: base.files, local, remote: head.files, decisions: dictionary(), guardScope, holds });
+    const untouched = this.#untouched(state);
+    const unresolved = await reconcile({ base: base.files, local, remote: head.files, decisions: dictionary(), guardScope, holds, untouched });
     const conflicts = unresolved.kind === "needs-decision" ? unresolved.conflicts : unresolved.held;
     // Decisions survive only while their exact conflict (versions, or guard scope) still exists.
     const validIds = new Set(conflicts.map((item) => item.id));
     for (const id of Object.keys(state.decisions)) if (!validIds.has(id)) delete state.decisions[id];
     const plan = Object.keys(state.decisions).length > 0
-      ? await reconcile({ base: base.files, local, remote: head.files, decisions: choices(state), guardScope, holds })
+      ? await reconcile({ base: base.files, local, remote: head.files, decisions: choices(state), guardScope, holds, untouched })
       : unresolved;
     const reviewed = [...conflicts];
     const later = plan.kind === "needs-decision" ? plan.conflicts : plan.held;
@@ -591,9 +657,13 @@ export class SyncSession {
     // A decided hold whose chosen version is already live is released now; the
     // release is durable with the save that follows on every path below.
     let released = false;
+    const decidedOversize: string[] = [];
     if (plan.kind === "ready") {
       for (const item of plan.resolved) {
-        if ((item.kind === "interrupted-write" || item.kind === "displaced-write") && sameEntry(local[item.path], plan.target[item.path])) {
+        if (!isNativeConflict(item)) continue;
+        // The decision is durable (resolve saved it), so the vault may now release its apply block.
+        decidedOversize.push(...item.oversize.map((evidence) => evidence.id));
+        if (sameEntry(local[item.path], plan.target[item.path])) {
           delete state.holds[item.path];
           released = true;
         }
@@ -603,23 +673,30 @@ export class SyncSession {
 
     if (plan.kind === "needs-decision") {
       await this.#save(state);
-      return { kind: "needs-decision", conflicts: plan.conflicts, merged: plan.merged };
+      return { kind: "needs-decision", conflicts: plan.conflicts, merged: plan.merged, published: false, carried: [] };
+    }
+    for (const id of decidedOversize) if (!state.unacknowledged.includes(id)) state.unacknowledged.push(id);
+    if (decidedOversize.length > 0) {
+      await this.#save(state);
+      await this.#acknowledge(state);
     }
 
     const outgoing = Object.keys(plan.outgoing).length;
     const held = plan.held;
     if (outgoing === 0 && plan.incoming.length === 0) {
+      // Untouched paths keep their origin so their unknown local bytes are compared later.
+      const kept = await this.#untouchedCarry(state, untouched, [local, head.files], head.files);
       const settled =
         !released &&
         head.oid === state.base.commit &&
-        Object.keys(state.carry).length === 0 &&
+        sameCarry(state.carry, kept) &&
         !hadReview &&
         hadPrototypeBaseline === Object.hasOwn(state.base.files, "__proto__") &&
         !state.review &&
         Object.keys(state.decisions).length === 0;
       if (!settled) {
         state.base = commitState(head);
-        state.carry = dictionary();
+        state.carry = kept;
         if (held.length === 0) {
           state.review = null;
           state.decisions = dictionary();
@@ -628,7 +705,7 @@ export class SyncSession {
       }
       if (held.length > 0) {
         await this.#save(state);
-        return { kind: "needs-decision", conflicts: held, merged: plan.merged };
+        return { kind: "needs-decision", conflicts: held, merged: plan.merged, published: false, carried: [] };
       }
       return { kind: "up-to-date", commit: head.oid };
     }
@@ -687,6 +764,7 @@ export class SyncSession {
       steps,
       recoveryId,
       incomingRecoveryId,
+      fence: null,
     };
     // The receipt identity is durable before the first and only dispatch.
     state.operation = operation;
@@ -710,7 +788,10 @@ export class SyncSession {
     this.#holdPass = true;
     try {
       const next = await this.#transact(state);
-      return next.kind === "cancelled" || next.kind === "up-to-date" ? outcome : next;
+      if (next.kind === "cancelled" || next.kind === "up-to-date") return outcome;
+      // Report what this sync already accomplished alongside the decisions.
+      if (next.kind === "needs-decision") return { ...next, published: outcome.published, carried: outcome.carried };
+      return next;
     } finally {
       this.#holdPass = false;
     }
@@ -787,59 +868,109 @@ export class SyncSession {
     return null;
   }
 
-  /**
-   * The ledger state machine. Only the ledger value decides: the receipt means
-   * accepted, our seal means cancelled forever, the anchor means undecided and
-   * is raced by the one durable seal. Anything else fails closed.
-   */
+  /** Settles a ledger publication of the current operation: receipt accepts, own seal cancels. */
   async #settle(state: StoredState, operation: PublishOperation): Promise<Settlement> {
     if (operation.publication.phase === "legacy") return this.#settleLegacy(state, operation);
-    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id } };
-    for (let round = 0; round < SETTLE_ROUNDS; round++) {
+    const verdict = await this.#settleLedger(state, ledgerView(operation), operation.id);
+    if (verdict.kind === "receipt") return this.#accept(state, operation);
+    if (verdict.kind === "seal") return this.#cancel(state, operation, verdict.seal);
+    if (verdict.kind === "held") return verdict;
+    return this.#diverged(state, operation, verdict.value);
+  }
+
+  /**
+   * The ledger state machine. Only the ledger value decides: the receipt means
+   * accepted, the seal means cancelled forever, the anchor means undecided and
+   * is raced by the one durable seal (the only write made here). A value older
+   * than the anchor (or absent past it) can only be a stale replica or an
+   * out-of-contract rewind: it is reread a bounded number of times, then the
+   * publication stays settling and nothing is sent; no number of stale reads
+   * is ever treated as divergence. Anything else fails closed as divergence.
+   */
+  async #settleLedger(state: StoredState, item: LedgerPublication, operationId: string): Promise<Verdict> {
+    const held = (reason: "unreachable" | "stale-ledger"): Verdict => ({ kind: "held", outcome: { kind: "settling", operationId, reason } });
+    let stale = 0;
+    for (let round = 0; round < SETTLE_ROUNDS; ) {
       let value: string | null;
       try {
         value = await this.#readLedgerValue();
       } catch (error) {
         if (retryable(error)) throw error;
-        return settling;
+        return held("unreachable");
       }
-      if (value === operation.receipt) return this.#accept(state, operation);
-      if (operation.publication.phase === "sealing" && value === operation.publication.seal) return this.#cancel(state, operation, operation.publication.seal);
-      if (value !== operation.anchor) {
-        // An older ledger value can only be a stale read or an out-of-contract
-        // rewind. Read once more before failing closed.
-        if (round === 0 && value !== null && operation.anchor !== null) {
-          const older = await this.#ancestry(value, operation.anchor);
-          if (older === null) return settling;
-          if (older) {
-            await this.#delay(1000);
-            continue;
-          }
-        }
-        return this.#diverged(state, operation, value);
+      if (value === item.receipt) return { kind: "receipt" };
+      if (item.publication.phase === "sealing" && value === item.publication.seal) return { kind: "seal", seal: item.publication.seal };
+      if (value !== item.anchor) {
+        const older = item.anchor === null ? false : value === null ? true : await this.#ancestry(value, item.anchor);
+        if (older === null) return held("unreachable");
+        if (!older) return { kind: "diverged", value };
+        if (++stale > STALE_REREADS) return held("stale-ledger");
+        await this.#delay(1000 * stale + Math.floor(this.#random() * 2000));
+        continue;
       }
-      if (operation.publication.phase !== "sealing") {
+      round++;
+      if (item.publication.phase !== "sealing") {
         let seal: string;
         try {
-          seal = await this.#repository.createSeal({ anchor: operation.anchor, parent: operation.parent, operation: operation.id });
+          seal = await this.#repository.createSeal({ anchor: item.anchor, parent: item.parent, operation: item.id });
         } catch (error) {
           if (retryable(error)) throw error;
-          return settling;
+          return held("unreachable");
         }
-        if (!isOid(seal) || [operation.receipt, operation.anchor, operation.parent, operation.candidate.commit].includes(seal)) {
+        if (!isOid(seal) || [item.receipt, item.anchor, item.parent, item.candidate.commit].includes(seal)) {
           throw new IntegrityError("Created seal is not a distinct commit");
         }
         // The seal identity is durable before its first dispatch and reused for every retry.
-        operation.publication = { phase: "sealing", seal };
+        item.publication = { phase: "sealing", seal };
         await this.#save(state);
       }
-      await this.#repository.seal({ anchor: operation.anchor, seal: operation.publication.seal }).catch(() => undefined);
+      await this.#repository.seal({ anchor: item.anchor, seal: item.publication.seal }).catch(() => undefined);
     }
-    return settling;
+    return held("unreachable");
   }
 
-  /** /2 publications carried no ledger update: only branch reachability can settle them. */
-  async #settleLegacy(state: StoredState, operation: PublishOperation): Promise<Settlement> {
+  /**
+   * While paused `ledger-diverged`, each sync rereads the ledger without
+   * writing: our receipt or seal settles the publication and lifts the pause;
+   * anything else keeps the reviewed pause. Returns null once settled.
+   */
+  async #recheckDiverged(state: StoredState, operation: PublishOperation): Promise<SyncOutcome | null> {
+    const pause = state.pause!;
+    let value: string | null;
+    try {
+      value = await this.#readLedgerValue();
+    } catch (error) {
+      if (retryable(error)) throw error;
+      return { kind: "paused", pause };
+    }
+    const seal = operation.publication.phase === "sealing" ? operation.publication.seal : null;
+    if (value === null || (value !== operation.receipt && value !== seal)) return { kind: "paused", pause };
+    state.pause = null;
+    if (value === operation.receipt) await this.#accept(state, operation);
+    else await this.#cancel(state, operation, value);
+    return null;
+  }
+
+  /**
+   * /2 publications carried no ledger update: only branch reachability can
+   * accept them, and nothing ever proves them rejected. While the branch sits
+   * at the legacy parent, the old request (`parent -> candidate`) could still
+   * land, so the branch is moved off the parent by a same-tree fence commit
+   * published through this device's ledger. The fence identity is durable
+   * before dispatch and settles like any publication (receipt: fenced; seal:
+   * retried). Release still needs the user's review: a fence proves only that
+   * the old request can no longer land, not that it never did.
+   */
+  async #settleLegacy(state: StoredState, operation: PublishOperation, fenceAllowed = true): Promise<Settlement> {
+    if (operation.fence) {
+      const fence = operation.fence;
+      const verdict = await this.#settleLedger(state, fence, operation.id);
+      if (verdict.kind === "held") return verdict;
+      if (verdict.kind === "diverged") return this.#fenceDiverged(state, operation, fence, verdict.value);
+      state.ledger.anchor = verdict.kind === "receipt" ? fence.receipt : verdict.seal;
+      operation.fence = null;
+      await this.#save(state);
+    }
     const head = await this.#readHead();
     const candidate = operation.candidate.commit;
     let published = head.oid === candidate;
@@ -851,8 +982,46 @@ export class SyncSession {
       }
     }
     if (published) return this.#accept(state, operation);
-    // Absence proves nothing, and a v3 seal cannot fence this request.
-    return { kind: "held", outcome: { kind: "publication-unknown", operationId: operation.id, parent: operation.parent, candidate, head: head.oid } };
+    const unknown = (fenced: boolean, at: string): Settlement => ({ kind: "held", outcome: { kind: "publication-unknown", operationId: operation.id, parent: operation.parent, candidate, head: at, fenced } });
+    if (head.oid !== operation.parent) return unknown(true, head.oid);
+    // At most one new fence per sync; a sealed fence is retried by the next sync.
+    if (!fenceAllowed) return unknown(false, head.oid);
+    const id = `fence-${this.#nextId(state, "fence")}-${crypto.randomUUID()}`;
+    const anchor = state.ledger.anchor;
+    const prepared = await this.#repository.prepare(head, dictionary(), `Vault sync fence from ${this.#deviceName}`, { anchor, operation: id });
+    if (!isOid(prepared.oid) || prepared.oid === head.oid || prepared.oid === candidate || prepared.treeOid !== head.treeOid || !sameManifest(prepared.files, head.files)) {
+      throw new IntegrityError("Prepared fence is not a same-tree commit on the legacy parent");
+    }
+    if (!isOid(prepared.receipt) || [prepared.oid, head.oid, anchor, candidate].includes(prepared.receipt)) {
+      throw new IntegrityError("Prepared fence receipt is not a distinct commit");
+    }
+    const fence: LedgerPublication = { id, parent: head.oid, candidate: { commit: prepared.oid, tree: prepared.treeOid }, receipt: prepared.receipt, anchor, publication: { phase: "dispatched" } };
+    // The fence and legacy identities are durable before the fence's only dispatch.
+    operation.fence = fence;
+    await this.#save(state);
+    const ack = await this.#repository.publish({ parent: head.oid, candidate: prepared.oid, anchor, receipt: prepared.receipt }).catch(() => "unconfirmed" as const);
+    if (ack !== "acknowledged") return this.#settleLegacy(state, operation, false);
+    state.ledger.anchor = fence.receipt;
+    operation.fence = null;
+    await this.#save(state);
+    return unknown(true, fence.candidate.commit);
+  }
+
+  async #fenceDiverged(state: StoredState, operation: PublishOperation, fence: LedgerPublication, value: string | null): Promise<Settlement> {
+    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id, reason: "unreachable" } };
+    const seal = fence.publication.phase === "sealing" ? fence.publication.seal : null;
+    for (const [mine, label] of [[fence.receipt, "fence receipt"], [seal, "fence seal"]] as const) {
+      if (value === null || mine === null) continue;
+      const past = await this.#ancestry(mine, value);
+      if (past === null) return settling;
+      if (past) {
+        state.ledger.anchor = mine;
+        operation.fence = null;
+        await this.#save(state);
+        return { kind: "held", outcome: await this.#pause(state, "duplicate-installation", `Ledger ${state.ledger.ref} advanced past this device's ${label} ${mine}; another installation is writing it`) };
+      }
+    }
+    return { kind: "held", outcome: await this.#pause(state, "ledger-diverged", `Ledger ${state.ledger.ref} is ${value ?? "absent"}, expected ${fence.anchor ?? "absent"} while fencing a legacy publication; review publication recovery`) };
   }
 
   async #accept(state: StoredState, operation: PublishOperation): Promise<Settlement> {
@@ -881,7 +1050,7 @@ export class SyncSession {
   }
 
   async #diverged(state: StoredState, operation: PublishOperation, value: string | null): Promise<Settlement> {
-    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id } };
+    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id, reason: "unreachable" } };
     if (value !== null && operation.receipt !== null) {
       const accepted = await this.#ancestry(operation.receipt, value);
       if (accepted === null) return settling;
@@ -964,7 +1133,7 @@ export class SyncSession {
         // The exact compare-and-swap made the chosen version live; release with this save.
         delete state.holds[step.path];
       }
-      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], step.path);
+      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], { requiredPath: step.path, known: [local, files] });
       else await this.#save(state);
     }
 
@@ -1011,6 +1180,9 @@ export class SyncSession {
     for (const entry of Object.values(carry)) {
       if (entry && !Object.hasOwn(state.blobs, entry.oid)) throw new IntegrityError(`Missing preserved bytes for ${entry.oid}`);
     }
+    // Untouched paths (unknown local bytes) keep their origin across the advance.
+    const untouched = this.#untouched(state).filter((path) => !stepsByPath.has(path));
+    Object.assign(carry, await this.#untouchedCarry(state, untouched, [local, files], operation.target.files));
     for (const [path, entry] of Object.entries(carry)) if (entry) origins[path] = entry;
     // The carry map is not yet in state. Pin its origins before #save prunes
     // blobs, so both this completion and a restart retain the same evidence.
@@ -1032,40 +1204,99 @@ export class SyncSession {
     return { kind: "complete", commit: operation.target.commit, carried: Object.keys(carry).sort() };
   }
 
-  /** Ingests every unacknowledged native issue before the first capture; acknowledges only after a durable save. */
-  async #recoverNative(state: StoredState): Promise<void> {
-    if (!this.#vault.recover) return;
-    await this.#ingest(state, await this.#vault.recover());
+  /**
+   * The only call that lets the vault mutate native recovery state; every
+   * caller has already passed the identity, pause and installation fences.
+   * Authorizes replay only for intents exactly matching an unfinished step of
+   * the durable accepted operation; every other intent (a kept step, an
+   * abandoned operation) is cancelled, which never installs its intent. A
+   * crash on either side of the vault's cancellation save is idempotent: the
+   * next pass cancels again or finds nothing. Returns an outcome only when
+   * evidence of unknown scope blocks synchronization.
+   */
+  async #recoverNative(state: StoredState): Promise<SyncOutcome | null> {
+    if (!this.#vault.recover) return null;
+    const pending = await this.#pendingIntents();
+    const operation = state.operation?.kind === "apply" ? state.operation : null;
+    const replay: string[] = [];
+    const cancel: string[] = [];
+    for (const intent of pending) {
+      const step = operation?.steps.find((item) => item.path === intent.path);
+      const authorized =
+        step !== undefined &&
+        (step.status === "pending" || step.status === "blocked") &&
+        sameRef(step.expected, intent.expected) &&
+        sameRef(step.next, intent.next) &&
+        !(state.holds[step.path] && step.decision === null);
+      (authorized ? replay : cancel).push(intent.id);
+    }
+    const issues = await this.#vault.recover({ replay, cancel });
+    // Anything still pending was refused by the vault: hold its path untouched.
+    const stuck = (await this.#pendingIntents()).map((intent): NativeError => ({ id: intent.id, path: intent.path, detail: "A native file transaction is still unfinished" }));
+    await this.#ingest(state, issues, { replaceErrors: true, extraErrors: stuck });
+    const global = state.nativeErrors.filter((item) => item.path === null);
+    return global.length > 0 ? { kind: "native-error", errors: global } : null;
+  }
+
+  async #pendingIntents(): Promise<PendingIntent[]> {
+    if (!this.#vault.pendingIntents) return [];
+    const intents = await this.#vault.pendingIntents();
+    for (const intent of intents) {
+      if (typeof intent?.id !== "string" || !isSyncablePath(intent.path)) throw new IntegrityError("Native pending intent is malformed");
+    }
+    return intents;
   }
 
   /**
-   * Verifies issues, pins every version in recovery, merges them into durable
-   * per-path holds and saves; then acknowledges every ingested id. Idempotent:
-   * an id already held or awaiting acknowledgement is not ingested twice.
+   * Verifies issues one at a time. A valid issue is pinned (bytes in a
+   * recovery record; oversize evidence as metadata only), merged into a
+   * durable per-path hold with its base fixed now, saved, then acknowledged
+   * (oversize ids only once a decision exists). An invalid issue is never
+   * acknowledged: it is recorded in `nativeErrors`, holding its path, or the
+   * whole vault when its path is unknown. Idempotent by issue id.
    */
-  async #ingest(state: StoredState, issues: NativeIssue[], requiredPath?: string): Promise<void> {
+  async #ingest(
+    state: StoredState,
+    issues: unknown[],
+    options: { requiredPath?: string; replaceErrors?: boolean; extraErrors?: NativeError[]; known?: Snapshot[] } = {},
+  ): Promise<void> {
     const known = new Set([...state.unacknowledged, ...Object.values(state.holds).flatMap((item) => item.ids)]);
+    const errors: NativeError[] = [...(options.extraErrors ?? [])];
+    const before = JSON.stringify(state.nativeErrors);
     let changed = false;
-    for (const issue of issues) {
-      const at = `native issue ${typeof issue?.id === "string" ? issue.id : "?"}`;
-      if (typeof issue !== "object" || issue === null || typeof issue.id !== "string" || issue.id.length === 0 || issue.id.length > 256) throw new IntegrityError(`${at}: malformed id`);
-      if (!isSyncablePath(issue.path) || (requiredPath !== undefined && issue.path !== requiredPath)) throw new IntegrityError(`${at}: unexpected path`);
-      if (issue.kind !== "interrupted" && issue.kind !== "displaced") throw new IntegrityError(`${at}: unknown kind`);
-      const verify = async (entry: Entry | null, label: string) => (entry === null ? null : verifyEntry(`${at} ${label}`, entry));
-      const expected = await verify(issue.expected, "expected");
-      const next = await verify(issue.next, "next");
-      const found = await verify(issue.found, "found");
+    for (const raw of Array.isArray(issues) ? issues : [issues]) {
+      const checked = await checkIssue(raw, options.requiredPath);
+      if (checked.kind === "invalid") {
+        errors.push(checked.error);
+        continue;
+      }
+      const issue = checked.issue;
       if (known.has(issue.id)) continue;
       known.add(issue.id);
-      for (const entry of [expected, next, found]) if (entry) this.#record(state, "native", dictionary([[issue.path, entry]]));
       const prior = state.holds[issue.path];
-      state.holds[issue.path] = prior
-        ? { ...prior, ids: [...prior.ids, issue.id], kind: prior.kind === "interrupted" || issue.kind === "interrupted" ? "interrupted" : "displaced", found: found && toRef(found) }
-        : { ids: [issue.id], kind: issue.kind, expected: expected && toRef(expected), next: next && toRef(next), found: found && toRef(found) };
-      state.unacknowledged.push(issue.id);
+      const base = prior ? prior.base : await this.#origin(state, issue.path, options.known ?? []);
+      if (issue.kind === "oversize") {
+        const evidence: OversizeEvidence = { id: issue.id, sourcePath: issue.sourcePath, size: issue.size, mtime: issue.mtime };
+        for (const entry of [issue.expected, issue.next]) if (entry) this.#record(state, "native", dictionary([[issue.path, entry]]));
+        state.holds[issue.path] = prior
+          ? { ...prior, ids: [...prior.ids, issue.id], oversize: [...prior.oversize, evidence] }
+          : { ids: [issue.id], kind: "oversize", base, expected: issue.expected && toRef(issue.expected), next: issue.next && toRef(issue.next), found: null, oversize: [evidence] };
+      } else {
+        for (const entry of [issue.expected, issue.next, issue.found]) if (entry) this.#record(state, "native", dictionary([[issue.path, entry]]));
+        const found = issue.found && toRef(issue.found);
+        state.holds[issue.path] = prior
+          ? { ...prior, ids: [...prior.ids, issue.id], kind: prior.kind === "interrupted" || issue.kind === "interrupted" ? "interrupted" : "displaced", found }
+          : { ids: [issue.id], kind: issue.kind, base, expected: issue.expected && toRef(issue.expected), next: issue.next && toRef(issue.next), found, oversize: [] };
+        state.unacknowledged.push(issue.id);
+      }
       changed = true;
     }
-    if (changed || requiredPath !== undefined) await this.#save(state);
+    state.nativeErrors = options.replaceErrors ? errors : [...state.nativeErrors, ...errors];
+    if (changed || options.requiredPath !== undefined || JSON.stringify(state.nativeErrors) !== before) await this.#save(state);
+    await this.#acknowledge(state);
+  }
+
+  async #acknowledge(state: StoredState): Promise<void> {
     if (state.unacknowledged.length === 0 || !this.#vault.acknowledgeRecovery) return;
     try {
       await this.#vault.acknowledgeRecovery([...state.unacknowledged]);
@@ -1076,10 +1307,48 @@ export class SyncSession {
     await this.#save(state);
   }
 
+  /** The path's effective base with bytes pinned in `blobs`, for a hold's fixed base. */
+  async #origin(state: StoredState, path: string, snapshots: Snapshot[]): Promise<Ref | null> {
+    const ref = effectiveManifest(state)[path];
+    if (!ref) return null;
+    if (!Object.hasOwn(state.blobs, ref.oid)) {
+      let data = snapshots.map((files) => files[path]).find((entry) => entry?.oid === ref.oid)?.data;
+      if (data === undefined) {
+        const commit = await this.#repository.readCommit(state.base.commit);
+        const entry = commit.oid === state.base.commit ? own(commit.files, path) : undefined;
+        if (!entry || !sameEntry(entry, ref)) throw new IntegrityError(`Missing base bytes for ${path}`);
+        data = (await verifyEntry(path, entry)).data;
+      }
+      state.blobs[ref.oid] = data;
+    }
+    return { oid: ref.oid, mode: ref.mode };
+  }
+
+  /** Paths whose local bytes are unknown: unreadable in the latest capture, or quarantined. Holds are separate. */
+  #untouched(state: StoredState): string[] {
+    const paths = new Set([...this.#unreadable.map((item) => item.path), ...this.#quarantined(state)]);
+    return [...paths].filter((path) => !state.holds[path]).sort();
+  }
+
+  /** Carry entries keeping each untouched path's current origin wherever it differs from the new checkpoint. */
+  async #untouchedCarry(state: StoredState, paths: readonly string[], snapshots: Snapshot[], target: Manifest | Snapshot): Promise<Record<string, Ref | null>> {
+    const carry: Record<string, Ref | null> = dictionary();
+    for (const path of paths) {
+      const origin = await this.#origin(state, path, snapshots);
+      if (!sameRef(origin, target[path])) carry[path] = origin;
+    }
+    return carry;
+  }
+
+  /** Paths held by unverifiable native evidence: never planned, published or written. */
+  #quarantined(state: StoredState): Set<string> {
+    return new Set(state.nativeErrors.flatMap((item) => (item.path === null ? [] : [item.path])));
+  }
+
   /** An empty capture against a non-empty checkpoint is storage loss, never a plan. */
   #guardCapture(state: StoredState, local: Snapshot): void {
     const expected = Object.keys(effectiveManifest(state)).length;
-    if (Object.keys(local).length === 0 && expected > 0) {
+    if (Object.keys(local).length === 0 && this.#unreadable.length === 0 && expected > 0) {
       throw new VaultCaptureError(`The vault reads as empty while ${expected} synchronized files are expected; storage may be unavailable, so nothing was planned`);
     }
   }
@@ -1126,10 +1395,14 @@ export class SyncSession {
     local: Snapshot;
     carry: Record<string, Ref | null>;
     drafts: Snapshot;
+    pending: PendingIntent[];
   }> {
     const repository = await this.#repository.identity();
     const head = await this.#readHead();
+    const pending = await this.#pendingIntents();
     const local = await this.#capture(prior, "local capture");
+    const unreadable = new Set(this.#unreadable.map((item) => item.path));
+    const nativePending = new Set(pending.map((intent) => intent.path));
     if (prior) {
       const checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
       const checkpoint = await verifySnapshot(checkpointCommit.files, "re-enrollment checkpoint");
@@ -1143,11 +1416,19 @@ export class SyncSession {
     const drafts: Snapshot = dictionary();
     const items: EnrollmentPreview["items"] = [];
     let unchanged = 0;
-    const paths = [...new Set([...Object.keys(local), ...Object.keys(head.files)])].sort();
+    const paths = [...new Set([...Object.keys(local), ...Object.keys(head.files), ...unreadable, ...nativePending])].sort();
     for (const path of paths) {
       const l = local[path] ?? null;
       const r = head.files[path] ?? null;
       const o = old?.[path] ?? null;
+      if (nativePending.has(path) || unreadable.has(path)) {
+        // Unknown local bytes: never classified as a deletion or download.
+        // Derived from absence, so differing bytes ask once readable.
+        if (r) carry[path] = null;
+        if (l) drafts[path] = l;
+        items.push({ path, action: nativePending.has(path) ? "native-pending" : "unreadable" });
+        continue;
+      }
       if (sameEntry(l, r)) {
         unchanged++;
         continue;
@@ -1180,6 +1461,8 @@ export class SyncSession {
         head.oid,
         prior?.base.commit ?? null,
         Object.entries(toManifest(local)).sort(([a], [b]) => (a < b ? -1 : 1)),
+        pending.map((intent) => [intent.id, intent.attempted]).sort(),
+        this.#unreadable.map((item) => [item.path, item.size, item.mtime]).sort(),
       ]),
     );
     return {
@@ -1188,6 +1471,7 @@ export class SyncSession {
       local,
       carry,
       drafts,
+      pending,
     };
   }
 
@@ -1246,6 +1530,8 @@ export class SyncSession {
     const conflicts = (state.review?.conflicts ?? []).filter((item) => !Object.hasOwn(state.decisions, item.id)).map((item) => restoreConflict(state, item));
     const phase: Phase = state.pause
       ? "paused"
+      : state.nativeErrors.some((item) => item.path === null)
+        ? "native-error"
       : operation?.kind === "publish"
         ? operation.publication.phase === "legacy" ? "publication-unknown" : "settling"
         : operation
@@ -1268,6 +1554,8 @@ export class SyncSession {
       carried: Object.keys(state.carry).sort(),
       pending,
       recovery: state.recovery.length,
+      nativeErrors: state.nativeErrors,
+      unreadable: scan ? this.#unreadable : null,
     };
   }
 
@@ -1275,7 +1563,15 @@ export class SyncSession {
 
   /** Archives every local draft not already pinned before an API can return early. */
   async #capture(state: StoredState | null, label: string, persist = true): Promise<Snapshot> {
-    const local = await verifySnapshot(await this.#vault.capture(), label);
+    const scanned = this.#vault.scan ? await this.#vault.scan() : { files: await this.#vault.capture(), unreadable: [] };
+    const local = await verifySnapshot(scanned.files, label);
+    if (!Array.isArray(scanned.unreadable)) throw new IntegrityError(`${label}: malformed unreadable list`);
+    for (const item of scanned.unreadable) {
+      if (!isSyncablePath(item?.path) || Object.hasOwn(local, item.path) || typeof item.size !== "number" || item.reason !== "oversize") {
+        throw new IntegrityError(`${label}: malformed unreadable file`);
+      }
+    }
+    this.#unreadable = scanned.unreadable.map((item) => ({ path: item.path, size: item.size, mtime: typeof item.mtime === "number" ? item.mtime : null, reason: item.reason }));
     if (!state) return local;
     const base = effectiveManifest(state);
     const drafts: Snapshot = dictionary();
@@ -1368,6 +1664,7 @@ export class SyncSession {
         kind: conflict.kind, id: conflict.id, path: conflict.path,
         base: keep(conflict.base), local: keep(conflict.local), remote: keep(conflict.remote),
         expected: keep(conflict.expected), next: keep(conflict.next), found: keep(conflict.found),
+        oversize: conflict.oversize,
       };
     }
     return {
@@ -1420,15 +1717,15 @@ function retryable(error: unknown): boolean {
   return typeof error === "object" && error !== null && "retryAt" in error && typeof error.retryAt === "number" && Number.isFinite(error.retryAt);
 }
 
-function isNativeConflict<T extends { kind: string }>(conflict: T): conflict is Extract<T, { kind: "interrupted-write" | "displaced-write" }> {
-  return conflict.kind === "interrupted-write" || conflict.kind === "displaced-write";
+function isNativeConflict<T extends { kind: string }>(conflict: T): conflict is Extract<T, { kind: "interrupted-write" | "displaced-write" | "oversize-write" }> {
+  return conflict.kind === "interrupted-write" || conflict.kind === "displaced-write" || conflict.kind === "oversize-write";
 }
 
 function nativeHolds(state: StoredState): Record<string, NativeHold> {
   const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid]! } : null);
   const holds: Record<string, NativeHold> = dictionary();
   for (const [path, item] of Object.entries(state.holds)) {
-    holds[path] = { id: item.ids.join(","), kind: item.kind, expected: entry(item.expected), next: entry(item.next), found: entry(item.found) };
+    holds[path] = { id: item.ids.join(","), kind: item.kind, base: entry(item.base), expected: entry(item.expected), next: entry(item.next), found: entry(item.found), oversize: item.oversize };
   }
   return holds;
 }
@@ -1474,4 +1771,64 @@ function describe(identity: RepositoryIdentity): string {
 function base64Length(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   return (data.length / 4) * 3 - padding;
+}
+
+function sameRef(a: { oid: string; mode: string } | null | undefined, b: { oid: string; mode: string } | null | undefined): boolean {
+  return (a ?? null) === null ? (b ?? null) === null : !!b && a!.oid === b.oid && a!.mode === b.mode;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Checks one untrusted native issue; never throws. */
+async function checkIssue(raw: unknown, requiredPath?: string): Promise<{ kind: "valid"; issue: NativeIssue } | { kind: "invalid"; error: NativeError }> {
+  const id = isRecord(raw) && typeof raw.id === "string" && raw.id.length > 0 && raw.id.length <= 256 ? raw.id : null;
+  const candidate = isRecord(raw) ? raw.path : undefined;
+  const path = isSyncablePath(candidate) && (requiredPath === undefined || candidate === requiredPath) ? candidate : null;
+  const invalid = (detail: string) => ({ kind: "invalid" as const, error: { id, path, detail: `Native issue ${id ?? "with no readable id"}: ${detail}` } });
+  if (!isRecord(raw)) return invalid("malformed issue");
+  if (path === null) return invalid("unexpected path");
+  if (id === null) return invalid("malformed id");
+  const entry = async (value: unknown, label: string): Promise<Entry | null> => (value === null ? null : verifyEntry(`native issue ${id} ${label}`, value));
+  try {
+    const expected = await entry(raw.expected, "expected");
+    const next = await entry(raw.next, "next");
+    if (raw.kind === "interrupted" || raw.kind === "displaced") {
+      return { kind: "valid", issue: { id, path, kind: raw.kind, expected, next, found: await entry(raw.found, "found") } };
+    }
+    if (raw.kind === "oversize") {
+      const { sourcePath, size, mtime } = raw;
+      if (typeof sourcePath !== "string" || sourcePath.length === 0) return invalid("malformed source path");
+      if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) return invalid("malformed size");
+      if (mtime !== null && (typeof mtime !== "number" || !Number.isFinite(mtime))) return invalid("malformed modification time");
+      return { kind: "valid", issue: { id, path, kind: "oversize", sourcePath, size, mtime, expected, next } };
+    }
+    return invalid("unknown kind");
+  } catch (error) {
+    return invalid(error instanceof Error ? error.message : "unverifiable bytes");
+  }
+}
+
+function sameCarry(a: Record<string, Ref | null>, b: Record<string, Ref | null>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((path) => Object.hasOwn(b, path) && sameRef(a[path], b[path]));
+}
+
+/** The ledger fields of a non-legacy publish operation, sharing its publication state. */
+function ledgerView(operation: PublishOperation): LedgerPublication {
+  const view = {
+    id: operation.id,
+    parent: operation.parent,
+    candidate: operation.candidate,
+    receipt: operation.receipt!,
+    anchor: operation.anchor,
+    get publication() {
+      return operation.publication as LedgerPublication["publication"];
+    },
+    set publication(value: LedgerPublication["publication"]) {
+      operation.publication = value;
+    },
+  };
+  return view;
 }

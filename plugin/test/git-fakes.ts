@@ -9,7 +9,9 @@ import type {
   LedgerRead,
   LocalVault,
   NativeIssue,
+  PendingIntent,
   PreparedPublication,
+  RecoveryAuthorization,
   Repository,
   RepositoryIdentity,
   Snapshot,
@@ -286,7 +288,23 @@ export class MemoryVault implements LocalVault {
    * and moves `bytes` into the hold. `crash` loses the apply response.
    */
   native: { path: string; kind: "interrupted" | "displaced"; bytes: Entry | null; crash?: boolean } | null = null;
+  /**
+   * The next apply to `path` durably records a native intent and then stops:
+   * `refuse` returns `blocked` (an open view refused the write after the
+   * intent was saved); `crash` throws after marking it attempted with `torn`
+   * bytes (or none) at the path.
+   */
+  pendingNext: { path: string; mode: "refuse" | "crash"; torn?: Entry | null } | null = null;
+  /** Durable native intents by path (the native journal). */
+  intents = new Map<string, { id: string; path: string; expected: Entry | null; next: Entry | null; attempted: boolean }>();
+  /** Every authorization passed to `recover`. */
+  authorizations: RecoveryAuthorization[] = [];
+  /** Visible files `scan` reports as unreadable (oversize) instead of returning their bytes. */
+  unreadable = new Set<string>();
+  /** Writes that went through capture/scan/pendingIntents: must stay zero (read-only contract). */
+  readOnlyViolations = 0;
   private issueSequence = 0;
+  private intentSequence = 0;
 
   constructor(initial: Snapshot = {}) {
     for (const [path, entry] of Object.entries(initial)) this.files.set(path, entry);
@@ -296,12 +314,71 @@ export class MemoryVault implements LocalVault {
     return Object.fromEntries([...this.files].map(([path, entry]) => [path, { ...entry }]));
   }
 
+  async scan(): Promise<{ files: Snapshot; unreadable: Array<{ path: string; size: number; mtime: number | null; reason: "oversize" }> }> {
+    const files = await this.capture();
+    const unreadable = [...this.unreadable].filter((path) => path in files).map((path) => ({ path, size: 9 * 1024 * 1024, mtime: 1, reason: "oversize" as const }));
+    for (const item of unreadable) delete files[item.path];
+    return { files, unreadable };
+  }
+
+  async pendingIntents(): Promise<PendingIntent[]> {
+    return [...this.intents.values()].map((intent) => ({
+      id: intent.id,
+      path: intent.path,
+      expected: intent.expected && { oid: intent.expected.oid, mode: intent.expected.mode },
+      next: intent.next && { oid: intent.next.oid, mode: intent.next.mode },
+      attempted: intent.attempted,
+    }));
+  }
+
+  /** Mirrors the native rules: replay completes toward `next`; cancel never installs it. */
+  private settle(intent: { id: string; path: string; expected: Entry | null; next: Entry | null; attempted: boolean }, replay: boolean): void {
+    const live = this.files.get(intent.path) ?? null;
+    this.intents.delete(intent.path);
+    const issue = (found: Entry | null) => this.issues.push({ id: `issue-${++this.issueSequence}`, path: intent.path, kind: "interrupted", expected: intent.expected, next: intent.next, found });
+    if (sameEntry(live, intent.next)) {
+      // Already landed: under cancel, the kept preimage surfaces as evidence.
+      if (!replay && intent.expected) this.issues.push({ id: `issue-${++this.issueSequence}`, path: intent.path, kind: "displaced", expected: intent.expected, next: intent.next, found: intent.expected });
+      return;
+    }
+    if (sameEntry(live, intent.expected)) {
+      if (!replay) return;
+      if (intent.next) this.files.set(intent.path, intent.next);
+      else this.files.delete(intent.path);
+      this.applied.push(intent.path);
+      return;
+    }
+    if (!intent.attempted) return; // Nothing could have been written; live bytes are the user's.
+    issue(live);
+  }
+
   async apply(path: string, expected: Entry | null, next: Entry | null): Promise<ApplyResult> {
     const count = ++this.applyCalls;
     if (this.applyFault?.at === count && this.applyFault.when === "before") throw new Crash(`apply ${path} failed`);
+    const pending = this.intents.get(path);
+    if (pending && (!sameEntry(pending.expected, expected) || !sameEntry(pending.next, next))) {
+      return { kind: "blocked", reason: `A different native transaction is pending for ${path}` };
+    }
+    if (this.issues.some((item) => item.kind === "oversize" && item.path === path && !this.acknowledged.includes(item.id))) {
+      return { kind: "blocked", reason: `Review oversized native recovery file for ${path}` };
+    }
     await this.beforeApply?.(path, this);
     const current = this.files.get(path) ?? null;
     if (!sameEntry(current, expected)) return { kind: "changed" };
+    const stop = this.pendingNext;
+    if (stop && stop.path === path) {
+      this.pendingNext = null;
+      this.intents.set(path, { id: `intent-${++this.intentSequence}`, path, expected, next, attempted: stop.mode === "crash" });
+      if (stop.mode === "refuse") return { kind: "blocked", reason: "Close the open view before replacing or deleting this file" };
+      if (stop.torn === undefined) {
+        // Landed fully, response lost.
+        if (next) this.files.set(path, next);
+        else this.files.delete(path);
+      } else if (stop.torn) this.files.set(path, stop.torn);
+      else this.files.delete(path);
+      throw new Crash(`apply ${path} died with a pending intent`);
+    }
+    this.intents.delete(path);
     if (this.blockBinary && current && !path.endsWith(".md")) return { kind: "blocked", reason: "binary replacement/deletion is unsupported" };
     const native = this.native;
     if (native && native.path === path) {
@@ -321,7 +398,12 @@ export class MemoryVault implements LocalVault {
     return { kind: "applied" };
   }
 
-  async recover(): Promise<NativeIssue[]> {
+  async recover(authorization: RecoveryAuthorization): Promise<NativeIssue[]> {
+    this.authorizations.push(structuredClone(authorization));
+    for (const intent of [...this.intents.values()]) {
+      if (authorization.replay.includes(intent.id)) this.settle(intent, true);
+      else if (authorization.cancel.includes(intent.id)) this.settle(intent, false);
+    }
     return this.issues.filter((issue) => !this.acknowledged.includes(issue.id));
   }
 

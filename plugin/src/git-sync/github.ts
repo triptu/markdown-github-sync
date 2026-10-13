@@ -414,8 +414,8 @@ export class GitHubRepository implements Repository {
         edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
       }
     }
-    const createdTree = record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits }));
-    const treeOid = oid(createdTree.sha);
+    // GitHub rejects an empty tree edit list; an unchanged candidate (a fence) reuses the parent tree.
+    const treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
     const candidateItems = await this.tree(treeOid);
     const excluded = (entries: TreeItem[]) => new Map(entries.filter(i => !visible(i.path)).map(i => [i.path, `${i.mode}:${i.type}:${i.sha}`]));
     if (!sameMap(excluded(items), excluded(candidateItems))) throw new GitHubError("Prepared tree changed excluded repository paths");
