@@ -2,6 +2,8 @@
 
 A self-hosted Obsidian community plugin for encrypted note and attachment sync across desktop and mobile, with a Cloudflare Worker, SQLite Durable Object and R2 backend. This is an independent implementation, not a client for Obsidian's paid service. Version 0.1.0 is tested in automated simulations and Cloudflare's local runtime; it has not yet been exercised inside desktop Obsidian or on a physical phone.
 
+[Interactive architecture walkthrough](docs/architecture.html) — download and open in a browser to explore the sync flow, conflicts and project status.
+
 ## What works
 
 - Initial union of files from each device; edits and attachments up to 8 MiB per file.
