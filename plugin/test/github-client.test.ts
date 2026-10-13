@@ -637,6 +637,47 @@ test("prepare retains every excluded parent terminal exactly and returns the can
   assert.equal(api.head, parent.oid);
 });
 
+const firstConfigCases: Snapshot[] = [
+  { ".obsidian/workspace.json": file("workspace"), ".obsidian/plugins/github-vault-sync/data.json": file("device secret"), "note.md": file("safe") },
+  { "note.md": file("safe") },
+];
+for (const initial of firstConfigCases) {
+  test(`first eligible config file can be added with ${Object.keys(initial).length === 1 ? "a new" : "an excluded-only"} config directory`, async () => {
+    const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+    const parent = await repo.head();
+    const candidate = await repo.prepare(parent, { ".obsidian/appearance.json": file("new config") }, "add configuration", L);
+    assert.equal(candidate.files[".obsidian/appearance.json"].oid, file("new config").oid);
+    const parentFiles = api.files.get(parent.treeOid)!;
+    const candidateFiles = api.files.get(candidate.treeOid)!;
+    for (const path of [".obsidian/workspace.json", ".obsidian/plugins/github-vault-sync/data.json"]) {
+      assert.deepEqual(candidateFiles.get(path), parentFiles.get(path), `${path} remains exact`);
+    }
+    assert.equal(api.head, parent.oid);
+  });
+}
+
+test("a forged candidate changing excluded terminal bytes is refused while adding first config file", async () => {
+  const path = ".obsidian/workspace.json";
+  const api = new FakeGitHub({ [path]: file("workspace"), "note.md": file("safe") });
+  const original = api.request.bind(api);
+  api.request = async request => {
+    const result = await original(request);
+    if (request.method !== "POST" || !request.url.endsWith("/git/trees")) return result;
+    const treeOid = (result.json as { sha: string }).sha;
+    const forgedFiles = new Map(api.files.get(treeOid));
+    forgedFiles.set(path, file("tampered workspace"));
+    const forgedTree = tree(forgedFiles);
+    api.trees.set(forgedTree.sha, forgedTree);
+    api.files.set(forgedTree.sha, forgedFiles);
+    return response({ sha: forgedTree.sha }, 201);
+  };
+  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  await assert.rejects(repo.prepare(parent, { ".obsidian/appearance.json": file("new config") }, "forged", L),
+    /Prepared tree changed excluded repository paths/);
+  assert.equal(api.requests.filter(request => request.method === "POST" && request.url.endsWith("/git/commits")).length, 0);
+  assert.equal(api.head, parent.oid);
+});
+
 test("a new local ignore rule rejects changes it excludes before uploading or deleting", async () => {
   for (const changed of [file("new private bytes"), null]) {
     const api = new FakeGitHub({ ".gitignore": file(""), "note.md": file("base"), ".obsidian/plugins/vikalp/data.json": file("old") });

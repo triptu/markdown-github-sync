@@ -366,7 +366,10 @@ export class GitHubRepository implements Repository {
         throw new GitHubError("Unsupported root .gitignore entry");
       return decode(await this.blob(hash, size(rootIgnore.size)));
     }, this.configDir, this.ruleVersion);
-    if (this.scopeCache.size >= 256) this.scopeCache.delete(this.scopeCache.keys().next().value!);
+    if (this.scopeCache.size >= 256) {
+      const oldest = this.scopeCache.keys().next();
+      if (!oldest.done) this.scopeCache.delete(oldest.value);
+    }
     this.scopeCache.set(treeOid, scope);
     return scope;
   }
@@ -476,10 +479,12 @@ export class GitHubRepository implements Repository {
     const treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
     const candidateItems = await this.tree(treeOid);
     const sharedDirs = new Set<string>();
-    for (const item of items) if (item.type !== "tree" && parentScope.includes(item.path)) {
-      for (let slash = item.path.indexOf("/"); slash >= 0; slash = item.path.indexOf("/", slash + 1))
-        sharedDirs.add(item.path.slice(0, slash));
-    }
+    const addAncestors = (path: string): void => {
+      for (let slash = path.indexOf("/"); slash >= 0; slash = path.indexOf("/", slash + 1))
+        sharedDirs.add(path.slice(0, slash));
+    };
+    for (const item of items) if (item.type !== "tree" && parentScope.includes(item.path)) addAncestors(item.path);
+    for (const path of checked.keys()) addAncestors(path);
     const excluded = (entries: TreeItem[]) => new Map(entries.filter(item =>
       !parentScope.includes(item.path) && (item.type !== "tree" || !sharedDirs.has(item.path)))
       .map(item => [item.path, `${item.mode}:${item.type}:${item.sha}`]));
