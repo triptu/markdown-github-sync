@@ -5,15 +5,18 @@ import { GitHubRepository } from "../../src/git-sync/github";
 import { hostLifetimeId } from "../../src/git-sync/ownership";
 
 declare const EXPECTED_PRODUCTION_SHA: string;
+declare const RESUME_FAILED_RUN_ID: string | null;
 const owner = "triptu";
 const repository = "vault-sync-test";
 const branch = "native-android-1791894436601";
 const secretId = "git-sync-native-lab";
 const configurationPath = ".obsidian/plugins/vault-sync-acceptance-settings/data.json";
+const labConfigPath = ".obsidian/lab-config.json";
 const namespace = `.git-sync-native-v2-${EXPECTED_PRODUCTION_SHA.slice(0, 12)}-configuration`;
 const statePath = `${namespace}-state.json`;
 const progressPath = `${namespace}-progress.json`;
 const resultPath = `${namespace}-result.json`;
+const resumeRejectedPath = `${namespace}-resume-rejected.json`;
 const oid = /^[0-9a-f]{40}$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -37,6 +40,7 @@ type State = {
   prepared: Prepared | null;
   uiHostLifetimeId: string | null;
   failure: string | null;
+  priorFailureEvidence?: string;
   checks: Check[];
 };
 
@@ -64,6 +68,9 @@ function parseState(value: unknown): State {
       !(state.uiHostLifetimeId === null || typeof state.uiHostLifetimeId === "string") ||
       !(state.failure === null || typeof state.failure === "string") || !Array.isArray(state.checks))
     throw new Error("Invalid configuration acceptance state");
+  if (state.priorFailureEvidence !== undefined &&
+      state.priorFailureEvidence !== `${namespace}-failed-fixture-published-${state.runId}.json`)
+    throw new Error("Invalid prior failure evidence path");
   for (const map of [state.hiddenBefore, state.remoteHiddenBefore, state.commits]) {
     for (const [path, hash] of Object.entries(map)) if (typeof path !== "string" || typeof hash !== "string" || !/^[0-9a-f]{40,64}$/.test(hash))
       throw new Error("Invalid configuration acceptance hash evidence");
@@ -139,7 +146,8 @@ export default class NativeConfigurationAcceptance extends Plugin {
     await this.app.vault.adapter.write(statePath, JSON.stringify(state));
     await this.app.vault.adapter.write(progressPath, JSON.stringify({ stage: state.stage, runId: state.runId,
       configurationPath, notePath: state.notePath, commits: state.commits, checks: state.checks,
-      productionSha256: EXPECTED_PRODUCTION_SHA, automaticRestorePending: state.stage !== "complete" && state.originalAutomatic }));
+      productionSha256: EXPECTED_PRODUCTION_SHA, priorFailureEvidence: state.priorFailureEvidence ?? null,
+      automaticRestorePending: state.stage !== "complete" && state.originalAutomatic }));
   }
 
   private async check(state: State, name: string, pass: boolean): Promise<void> {
@@ -161,6 +169,14 @@ export default class NativeConfigurationAcceptance extends Plugin {
         await this.app.vault.adapter.exists(path) && (!exact || await this.sha256(path) === before));
   }
 
+  private async assertOtherHiddenPreserved(state: State): Promise<void> {
+    for (const [path, before] of Object.entries(state.hiddenBefore)) {
+      if (path.startsWith(".obsidian/plugins/git-sync-native-configuration/")) continue;
+      await this.check(state, `other local hidden bytes preserved: ${path}`,
+        await this.app.vault.adapter.exists(path) && await this.sha256(path) === before);
+    }
+  }
+
   private async assertNoOtherHiddenPublished(state: State, remote: GitHubRepository): Promise<void> {
     const head = await remote.head();
     const after = Object.fromEntries(Object.entries(head.files)
@@ -170,10 +186,69 @@ export default class NativeConfigurationAcceptance extends Plugin {
       JSON.stringify(Object.entries(state.remoteHiddenBefore).sort()));
   }
 
+  private async resumeFailedFixture(): Promise<void> {
+    const files = this.app.vault.adapter;
+    if (await this.sha256(".obsidian/plugins/github-vault-sync/main.js") !== EXPECTED_PRODUCTION_SHA)
+      throw new Error("Installed production bundle hash changed");
+    if (!await files.exists(statePath)) throw new Error("Failed fixture state missing");
+    const rawState = await files.read(statePath);
+    const state = parseState(JSON.parse(rawState));
+    if (state.runId !== RESUME_FAILED_RUN_ID) throw new Error("Resume run ID differs from saved fixture");
+    const evidencePath = `${namespace}-failed-fixture-published-${state.runId}.json`;
+    if (state.priorFailureEvidence) {
+      if (state.priorFailureEvidence !== evidencePath || !await files.exists(evidencePath))
+        throw new Error("Archived fixture failure missing");
+      if (await files.exists(resultPath)) {
+        const result: unknown = JSON.parse(await files.read(resultPath));
+        if (state.stage !== "fixture-published" || typeof result !== "object" || result === null ||
+            Reflect.get(result, "completed") !== false || Reflect.get(result, "failedAt") !== "fixture-published")
+          throw new Error("Unexpected result after fixture resume");
+        const archive: unknown = JSON.parse(await files.read(evidencePath));
+        if (typeof archive !== "object" || archive === null ||
+            Reflect.get(archive, "result") !== await files.read(resultPath))
+          throw new Error("Archived failure result differs from saved result");
+        await files.remove(resultPath);
+      }
+      return;
+    }
+    if (state.stage !== "failed" || state.failure !== "remote configuration deferred for UI review" ||
+        !await files.exists(resultPath) || !await files.exists(progressPath))
+      throw new Error("Only the known fixture-published deferred-count failure can resume");
+    const failedCheck = state.checks.at(-1);
+    const rawResult = await files.read(resultPath);
+    const result: unknown = JSON.parse(rawResult);
+    if (failedCheck?.name !== state.failure || failedCheck.pass !== false ||
+        typeof result !== "object" || result === null || Reflect.get(result, "completed") !== false ||
+        Reflect.get(result, "failedAt") !== "fixture-published" || Reflect.get(result, "error") !== state.failure ||
+        Reflect.get(result, "productionSha256") !== EXPECTED_PRODUCTION_SHA ||
+        JSON.stringify(Reflect.get(result, "checks")) !== JSON.stringify(state.checks) ||
+        state.commits.fixture !== state.prepared?.candidate)
+      throw new Error("Saved failure does not match the known fixture-published check");
+    const archive = JSON.stringify({ state: rawState, progress: await files.read(progressPath), result: rawResult });
+    if (await files.exists(evidencePath)) {
+      if (await files.read(evidencePath) !== archive) throw new Error("Prior failure evidence differs");
+    } else await files.write(evidencePath, archive);
+    if (await files.read(evidencePath) !== archive) throw new Error("Prior failure evidence was not preserved");
+    state.checks.pop();
+    state.failure = null;
+    state.priorFailureEvidence = evidencePath;
+    state.checks.push({ name: "prior fixture-published failure archived for explicit resume", pass: true });
+    await this.stage(state, "fixture-published");
+    await files.remove(resultPath);
+  }
+
   private async execute(): Promise<void> {
     if (this.app.vault.getName() !== "Vault Sync Lab") return;
     const files = this.app.vault.adapter;
-    if (await files.exists(resultPath)) return;
+    if (await files.exists(resultPath) && RESUME_FAILED_RUN_ID === null) return;
+    if (RESUME_FAILED_RUN_ID !== null) {
+      try { await this.resumeFailedFixture(); }
+      catch (error) {
+        await files.write(resumeRejectedPath, JSON.stringify({ runId: RESUME_FAILED_RUN_ID,
+          error: error instanceof Error ? error.message : "Unknown resume rejection" }));
+        return;
+      }
+    }
     let state: State | null = null;
     try {
       if (await files.exists(statePath)) state = parseState(JSON.parse(await files.read(statePath)));
@@ -227,13 +302,15 @@ export default class NativeConfigurationAcceptance extends Plugin {
   private async writeFailure(state: State, failedAt: string, error: string): Promise<void> {
     await this.app.vault.adapter.write(resultPath, JSON.stringify({ completed: false, failedAt, error,
       checks: state.checks, commits: state.commits, configurationPath, notePath: state.notePath,
-      productionSha256: EXPECTED_PRODUCTION_SHA, automaticRestorePending: state.originalAutomatic }));
+      productionSha256: EXPECTED_PRODUCTION_SHA, priorFailureEvidence: state.priorFailureEvidence ?? null,
+      automaticRestorePending: state.originalAutomatic }));
   }
 
   private async writeSuccess(state: State): Promise<void> {
     await this.app.vault.adapter.write(resultPath, JSON.stringify({ completed: true, checks: state.checks, commits: state.commits,
       configurationPath, notePath: state.notePath, localNote: `${state.notePath.slice(0, -3)} Android.md`,
       fixtureSha256: await this.sha256(configurationPath), productionSha256: EXPECTED_PRODUCTION_SHA,
+      priorFailureEvidence: state.priorFailureEvidence ?? null,
       automaticRestored: true }));
   }
 
@@ -353,35 +430,53 @@ export default class NativeConfigurationAcceptance extends Plugin {
     if (state.stage === "fixture-published") {
       await plugin.syncOnce();
       const listing = await session().listConfiguration();
-      await this.check(state, "remote configuration deferred for UI review", listing.kind === "configuration" &&
-        listing.deferred.length === 1 && listing.deferred[0]?.path === configurationPath);
+      const labOid = state.remoteHiddenBefore[labConfigPath];
+      const paths = labOid ? [configurationPath, labConfigPath] : [configurationPath];
+      const head = await remote.head();
+      await this.check(state, "preexisting lab configuration still has its original remote hash",
+        !labOid || head.files[labConfigPath]?.oid === labOid);
+      await this.check(state, "only expected configuration paths deferred for UI review", listing.kind === "configuration" &&
+        JSON.stringify(listing.deferred.map(item => item.path).sort()) === JSON.stringify([...paths].sort()) &&
+        listing.deferred.every(item => item.blockedReason === null));
+      if (labOid) await this.check(state, "preexisting lab configuration awaits its original remote bytes",
+        listing.kind === "configuration" && listing.deferred.some(item => item.path === labConfigPath &&
+          item.expected === null && item.next?.oid === labOid) && !await files.exists(labConfigPath));
       const preview = await session().previewApplyConfiguration();
       const expected = await entryFromText(configText(state.runId, 2));
       const incoming = await entryFromText(configText(state.runId, 3));
-      await this.check(state, "production UI preview contains only exact synthetic update",
-        preview.kind === "preview" && preview.blocked.length === 0 && preview.items.length === 1 &&
-        preview.items[0]?.path === configurationPath && preview.items[0]?.expectedEntry?.oid === expected.oid &&
-        preview.items[0]?.incomingEntry?.oid === incoming.oid);
+      await this.check(state, "production UI preview contains only exact expected updates",
+        preview.kind === "preview" && preview.blocked.length === 0 &&
+        JSON.stringify(preview.items.map(item => item.path).sort()) === JSON.stringify([...paths].sort()) &&
+        preview.items.some(item => item.path === configurationPath && item.expected?.oid === expected.oid &&
+          item.next?.oid === incoming.oid && item.expectedEntry?.oid === expected.oid &&
+          item.expectedEntry.data === expected.data && item.incomingEntry?.oid === incoming.oid &&
+          item.incomingEntry.data === incoming.data) &&
+        (!labOid || preview.items.some(item => item.path === labConfigPath && item.expected === null &&
+          item.expectedEntry === null && item.next?.oid === labOid &&
+          item.incomingEntry?.oid === labOid && item.incomingEntry.data === head.files[labConfigPath]?.data)));
       await this.check(state, "deferred configuration kept local bytes", await this.exactLocal(configurationPath, configText(state.runId, 2)));
       await this.check(state, "unrelated remote note downloaded", await this.exactLocal(state.notePath, noteText(state.runId, "remote")));
       await this.assertNoOtherHiddenPublished(state, remote);
       state.uiHostLifetimeId = hostLifetimeId(this.app);
       await this.stage(state, "awaiting-ui-apply");
-      return;
     }
     if (state.stage === "awaiting-ui-apply") {
       // Read-only wait. The root agent must open the production Configuration command and tap Apply.
+      const paths = state.remoteHiddenBefore[labConfigPath] ? [configurationPath, labConfigPath] : [configurationPath];
       for (let attempt = 0; attempt < 120; attempt++) {
         const listing = await session().listConfiguration();
-        if (listing.kind === "configuration" && listing.deferred.some(item => item.path === configurationPath) &&
+        const pending = listing.kind === "configuration" ? listing.deferred.filter(item => paths.includes(item.path)) : [];
+        if (listing.kind === "configuration" && pending.length === paths.length &&
             state.uiHostLifetimeId !== hostLifetimeId(this.app)) {
           state.uiHostLifetimeId = hostLifetimeId(this.app);
           await this.save(state);
         }
-        if (listing.kind === "configuration" && !listing.deferred.some(item => item.path === configurationPath) &&
-            await this.exactLocal(configurationPath, configText(state.runId, 3))) {
+        if (listing.kind === "configuration" && listing.deferred.length === 0 &&
+            await this.exactLocal(configurationPath, configText(state.runId, 3)) &&
+            (!state.remoteHiddenBefore[labConfigPath] || await files.exists(labConfigPath) &&
+              await hashBlob(new Uint8Array(await files.readBinary(labConfigPath))) === state.remoteHiddenBefore[labConfigPath])) {
           await this.check(state, "configuration applied during current host lifetime", state.uiHostLifetimeId === hostLifetimeId(this.app));
-          await this.check(state, "production UI applied exact incoming bytes", true);
+          await this.check(state, "production UI applied both exact incoming versions", true);
           await this.stage(state, "applied");
           break;
         }
@@ -394,10 +489,17 @@ export default class NativeConfigurationAcceptance extends Plugin {
       throw new Error("Same-host guard acceptance was interrupted by a full app restart after UI application");
     if (state.stage === "applied") {
       const listing = await session().listConfiguration();
-      await this.check(state, "incoming configuration no longer deferred", listing.kind === "configuration" &&
-        !listing.deferred.some(item => item.path === configurationPath));
+      await this.check(state, "incoming configuration no longer deferred", listing.kind === "configuration" && listing.deferred.length === 0);
+      const afterPreview = await session().previewApplyConfiguration();
+      await this.check(state, "production UI preview cleared after both updates",
+        afterPreview.kind === "preview" && afterPreview.items.length === 0 && afterPreview.blocked.length === 0);
       await this.check(state, "UI applied exact incoming hash", await this.exactLocal(configurationPath, configText(state.runId, 3)) &&
         await hashBlob(new TextEncoder().encode(await files.read(configurationPath))) === (await remote.head()).files[configurationPath]?.oid);
+      if (state.remoteHiddenBefore[labConfigPath]) await this.check(state, "UI applied exact preexisting lab configuration bytes",
+        await files.exists(labConfigPath) &&
+        await hashBlob(new Uint8Array(await files.readBinary(labConfigPath))) === state.remoteHiddenBefore[labConfigPath]);
+      await this.assertOtherHiddenPreserved(state);
+      await this.assertNoOtherHiddenPublished(state, remote);
       await this.stage(state, "host-flush-started");
     }
     if (state.stage === "host-flush-started") {
