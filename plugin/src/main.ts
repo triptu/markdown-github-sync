@@ -780,10 +780,11 @@ class ConfigurationModal extends Modal {
             }));
         }
       }
-      el.createEl("h3", { text: `New local files · ${listing.unpublished.length}` });
-      el.createEl("p", { text: "These files remain on this device until you approve their contents. Check for secrets before publishing.", cls: "git-sync-muted" });
+      const unpublished = el.createEl("details");
+      unpublished.createEl("summary", { text: `New local configuration files · ${listing.unpublished.length}` });
+      unpublished.createEl("p", { text: "These files remain on this device until you approve their contents. Check for secrets before publishing.", cls: "git-sync-muted" });
       for (const item of listing.unpublished) {
-        new Setting(el).setName(item.path).addButton(button => button.setButtonText("Preview publication").onClick(async () => {
+        new Setting(unpublished).setName(item.path).addButton(button => button.setButtonText("Preview publication").onClick(async () => {
           button.setDisabled(true);
           try {
             const preview = await session.previewHiddenPublication(item.path);
