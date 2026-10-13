@@ -1,0 +1,357 @@
+import type { Changes, CommitSnapshot, Entry, PublishResult, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+
+export interface GitHubRequest {
+  url: string;
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  /** JSON serialized request body. */
+  body?: string;
+}
+export interface GitHubResponse { status: number; headers: Record<string, string>; json: unknown }
+export interface GitHubTransport { request(request: GitHubRequest): Promise<GitHubResponse> }
+export interface GitHubRepositoryOptions {
+  owner: string;
+  name: string;
+  branch: string;
+  transport: GitHubTransport;
+  token: () => Promise<string>;
+  /** Injectable clock for rate-limit scheduling. */
+  now?: () => number;
+}
+export class GitHubError extends Error {
+  constructor(message: string, readonly status?: number, readonly retryAt?: number) { super(message); this.name = "GitHubError"; }
+}
+const FILE_LIMIT = 8 * 1024 * 1024;
+const SNAPSHOT_LIMIT = 128 * 1024 * 1024;
+const ENCODED_LIMIT = 4 * Math.ceil(FILE_LIMIT / 3);
+const encoder = new TextEncoder();
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new GitHubError("Malformed GitHub object");
+  return Object.fromEntries(Object.entries(value));
+}
+function string(value: unknown): string {
+  if (typeof value !== "string") throw new GitHubError("Malformed GitHub string");
+  return value;
+}
+function oid(value: unknown): string {
+  const result = string(value);
+  if (!/^[0-9a-f]{40}$/.test(result)) throw new GitHubError("Invalid Git object identity");
+  return result;
+}
+function list(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw new GitHubError("Malformed GitHub list");
+  return value;
+}
+function size(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new GitHubError("Invalid blob size");
+  return value;
+}
+function pathParts(path: string): string[] {
+  const parts = path.split("/");
+  if (path.length > 4096 || parts.some(p => !p || p === "." || p === ".." || /[\\\u0000-\u001f\u007f:<>"|?*]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p) || /[\ud800-\udfff]/u.test(p))) {
+    throw new GitHubError("Unsafe repository path");
+  }
+  for (const part of parts) {
+    const normalized = part.normalize("NFKC");
+    if (/[\\/:<>"|?*]/.test(normalized) || normalized === "." || normalized === ".." || /[. ]$/.test(normalized) || (normalized.startsWith(".") && !part.startsWith("."))) throw new GitHubError("Unsafe normalized repository path");
+  }
+  return parts;
+}
+function visible(path: string): boolean { return !pathParts(path).some(p => p.startsWith(".")); }
+function canonical(path: string): string { return path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC"); }
+function validatePaths(paths: Iterable<string>): void {
+  const spellings = new Map<string, string>();
+  for (const path of paths) {
+    const parts = pathParts(path);
+    for (let i = 1; i <= parts.length; i++) {
+      const prefix = parts.slice(0, i).join("/");
+      const key = canonical(prefix);
+      const existing = spellings.get(key);
+      if (existing !== undefined && existing !== prefix) throw new GitHubError("Case or Unicode path collision");
+      spellings.set(key, prefix);
+    }
+  }
+}
+export function encodeGitData(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(binary);
+}
+function decode(data: string, wrapped = false): Uint8Array {
+  if (data.length > ENCODED_LIMIT + Math.ceil(ENCODED_LIMIT / 60) * 2) throw new GitHubError("Invalid or oversized base64 blob");
+  const clean = wrapped ? data.replace(/[\r\n]/g, "") : data;
+  if (clean.length > ENCODED_LIMIT || (clean.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(clean))) throw new GitHubError("Invalid or oversized base64 blob");
+  const binary = atob(clean);
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  if (bytes.length > FILE_LIMIT || encodeGitData(bytes) !== clean) throw new GitHubError("Invalid or oversized base64 blob");
+  return bytes;
+}
+async function objectOid(type: "blob" | "tree", bytes: Uint8Array): Promise<string> {
+  const header = encoder.encode(`${type} ${bytes.length}\0`);
+  const framed = new Uint8Array(header.length + bytes.length);
+  framed.set(header); framed.set(bytes, header.length);
+  return Array.from(new Uint8Array(await globalThis.crypto.subtle.digest("SHA-1", framed)), n => n.toString(16).padStart(2, "0")).join("");
+}
+export function gitBlobOid(bytes: Uint8Array): Promise<string> { return objectOid("blob", bytes); }
+function checkLfs(bytes: Uint8Array): void {
+  if (new TextDecoder().decode(bytes.subarray(0, 256)).startsWith("version https://git-lfs.github.com/spec/v1")) throw new GitHubError("Git LFS pointers are unsupported in content scope");
+}
+async function entry(value: unknown): Promise<{ entry: Entry; bytes: Uint8Array }> {
+  const item = record(value);
+  const hash = oid(item.oid);
+  if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
+  const data = string(item.data);
+  const bytes = decode(data);
+  checkLfs(bytes);
+  if (await gitBlobOid(bytes) !== hash) throw new GitHubError("Blob hash mismatch");
+  return { entry: { oid: hash, mode: item.mode, data }, bytes };
+}
+interface TreeItem { path: string; mode: string; type: "tree" | "blob" | "commit"; sha: string; size?: number }
+interface Commit { oid: string; treeOid: string; parents: string[] }
+function commit(value: unknown): Commit {
+  const item = record(value);
+  return { oid: oid(item.sha), treeOid: oid(record(item.tree).sha), parents: list(item.parents).map(p => oid(record(p).sha)) };
+}
+function sameFiles(a: Snapshot, b: Snapshot): boolean {
+  const paths = Object.keys(a);
+  return paths.length === Object.keys(b).length && paths.every(path => {
+    const left = a[path], right = b[path];
+    return right !== undefined && left.oid === right.oid && left.mode === right.mode && left.data === right.data;
+  });
+}
+function terminals(items: TreeItem[]): Map<string, string> {
+  return new Map(items.filter(i => i.type !== "tree").map(i => [i.path, `${i.mode}:${i.type}:${i.sha}`]));
+}
+function sameMap(a: Map<string, string>, b: Map<string, string>): boolean {
+  return a.size === b.size && Array.from(a).every(([key, value]) => b.get(key) === value);
+}
+async function verifyTree(items: TreeItem[], root: string): Promise<void> {
+  const children = new Map<string, TreeItem[]>([["", []]]);
+  const directoryOids = new Map(items.filter(i => i.type === "tree").map(i => [i.path, i.sha]));
+  for (const item of items) if (item.type === "tree") children.set(item.path, []);
+  for (const item of items) {
+    const directory = item.path.slice(0, Math.max(0, item.path.lastIndexOf("/")));
+    const siblings = children.get(directory);
+    if (!siblings) throw new GitHubError("Missing parent directory in Git tree");
+    siblings.push(item);
+  }
+  for (const [directory, entries] of children) {
+    const rows = entries.map(item => {
+      const name = item.path.slice(directory ? directory.length + 1 : 0);
+      const sort = encoder.encode(name + (item.type === "tree" ? "/" : ""));
+      const prefix = encoder.encode(`${item.mode === "040000" ? "40000" : item.mode} ${name}\0`);
+      const bytes = new Uint8Array(prefix.length + 20); bytes.set(prefix);
+      bytes.set(Uint8Array.from(item.sha.match(/../g) ?? [], hex => parseInt(hex, 16)), prefix.length);
+      return { sort, bytes };
+    });
+    rows.sort((a, b) => {
+      for (let i = 0; i < Math.min(a.sort.length, b.sort.length); i++) if (a.sort[i] !== b.sort[i]) return a.sort[i] - b.sort[i];
+      return a.sort.length - b.sort.length;
+    });
+    const body = new Uint8Array(rows.reduce((sum, row) => sum + row.bytes.length, 0));
+    let offset = 0;
+    for (const row of rows) { body.set(row.bytes, offset); offset += row.bytes.length; }
+    const expected = directory ? directoryOids.get(directory) : root;
+    if (await objectOid("tree", body) !== expected) throw new GitHubError("Tree hash mismatch");
+  }
+}
+
+/** GitHub.com repository adapter. See docs/github-client.md for transport and failure semantics. */
+export class GitHubRepository implements Repository {
+  private readonly base: string;
+  private readonly now: () => number;
+  constructor(private readonly options: GitHubRepositoryOptions) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
+    if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
+    this.base = `https://api.github.com/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.name)}`;
+    this.now = options.now ?? Date.now;
+  }
+  private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<GitHubResponse> {
+    let token: string;
+    try { token = await this.options.token(); } catch { throw new GitHubError("GitHub credential unavailable"); }
+    if (!token || /[\r\n]/.test(token)) throw new GitHubError("GitHub credential unavailable");
+    let response: GitHubResponse;
+    try {
+      response = await this.options.transport.request({ url, method, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    } catch { throw new GitHubError("GitHub transport failed; request outcome may be unknown"); }
+    if (!Number.isInteger(response.status)) throw new GitHubError("Malformed GitHub HTTP status");
+    const headers = new Map(Object.entries(record(response.headers)).map(([key, value]) => [key.toLowerCase(), string(value)]));
+    const retry = headers.get("retry-after");
+    const reset = headers.get("x-ratelimit-reset");
+    const graphqlRateLimited = typeof response.json === "object" && response.json !== null && "errors" in response.json && Array.isArray(response.json.errors) && response.json.errors.some(error => typeof error === "object" && error !== null && "type" in error && error.type === "RATE_LIMITED");
+    if (response.status === 429 || ((response.status === 403 || graphqlRateLimited) && (retry !== undefined || headers.get("x-ratelimit-remaining") === "0" || graphqlRateLimited))) {
+      const dates = [this.now() + 60_000];
+      if (retry !== undefined) {
+        const seconds = /^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) : NaN;
+        const time = Number.isFinite(seconds) ? this.now() + seconds * 1000 : Date.parse(retry);
+        if (Number.isFinite(time)) dates.push(time);
+      }
+      if (reset !== undefined && /^\d+$/.test(reset) && Number.isFinite(Number(reset) * 1000)) dates.push(Number(reset) * 1000);
+      throw new GitHubError("GitHub rate limit; schedule a later attempt", response.status, Math.max(...dates));
+    }
+    if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) throw new GitHubError(`GitHub API request rejected (HTTP ${response.status})`, response.status);
+    return response;
+  }
+  private async rest(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<unknown> {
+    return (await this.request(this.base + path, method, body)).json;
+  }
+  async identity(): Promise<RepositoryIdentity> {
+    const repo = record(await this.rest(""));
+    const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
+    if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
+    return { id, owner, name, branch: this.options.branch };
+  }
+  private async headOid(): Promise<string> {
+    let ref: Record<string, unknown>;
+    try { ref = record(await this.rest(`/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}`)); }
+    catch (error) {
+      if (error instanceof GitHubError && (error.status === 404 || error.status === 409)) throw new GitHubError("Unsupported enrollment: branch missing or repository empty/unborn", error.status);
+      throw error;
+    }
+    const object = record(ref.object);
+    if (ref.ref !== `refs/heads/${this.options.branch}` || object.type !== "commit") throw new GitHubError("Unexpected branch reference");
+    return oid(object.sha);
+  }
+  async head(): Promise<CommitSnapshot> { return this.readCommit(await this.headOid()); }
+  private async getCommit(hash: string): Promise<Commit> {
+    const value = commit(await this.rest(`/git/commits/${oid(hash)}`));
+    if (value.oid !== hash) throw new GitHubError("Commit identity mismatch");
+    return value;
+  }
+  private async tree(hash: string): Promise<TreeItem[]> {
+    const value = record(await this.rest(`/git/trees/${oid(hash)}?recursive=1`));
+    if (value.truncated === true) throw new GitHubError("Unsupported repository: recursive Git tree truncated; enrollment blocked");
+    if (value.truncated !== false || oid(value.sha) !== hash) throw new GitHubError("Malformed or mismatched Git tree");
+    const raw = list(value.tree);
+    if (raw.length > 100_000) throw new GitHubError("Git tree entry limit exceeded");
+    const seen = new Set<string>();
+    const items: TreeItem[] = raw.map(value => {
+      const item = record(value), path = string(item.path), mode = string(item.mode), sha = oid(item.sha);
+      pathParts(path);
+      if (seen.has(path)) throw new GitHubError("Duplicate Git tree path");
+      seen.add(path);
+      if (item.type !== "blob" && item.type !== "tree" && item.type !== "commit") throw new GitHubError("Invalid tree object type");
+      if (!(item.type === "tree" && mode === "040000" || item.type === "blob" && ["100644", "100755", "120000"].includes(mode) || item.type === "commit" && mode === "160000")) throw new GitHubError("Invalid tree object mode");
+      if (visible(path) && item.type !== "tree" && (item.type !== "blob" || (mode !== "100644" && mode !== "100755"))) throw new GitHubError("Symlink or submodule unsupported in content scope");
+      return { path, mode, sha, type: item.type, ...(item.type === "blob" ? { size: size(item.size) } : {}) };
+    });
+    validatePaths(items.filter(i => visible(i.path)).map(i => i.path));
+    await verifyTree(items, hash);
+    return items;
+  }
+  private async snapshot(value: Commit, items: TreeItem[]): Promise<CommitSnapshot> {
+    const included = items.filter(i => i.type === "blob" && visible(i.path));
+    let total = 0;
+    for (const item of included) {
+      const length = size(item.size);
+      total += length;
+      if (length > FILE_LIMIT || total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded");
+    }
+    const files: Snapshot = Object.create(null);
+    for (const item of included) {
+      const blob = record(await this.rest(`/git/blobs/${item.sha}`));
+      if (oid(blob.sha) !== item.sha || blob.encoding !== "base64" || size(blob.size) !== item.size) throw new GitHubError("Blob identity or size mismatch");
+      const bytes = decode(string(blob.content), true);
+      if (bytes.length !== item.size) throw new GitHubError("Blob decoded size mismatch");
+      const verified = await entry({ oid: item.sha, mode: item.mode, data: encodeGitData(bytes) });
+      files[item.path] = verified.entry;
+    }
+    return { oid: value.oid, treeOid: value.treeOid, files };
+  }
+  async readCommit(hash: string): Promise<CommitSnapshot> {
+    const value = await this.getCommit(hash);
+    return this.snapshot(value, await this.tree(value.treeOid));
+  }
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    oid(ancestor); oid(descendant);
+    if (ancestor === descendant) { await this.getCommit(ancestor); return true; }
+    const value = record(await this.rest(`/compare/${ancestor}...${descendant}?per_page=1`));
+    if (oid(record(value.base_commit).sha) !== ancestor || (value.status !== "ahead" && value.status !== "behind" && value.status !== "diverged" && value.status !== "identical")) throw new GitHubError("Uncertain GitHub ancestry result");
+    const mergeBase = oid(record(value.merge_base_commit).sha);
+    if (value.status === "ahead" || value.status === "identical") {
+      if (mergeBase !== ancestor || (value.status === "identical" && ancestor !== descendant)) throw new GitHubError("Inconsistent GitHub ancestry result");
+      return true;
+    }
+    if (mergeBase === ancestor) throw new GitHubError("Inconsistent GitHub ancestry result");
+    return false;
+  }
+  async prepare(parent: CommitSnapshot, changes: Changes, message: string): Promise<CommitSnapshot> {
+    const value = await this.getCommit(parent.oid);
+    if (value.treeOid !== parent.treeOid) throw new GitHubError("Parent tree identity mismatch");
+    const items = await this.tree(value.treeOid);
+    const actual = await this.snapshot(value, items);
+    if (!sameFiles(actual.files, parent.files)) throw new GitHubError("Parent snapshot mismatch");
+    const checked = new Map<string, Entry | null>();
+    const files: Snapshot = Object.assign(Object.create(null), actual.files);
+    for (const [path, next] of Object.entries(changes)) {
+      if (!visible(path)) throw new GitHubError("Change outside visible content scope");
+      if (next === null) { delete files[path]; checked.set(path, null); }
+      else { const verified = await entry(next); files[path] = verified.entry; checked.set(path, verified.entry); }
+    }
+    validatePaths(Object.keys(files));
+    const expected = terminals(items);
+    for (const [path, next] of checked) {
+      if (next === null) expected.delete(path);
+      else expected.set(path, `${next.mode}:blob:${next.oid}`);
+    }
+    const finalPaths = Array.from(expected.keys());
+    for (const path of finalPaths) for (let slash = path.indexOf("/"); slash >= 0; slash = path.indexOf("/", slash + 1)) {
+      if (expected.has(path.slice(0, slash))) throw new GitHubError("File/directory path collision");
+    }
+    let total = 0;
+    for (const file of Object.values(files)) { total += decode(file.data).length; if (total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded"); }
+    if (typeof message !== "string" || !message.trim()) throw new GitHubError("Commit message is required");
+    const edits: { path: string; mode: string; type: "blob"; sha: string | null }[] = [];
+    for (const [path, next] of checked) {
+      if (next === null) {
+        if (actual.files[path]) edits.push({ path, mode: actual.files[path].mode, type: "blob", sha: null });
+      } else {
+        const blob = record(await this.rest("/git/blobs", "POST", { content: next.data, encoding: "base64" }));
+        if (oid(blob.sha) !== next.oid) throw new GitHubError("Uploaded blob hash mismatch");
+        edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
+      }
+    }
+    const createdTree = record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits }));
+    const treeOid = oid(createdTree.sha);
+    const candidateItems = await this.tree(treeOid);
+    const excluded = (entries: TreeItem[]) => new Map(entries.filter(i => !visible(i.path)).map(i => [i.path, `${i.mode}:${i.type}:${i.sha}`]));
+    if (!sameMap(excluded(items), excluded(candidateItems))) throw new GitHubError("Prepared tree changed excluded repository paths");
+    if (!sameMap(expected, terminals(candidateItems))) throw new GitHubError("Prepared tree does not preserve requested and excluded paths");
+    const created = commit(await this.rest("/git/commits", "POST", { message, tree: treeOid, parents: [value.oid] }));
+    if (created.treeOid !== treeOid || created.parents.length !== 1 || created.parents[0] !== value.oid) throw new GitHubError("Created commit parent or tree mismatch");
+    const reread = await this.getCommit(created.oid);
+    if (reread.treeOid !== treeOid || reread.parents.length !== 1 || reread.parents[0] !== value.oid) throw new GitHubError("Prepared commit identity mismatch");
+    return { oid: created.oid, treeOid, files };
+  }
+  async publish(expectedHead: string, candidate: string): Promise<PublishResult> {
+    oid(expectedHead); oid(candidate);
+    const prepared = await this.getCommit(candidate);
+    if (prepared.parents.length !== 1 || prepared.parents[0] !== expectedHead || candidate === expectedHead) throw new GitHubError("Candidate must have exactly the expected head as parent");
+    const identity = await this.identity();
+    let rejected = false;
+    try {
+      const response = record((await this.request("https://api.github.com/graphql", "POST", {
+        query: "mutation Publish($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
+        variables: { input: { repositoryId: identity.id, clientMutationId: candidate, refUpdates: [{ name: `refs/heads/${this.options.branch}`, beforeOid: expectedHead, afterOid: candidate, force: false }] } }
+      })).json);
+      if (response.errors !== undefined && list(response.errors).length > 0) rejected = true;
+      else {
+        const mutation = record(record(response.data).updateRefs);
+        if (mutation.clientMutationId !== candidate) throw new GitHubError("Malformed publication acknowledgment");
+        return { kind: "accepted" };
+      }
+    } catch (error) {
+      if (error instanceof GitHubError && error.retryAt !== undefined) throw error;
+      rejected = error instanceof GitHubError && error.status !== undefined && error.status >= 400 && error.status < 500;
+    }
+    try {
+      const current = await this.headOid();
+      if (current === candidate || await this.isAncestor(candidate, current)) return { kind: "accepted" };
+      if (current !== expectedHead) return { kind: "head-moved" };
+      return rejected ? { kind: "rejected", message: "GitHub rejected exact ref publication" } : { kind: "unknown" };
+    } catch (error) {
+      if (error instanceof GitHubError && error.retryAt !== undefined) throw error;
+      return { kind: "unknown" };
+    }
+  }
+}
