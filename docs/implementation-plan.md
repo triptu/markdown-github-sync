@@ -56,3 +56,13 @@ The integrated source at `697bdb5` passed 437 tests, TypeScript and build. At `e
 Quint scope review R3 is closed, including evidence freshness and independent identity-fence negative controls. The writing-host review R4 closed configuration-apply R3-C1 but found the same stale-writer risk in history restore (R4-C1). The fix includes consideration of previously unguarded configuration restores, rather than treating that behavior as outside scope.
 
 Android configuration acceptance is running on production SHA `2a1f0ecb9679e8bf4e7cd5c635f69d1f773e29af3a4e9cb6c7e9abf0c82bb93f`. Its pre-state failure is retained, and a separate resumed record allows only pending unpublished configuration additions. Root reviewed revision 1 → 2 through the production UI. Finish the full restart checks, restore-fix review, real FileView race, final packaged desktop/Android acceptance, and release. No personal-vault changes or full-replacement approval.
+
+## Acceptance checkpoint after editor R3
+
+The assembled source passed 454 plugin tests and four retained server tests, typechecks, and build; production bundle SHA is `99a17cfe451358c7ffea159638e4e428d9e9eb4ef74af4f97f0b8bb28ac3ec16`. Journal deduplication review R2 found no blocking issue. Restore review R5 closed the writing-host and unguarded-restore findings, but found a pre-publication stale flush can silently cancel the intended restore; that finding is being fixed before final acceptance.
+
+Android's configuration restart run preserved the stale local configuration across restart, then stopped on a zero-byte temporary journal write. Its original failed result is retained. A normal production Sync now retry published the unrelated note and retained the settings hold. The empty write's cause remains unexplained; readback correctly prevented committing it. Object-read deduplication does not claim to fix that failure.
+
+Three editor probes exposed harness assumptions rather than proving the intended race. R1 could not open an extensionless hold as Markdown; R2 explicitly opened it but Obsidian closed the view; R3 observed that closure before the synthetic draft could save, before the second rename. Their failed results and host census remain in `docs/verification`. They are not native safety passes. A read-only assessment will identify the representative visible-editor test and retain the unsaved-buffer limitation.
+
+Final acceptance is being prepared for the installed production plugin on the isolated desktop profile and Android lab. No real-vault changes, competing-plugin removal, or finished replacement claim.
