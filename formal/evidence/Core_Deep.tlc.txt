@@ -1,0 +1,28 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Running breadth-first search Model-Checking with fp 0 and seed 1 with 8 workers on 14 cores with 3641MB heap and 64MB offheap memory [pid: 59255] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/tmp/vault-sync-formal/formal/VaultSync.tla
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/Integers.tla
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/FiniteSets.tla
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/TLC.tla
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/Naturals.tla
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/Sequences.tla
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module VaultSync
+Starting... (2026-10-13 18:12:39)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 18:12:39.
+Progress(15) at 2026-10-13 18:12:42: 1,258,321 states generated (1,258,321 s/min), 585,327 distinct states found (585,327 ds/min), 217,006 states left on queue.
+Progress(26) at 2026-10-13 18:13:42: 24,935,842 states generated (23,677,521 s/min), 10,360,365 distinct states found (9,775,038 ds/min), 1,043,389 states left on queue.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 2.2E-5
+  based on the actual fingerprints:  val = 1.1E-4
+41455831 states generated, 16677072 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 50.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 13 and the 95th percentile is 2).
+Finished in 02min 00s at (2026-10-13 18:14:39)

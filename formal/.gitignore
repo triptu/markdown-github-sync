@@ -1,0 +1,5 @@
+# downloaded TLA+ tools (pinned by sha256 in scripts/check-model.sh)
+.tools/
+# TLC scratch state
+.tlc/
+states/
