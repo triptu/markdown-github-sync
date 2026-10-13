@@ -1,5 +1,5 @@
 import { inspectGitTakeover, takeOverGit } from "./git-takeover";
-import { detectGitRepository, type DetectedRepository } from "./git-setup";
+import { detectGitRepository, tokenCreationUrl, type DetectedRepository } from "./git-setup";
 import { readLocalCandidate } from "./git-sync/local-candidate";
 import {
   App,
@@ -37,7 +37,6 @@ import { formatCommitMessage } from "./commit-message";
 
 const installationKey = "github-vault-sync-installation-v2";
 const activityKey = "github-vault-sync-activity";
-const tokenUrl = "https://github.com/settings/personal-access-tokens/new";
 function failure(error: unknown): string {
   return error instanceof Error
     ? error.message
@@ -772,14 +771,15 @@ function renderCommitSettings(el: HTMLElement, draft: CommitDraft, changed: () =
   el.appendChild(preview.settingEl);
   update();
 }
-function tokenDescription(): DocumentFragment {
+function tokenDescription(url: () => string): DocumentFragment {
   return createFragment(fragment => {
-    fragment.appendText("A fine-grained token for this repository with Contents set to read and write. Create one at ");
-    fragment.createEl("span", { text: tokenUrl, cls: "git-sync-code git-sync-selectable" });
+    const link = fragment.createEl("a", { text: "Create token", href: url() });
+    link.addEventListener("click", () => { link.href = url(); });
+    fragment.appendText(" — permissions are filled in. Select only this repository on GitHub.");
   });
 }
 /** Masked token field. Blank keeps the saved token; the saved value is never read back into the page. */
-function tokenInput(setting: Setting, saved: boolean, handlers: { edited(): void; committed(value: string): void }) {
+function tokenInput(setting: Setting, saved: boolean, handlers: { edited(): void; committed(value: string): void }, url: () => string) {
   let input: HTMLInputElement | null = null;
   setting.addText(text => {
     input = text.inputEl;
@@ -790,10 +790,10 @@ function tokenInput(setting: Setting, saved: boolean, handlers: { edited(): void
   });
   setting.addButton(button => button.setButtonText("Copy link").onClick(async () => {
     try {
-      await navigator.clipboard.writeText(tokenUrl);
+      await navigator.clipboard.writeText(url());
       new Notice("Link copied. Open it in your browser.");
     } catch {
-      new Notice("Couldn't copy. Select the link above and copy it.");
+      new Notice("Couldn't copy. Long-press Create token to copy the link.");
     }
   }));
   const field = input as HTMLInputElement | null;
@@ -948,12 +948,13 @@ class GitSettings extends PluginSettingTab {
     new Setting(el).setName("Branch")
       .addText(text => text.setValue(draft.branch).setPlaceholder("main")
         .onChange(value => { draft.branch = value.trim(); edited(); }));
-    const tokenSetting = new Setting(el).setName("Access token").setDesc(tokenDescription());
+    const creationUrl = () => tokenCreationUrl(parseRepository(repository)?.owner ?? "");
+    const tokenSetting = new Setting(el).setName("Access token").setDesc(tokenDescription(creationUrl));
     const access = accessLine(tokenSetting);
     const token = tokenInput(tokenSetting, this.plugin.hasToken(), {
       edited: () => { recheck.cancel(); access.clear(); },
       committed: () => { recheck.cancel(); void check(); },
-    });
+    }, creationUrl);
     void check();
     new Setting(el).setName("Sync themes, hotkeys and plugins")
       .setDesc(this.plugin.session === null
@@ -1065,7 +1066,8 @@ class GitSettings extends PluginSettingTab {
     new Setting(advanced).setName("Repository")
       .setDesc(`${repository.owner}/${repository.name} · ${repository.branch}. To sync a different repository, use another vault.`);
     // A replacement is saved only after it can read this repository; until then the working token stays.
-    const tokenSetting = new Setting(advanced).setName("Access token").setDesc(tokenDescription());
+    const creationUrl = () => tokenCreationUrl(repository.owner);
+    const tokenSetting = new Setting(advanced).setName("Access token").setDesc(tokenDescription(creationUrl));
     const access = accessLine(tokenSetting);
     const token = tokenInput(tokenSetting, plugin.hasToken(), {
       edited: () => access.clear(),
@@ -1075,7 +1077,7 @@ class GitSettings extends PluginSettingTab {
           token.saved();
         }, "Repository access verified · token saved");
       },
-    });
+    }, creationUrl);
     new Setting(advanced).setName("File history")
       .setDesc("Restore an earlier version of one note.")
       .addButton(button => button.setButtonText("Open").onClick(() => new RestoreModal(this.app, plugin).open()));

@@ -1,6 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectGitRepository } from "../src/git-setup";
+import { detectGitRepository, tokenCreationUrl } from "../src/git-setup";
+
+test("token link prefills repository permissions and owner without adding broader permissions", () => {
+  const url = new URL(tokenCreationUrl("triptu"));
+  assert.equal(url.origin + url.pathname, "https://github.com/settings/personal-access-tokens/new");
+  assert.equal(url.searchParams.get("target_name"), "triptu");
+  assert.equal(url.searchParams.get("contents"), "write");
+  assert.equal(url.searchParams.get("metadata"), "read");
+  assert.equal(url.searchParams.get("name"), "Obsidian GitHub Vault Sync");
+  assert.deepEqual([...url.searchParams.keys()].sort(), ["contents", "description", "metadata", "name", "target_name"]);
+  assert.equal(new URL(tokenCreationUrl("")).searchParams.has("target_name"), false);
+});
 const adapter = (config: string, head = "ref: refs/heads/main\n") => ({
   async exists(path: string) { return path === ".git/config" || path === ".git/HEAD"; },
   async read(path: string) { if (path === ".git/config") return config; if (path === ".git/HEAD") return head; throw Error("Unexpected read"); },

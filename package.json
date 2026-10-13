@@ -1,7 +1,7 @@
 {
   "name": "cloud-vault-sync",
   "private": true,
-  "version": "0.3.0-beta.3",
+  "version": "0.3.0-beta.4",
   "scripts": {
     "setup": "npm ci --prefix plugin && npm ci --prefix server",
     "build": "npm run build --prefix plugin",

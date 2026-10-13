@@ -4,6 +4,16 @@ export interface GitSetupFiles {
 }
 export interface DetectedRepository { owner: string; repository: string; branch: string }
 
+export function tokenCreationUrl(owner: string): string {
+  const url = new URL("https://github.com/settings/personal-access-tokens/new");
+  url.searchParams.set("name", "Obsidian GitHub Vault Sync");
+  url.searchParams.set("description", "Sync my Obsidian vault with GitHub");
+  url.searchParams.set("contents", "write");
+  url.searchParams.set("metadata", "read");
+  if (owner) url.searchParams.set("target_name", owner);
+  return url.href;
+}
+
 /** Reads only ordinary in-vault Git metadata; linked worktrees remain manual setup. */
 export async function detectGitRepository(files: GitSetupFiles): Promise<DetectedRepository | null> {
   if (!(await files.exists(".git/config")) || !(await files.exists(".git/HEAD"))) return null;
