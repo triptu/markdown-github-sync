@@ -50,6 +50,7 @@ interface TrackedHidden {
   next: Entry | null;
   hostLifetime: string | null;
   observed: string | null;
+  missing: boolean;
 }
 interface JournalState {
   format: 3;
@@ -57,10 +58,14 @@ interface JournalState {
   tracked: Record<string, TrackedHidden>;
   recoveries: NativeRecovery[];
   acknowledgedOversize: AcknowledgedOversize[];
+  supersededRecoveryIds: string[];
 }
 const uuid = /^[0-9a-f-]{36}$/;
 function isHiddenPath(root: string, path: string): boolean {
   return new RegExp(`^${root.replaceAll(".", "\\.")}/(?:stage|hold)/[0-9a-f-]{36}$`).test(path);
+}
+function isRecoverySource(root: string, path: string, sourcePath: string): boolean {
+  return isHiddenPath(root, sourcePath) || (sourcePath === path && isSyncablePath(sourcePath));
 }
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -75,7 +80,8 @@ async function validateEntry(path: string, value: Entry | null): Promise<void> {
 async function parseState(value: unknown, root: string): Promise<JournalState> {
   if (!object(value) || value.format !== 3 || !object(value.intents) || !object(value.tracked)
     || !Array.isArray(value.recoveries)
-    || (value.acknowledgedOversize !== undefined && !Array.isArray(value.acknowledgedOversize)))
+    || (value.acknowledgedOversize !== undefined && !Array.isArray(value.acknowledgedOversize))
+    || (value.supersededRecoveryIds !== undefined && !Array.isArray(value.supersededRecoveryIds)))
     throw new Error("Native transaction journal is corrupt.");
   const intents: Record<string, FileIntent> = Object.create(null);
   for (const [path, raw] of Object.entries(value.intents)) {
@@ -107,12 +113,13 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
       || !optionalEntry(raw.expected) || !optionalEntry(raw.next)
       || (raw.hostLifetime !== null && (typeof raw.hostLifetime !== "string" || !uuid.test(raw.hostLifetime)))
       || (raw.observed !== null && !isOid(raw.observed))
+      || (raw.missing !== undefined && typeof raw.missing !== "boolean")
       || !isHiddenPath(root, hidden))
       throw new Error("Native hidden-file tracking is corrupt.");
     await validateEntry(raw.path, raw.expected);
     await validateEntry(raw.path, raw.next);
     tracked[hidden] = { path: raw.path, expected: raw.expected, next: raw.next,
-      hostLifetime: raw.hostLifetime, observed: raw.observed };
+      hostLifetime: raw.hostLifetime, observed: raw.observed, missing: raw.missing ?? false };
   }
   const recoveries: NativeRecovery[] = [];
   for (const raw of value.recoveries) {
@@ -123,7 +130,7 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
     await validateEntry(raw.path, raw.expected);
     await validateEntry(raw.path, raw.next);
     if (raw.kind === "oversize") {
-      if (!isHiddenPath(root, raw.sourcePath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0
+      if (!isRecoverySource(root, raw.path, raw.sourcePath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0
         || (raw.mtime !== undefined && raw.mtime !== null
           && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
         throw new Error("Native recovery record is corrupt.");
@@ -138,19 +145,23 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
   }
   const acknowledgedOversize: AcknowledgedOversize[] = [];
   for (const raw of value.acknowledgedOversize ?? []) {
-    if (!object(raw) || typeof raw.sourcePath !== "string" || !isHiddenPath(root, raw.sourcePath)
+    if (!object(raw) || typeof raw.sourcePath !== "string"
+      || (!isHiddenPath(root, raw.sourcePath) && !isSyncablePath(raw.sourcePath))
       || !Number.isSafeInteger(raw.size) || typeof raw.size !== "number" || raw.size <= 0
       || (raw.mtime !== null && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
       throw new Error("Native oversize acknowledgement is corrupt.");
     acknowledgedOversize.push({ sourcePath: raw.sourcePath, size: raw.size, mtime: raw.mtime });
   }
-  return { format: 3, intents, tracked, recoveries, acknowledgedOversize };
+  const supersededRecoveryIds = value.supersededRecoveryIds ?? [];
+  if (!supersededRecoveryIds.every((id: unknown) => typeof id === "string" && uuid.test(id)))
+    throw new Error("Native superseded recovery IDs are corrupt.");
+  return { format: 3, intents, tracked, recoveries, acknowledgedOversize, supersededRecoveryIds };
 }
 
 /** Native intent and evidence state in the same verified, compactable journal implementation as engine state. */
 export class NativeTransactionJournal {
   readonly root: string;
-  private state: JournalState = { format: 3, intents: Object.create(null), tracked: Object.create(null), recoveries: [], acknowledgedOversize: [] };
+  private state: JournalState = { format: 3, intents: Object.create(null), tracked: Object.create(null), recoveries: [], acknowledgedOversize: [], supersededRecoveryIds: [] };
   private uncertain = false;
   private constructor(private files: JournalFiles, private store: FileJournalStore, installationId: string) {
     this.root = `.git-vault-sync/${installationId}`;
@@ -188,7 +199,22 @@ export class NativeTransactionJournal {
       attempted: intent.attempted }));
   }
   tracked(path: string): TrackedHidden | null { this.trusted(); return this.state.tracked[path] ?? null; }
+  trackedPaths(): string[] { this.trusted(); return Object.keys(this.state.tracked); }
   recoveries(): NativeRecovery[] { this.trusted(); return [...this.state.recoveries]; }
+  oversizeForSource(sourcePath: string): NativeOversizeRecovery | null {
+    this.trusted();
+    return this.state.recoveries.find((item): item is NativeOversizeRecovery =>
+      item.kind === "oversize" && item.sourcePath === sourcePath) ?? null;
+  }
+  missingForSource(sourcePath: string): NativeBytesRecovery | null {
+    this.trusted();
+    return this.state.recoveries.find((item): item is NativeBytesRecovery =>
+      item.kind !== "oversize" && item.sourcePath === sourcePath && item.found === null) ?? null;
+  }
+  hasAcknowledgedOversizeSource(sourcePath: string): boolean {
+    this.trusted();
+    return this.state.acknowledgedOversize.some(item => item.sourcePath === sourcePath);
+  }
   issues(): NativeIssue[] { this.trusted(); return [...this.state.recoveries]; }
   async begin(path: string, expected: Entry | null, next: Entry | null, method: NativeMethod, hostLifetime: string | null = null): Promise<FileIntent> {
     this.trusted();
@@ -232,7 +258,8 @@ export class NativeTransactionJournal {
       if (hidden && await this.files.exists(hidden)) {
         const observed = [...this.state.recoveries].reverse().find(item => item.sourcePath === hidden);
         tracked[hidden] = { path, expected: intent.expectedEntry, next: intent.nextEntry,
-          hostLifetime: intent.hostLifetime, observed: observed?.kind === "oversize" ? null : observed?.found?.oid ?? null };
+          hostLifetime: intent.hostLifetime, observed: observed?.kind === "oversize" ? null : observed?.found?.oid ?? null,
+          missing: false };
       }
     }
     await this.save({ ...this.state, intents, tracked });
@@ -242,14 +269,14 @@ export class NativeTransactionJournal {
   async observe(path: string, oid: string): Promise<void> {
     this.trusted();
     const old = this.state.tracked[path];
-    if (!old || old.observed === oid) return;
-    await this.save({ ...this.state, tracked: { ...this.state.tracked, [path]: { ...old, observed: oid } } });
+    if (!old || (old.observed === oid && !old.missing)) return;
+    await this.save({ ...this.state, tracked: { ...this.state.tracked, [path]: { ...old, observed: oid, missing: false } } });
   }
-  async untrack(path: string): Promise<void> {
+  async observeMissing(path: string): Promise<void> {
     this.trusted();
-    if (!this.state.tracked[path]) return;
-    const tracked = { ...this.state.tracked }; delete tracked[path];
-    await this.save({ ...this.state, tracked });
+    const old = this.state.tracked[path];
+    if (!old || old.missing) return;
+    await this.save({ ...this.state, tracked: { ...this.state.tracked, [path]: { ...old, missing: true } } });
   }
   async retainIssue(input: Omit<NativeBytesRecovery, "id">): Promise<NativeBytesRecovery> {
     this.trusted();
@@ -282,8 +309,59 @@ export class NativeTransactionJournal {
     const record: NativeOversizeRecovery = { id: crypto.randomUUID(), kind: "oversize", path, sourcePath, expected, next, size, mtime };
     // A changed source supersedes its old metadata; the old version is no
     // longer exportable or acknowledgeable from this path.
-    const recoveries = this.state.recoveries.filter(item => item.kind !== "oversize" || item.sourcePath !== sourcePath);
-    await this.save({ ...this.state, recoveries: [...recoveries, record] });
+    const recoveries = this.state.recoveries.filter(item => item.sourcePath !== sourcePath ||
+      (item.kind !== "oversize" && item.found !== null));
+    const superseded = this.state.recoveries.filter(item => item.sourcePath === sourcePath &&
+      (item.kind === "oversize" || item.found === null));
+    await this.save({ ...this.state, recoveries: [...recoveries, record],
+      acknowledgedOversize: this.state.acknowledgedOversize.filter(item => item.sourcePath !== sourcePath),
+      supersededRecoveryIds: [...this.state.supersededRecoveryIds, ...superseded.map(item => item.id)] });
+    return record;
+  }
+  /** Replace an impossible old-size acknowledgement with durable current evidence in one journal record. */
+  async supersedeOversize(sourcePath: string, bytes: Uint8Array | null): Promise<NativeBytesRecovery> {
+    this.trusted();
+    const old = this.oversizeForSource(sourcePath);
+    if (!old) throw new Error(`No oversized source to supersede: ${sourcePath}`);
+    const record: NativeBytesRecovery = {
+      id: crypto.randomUUID(), kind: sourcePath === old.path ? "interrupted" : "displaced",
+      path: old.path, sourcePath, expected: old.expected, next: old.next,
+      found: bytes === null ? null : await entryFromBytes(bytes, old.expected?.mode ?? old.next?.mode ?? "100644"),
+    };
+    await validateEntry(record.path, record.found);
+    await this.save({ ...this.state, acknowledgedOversize: this.state.acknowledgedOversize.filter(item => item.sourcePath !== sourcePath),
+      supersededRecoveryIds: [...this.state.supersededRecoveryIds, old.id], recoveries: [
+      ...this.state.recoveries.filter(item => item.kind !== "oversize" || item.sourcePath !== sourcePath), record,
+    ] });
+    return record;
+  }
+  /** A changed source needs fresh consent even when its old oversized version was already acknowledged. */
+  async retainChangedAcknowledgedSource(path: string, sourcePath: string, expected: Entry | null,
+    next: Entry | null, bytes: Uint8Array | null): Promise<NativeBytesRecovery> {
+    this.trusted();
+    if (!this.hasAcknowledgedOversizeSource(sourcePath))
+      throw new Error(`No acknowledged oversized source to replace: ${sourcePath}`);
+    const record: NativeBytesRecovery = {
+      id: crypto.randomUUID(), kind: sourcePath === path ? "interrupted" : "displaced",
+      path, sourcePath, expected, next,
+      found: bytes === null ? null : await entryFromBytes(bytes, expected?.mode ?? next?.mode ?? "100644"),
+    };
+    await validateEntry(path, record.found);
+    await this.save({ ...this.state,
+      acknowledgedOversize: this.state.acknowledgedOversize.filter(item => item.sourcePath !== sourcePath),
+      recoveries: [...this.state.recoveries, record] });
+    return record;
+  }
+  /** A missing source that reappears is new evidence, even if its bytes equal an old preimage. */
+  async supersedeMissing(sourcePath: string, bytes: Uint8Array): Promise<NativeBytesRecovery> {
+    this.trusted();
+    const old = this.missingForSource(sourcePath);
+    if (!old) throw new Error(`No missing source to supersede: ${sourcePath}`);
+    const record: NativeBytesRecovery = { ...old, id: crypto.randomUUID(),
+      found: await entryFromBytes(bytes, old.expected?.mode ?? old.next?.mode ?? "100644") };
+    await validateEntry(record.path, record.found);
+    await this.save({ ...this.state, supersededRecoveryIds: [...this.state.supersededRecoveryIds, old.id],
+      recoveries: [...this.state.recoveries.filter(item => item.id !== old.id), record] });
     return record;
   }
   async readEvidence(record: NativeBytesRecovery): Promise<Uint8Array> {
@@ -297,6 +375,8 @@ export class NativeTransactionJournal {
   async acknowledge(ids: string[]): Promise<void> {
     this.trusted();
     const accepted = new Set(ids);
+    if (this.state.supersededRecoveryIds.some(id => accepted.has(id)))
+      throw new Error("Native source changed. Recover again before acknowledging.");
     const recoveries = this.state.recoveries.filter(item => !accepted.has(item.id));
     if (recoveries.length !== this.state.recoveries.length) {
       const acknowledgedOversize = [...this.state.acknowledgedOversize];

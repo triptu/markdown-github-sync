@@ -675,3 +675,195 @@ test("an oversized source changed before acknowledgement requires a fresh record
   assert.equal(h.vault.nativeRecoveries().some(item => item.kind === "oversize"), false);
   assert.deepEqual(h.files.get(hold)!.data, large);
 });
+
+async function interruptedBinaryIntent() {
+  const h = await harness();
+  h.put("a.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["a.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  h.setRenameHook(from => { if (from === "a.bin") throw new Error("crash after displacement"); });
+  await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after displacement/);
+  h.setRenameHook();
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  return { h, hold, expected, next };
+}
+
+for (const authorization of ["replay", "cancel"] as const) {
+  test(`oversized visible source blocks pending ${authorization} locally and keeps authorization recoverable`, async () => {
+    const { h, hold, next } = await interruptedBinaryIntent();
+    const large = new Uint8Array(8 * 1024 * 1024 + 1);
+    large[0] = 8;
+    h.put("a.bin", large);
+    h.setReadHook(path => { if (path === "a.bin") throw new Error("oversized bytes were read"); });
+    for (let restart = 0; restart < 2; restart++) {
+      const { vault } = await h.open();
+      const [intent] = await vault.pendingIntents();
+      assert.ok(intent);
+      const issues = await vault.recover({ replay: authorization === "replay" ? [intent.id] : [],
+        cancel: authorization === "cancel" ? [intent.id] : [] });
+      assert.equal(issues.some(issue => issue.kind === "oversize" && issue.sourcePath === "a.bin"), true);
+      assert.equal((await vault.pendingIntents())[0].id, intent.id);
+      assert.deepEqual(h.files.get("a.bin")!.data, large);
+      assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+      assert.equal((await vault.scan()).unreadable[0].path, "a.bin");
+      if (restart === 0) assert.equal((await vault.apply("other.bin", null, next)).kind, "applied");
+    }
+    h.setReadHook();
+    const { vault } = await h.open();
+    const old = vault.nativeRecoveries().find(issue => issue.kind === "oversize" && issue.sourcePath === "a.bin");
+    assert.ok(old);
+    h.put("a.bin", new Uint8Array([9]));
+    const [intent] = await vault.pendingIntents();
+    const fresh = await vault.recover({ replay: authorization === "replay" ? [intent.id] : [],
+      cancel: authorization === "cancel" ? [intent.id] : [] });
+    const replacement = await entryFromBytes(new Uint8Array([9]));
+    assert.equal(fresh.some(issue => issue.kind === "interrupted" && issue.found?.oid === replacement.oid), true);
+    assert.equal((await vault.pendingIntents()).length, 1);
+    await assert.rejects(vault.acknowledgeRecovery([old.id]), /source changed/);
+    assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([9]));
+  });
+}
+
+test("pending visible source revalidates after an acknowledged oversized version shrinks", async () => {
+  const { h, hold } = await interruptedBinaryIntent();
+  h.put("a.bin", new Uint8Array(8 * 1024 * 1024 + 1));
+  const vault = (await h.open()).vault;
+  const [intent] = await vault.pendingIntents();
+  await vault.recover({ replay: [intent.id], cancel: [] });
+  const old = vault.nativeRecoveries().find(issue => issue.kind === "oversize" && issue.sourcePath === "a.bin");
+  assert.ok(old);
+  await vault.acknowledgeOversize(old.id);
+  h.put("a.bin", new Uint8Array([0]));
+  const fresh = await vault.recover({ replay: [intent.id], cancel: [] });
+  assert.equal(fresh.some(issue => issue.kind === "interrupted" && issue.found?.data === "AA=="), true);
+  assert.equal((await vault.pendingIntents()).length, 1);
+  assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+});
+
+for (const authorization of ["replay", "cancel"] as const) {
+  test(`late visible growth during pending ${authorization} stays path-local`, async () => {
+    const { h, hold, next } = await interruptedBinaryIntent();
+    h.put("a.bin", new Uint8Array([9]));
+    const large = new Uint8Array(8 * 1024 * 1024 + 1);
+    h.setReadHook(path => { if (path === "a.bin") { h.setReadHook(); h.put(path, large); } });
+    const vault = (await h.open()).vault;
+    const [intent] = await vault.pendingIntents();
+    const issues = await vault.recover({ replay: authorization === "replay" ? [intent.id] : [],
+      cancel: authorization === "cancel" ? [intent.id] : [] });
+    assert.equal(issues.some(issue => issue.kind === "oversize" && issue.sourcePath === "a.bin"), true);
+    assert.equal((await vault.pendingIntents()).length, 1);
+    assert.deepEqual(h.files.get("a.bin")!.data, large);
+    assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
+    assert.equal((await vault.apply("other.bin", null, next)).kind, "applied");
+  });
+}
+
+async function retainedOversizeSource() {
+  const h = await harness();
+  h.put("a.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["a.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  const large = new Uint8Array(8 * 1024 * 1024 + 1);
+  large[0] = 7;
+  h.put(hold, large);
+  await inspectHidden(h.vault);
+  const old = h.vault.nativeRecoveries().find(issue => issue.kind === "oversize" && issue.sourcePath === hold);
+  assert.ok(old);
+  const exported = await h.vault.exportOversize(old.id);
+  assert.deepEqual(h.files.get(exported.path)!.data, large);
+  return { h, hold, old, exported, large };
+}
+
+for (const change of ["missing", "readable"] as const) {
+  test(`retained oversized source becoming ${change} replaces stale metadata with durable evidence`, async () => {
+    const { h, hold, old, exported, large } = await retainedOversizeSource();
+    const replacement = bytes("new readable hidden draft");
+    if (change === "missing") h.files.delete(hold);
+    else h.put(hold, replacement);
+    const issues = await inspectHidden(h.vault);
+    assert.equal(issues.some(issue => issue.id === old.id), false);
+    const fresh = h.vault.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+    assert.ok(fresh && fresh.kind === "displaced");
+    assert.deepEqual(fresh.found, change === "missing" ? null : await entryFromBytes(replacement));
+    await assert.rejects(h.vault.acknowledgeRecovery([old.id]), /source changed/);
+    const reopened = (await h.open()).vault;
+    const persisted = reopened.nativeRecoveries().find(issue => issue.id === fresh.id);
+    assert.equal(persisted?.id, fresh.id);
+    assert.equal(persisted?.kind, fresh.kind);
+    if (persisted?.kind === "displaced") assert.deepEqual(persisted.found?.data ?? null, fresh.found?.data ?? null);
+    await reopened.acknowledgeRecovery([fresh.id]);
+    assert.equal(reopened.nativeRecoveries().some(issue => issue.sourcePath === hold), false);
+    assert.deepEqual(h.files.get(exported.path)!.data, large);
+    if (change === "readable") assert.deepEqual(h.files.get(hold)!.data, replacement);
+    else {
+      assert.equal(h.files.has(hold), false);
+      h.put(hold, new Uint8Array([0]));
+      await inspectHidden(reopened);
+      const reappeared = reopened.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+      assert.ok(reappeared && reappeared.kind === "displaced");
+      assert.equal(reappeared.found?.data, "AA==");
+    }
+  });
+}
+
+for (const change of ["missing", "restored-preimage"] as const) {
+  test(`acknowledged oversized source becoming ${change} still requires fresh evidence`, async () => {
+    const { h, hold, old } = await retainedOversizeSource();
+    await h.vault.acknowledgeOversize(old.id);
+    if (change === "missing") h.files.delete(hold);
+    else h.put(hold, new Uint8Array([0]));
+    await inspectHidden(h.vault);
+    const fresh = h.vault.nativeRecoveries().find(issue => issue.sourcePath === hold);
+    assert.ok(fresh && fresh.kind === "displaced");
+    assert.equal(fresh.found?.data ?? null, change === "missing" ? null : "AA==");
+    assert.notEqual(fresh.id, old.id);
+    const reopened = (await h.open()).vault;
+    assert.equal(reopened.nativeRecoveries().some(issue => issue.id === fresh.id), true);
+  });
+}
+
+test("missing retained source reappearing before consent invalidates its missing issue", async () => {
+  const { h, hold } = await retainedOversizeSource();
+  h.files.delete(hold);
+  await inspectHidden(h.vault);
+  const missing = h.vault.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+  assert.ok(missing && missing.kind === "displaced" && missing.found === null);
+  h.put(hold, new Uint8Array([0]));
+  await inspectHidden(h.vault);
+  const reappeared = h.vault.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+  assert.ok(reappeared && reappeared.kind === "displaced");
+  assert.notEqual(reappeared.id, missing.id);
+  assert.equal(reappeared.found?.data, "AA==");
+  await assert.rejects(h.vault.acknowledgeRecovery([missing.id]), /source changed/);
+});
+
+for (const boundary of ["before-write", "after-record-rename"] as const) {
+  test(`oversize metadata supersession survives ${boundary} interruption`, async () => {
+    const { h, hold, old } = await retainedOversizeSource();
+    const replacement = bytes("new hidden bytes after export");
+    h.put(hold, replacement);
+    if (boundary === "before-write") h.setJournalWriteHook(path => {
+      if (path.includes("/native/records/")) throw new Error("crash before replacement record");
+    });
+    else h.setRenameHook((_from, to) => {
+      if (to.includes("/native/records/")) throw new Error("crash after replacement record");
+    });
+    await assert.rejects(inspectHidden(h.vault), /crash/);
+    h.setJournalWriteHook();
+    h.setRenameHook();
+    const reopened = (await h.open()).vault;
+    const durable = reopened.nativeRecoveries();
+    assert.equal(durable.some(issue => issue.id === old.id), boundary === "before-write");
+    if (boundary === "before-write") await inspectHidden(reopened);
+    const fresh = reopened.nativeRecoveries().find(issue => issue.sourcePath === hold && issue.kind === "displaced");
+    assert.ok(fresh && fresh.kind === "displaced");
+    assert.equal(fresh.found?.data, (await entryFromBytes(replacement)).data);
+    assert.equal(reopened.nativeRecoveries().some(issue => issue.id === old.id), false);
+    await assert.rejects(reopened.acknowledgeRecovery([old.id]), /source changed/);
+    assert.deepEqual(h.files.get(hold)!.data, replacement);
+  });
+}

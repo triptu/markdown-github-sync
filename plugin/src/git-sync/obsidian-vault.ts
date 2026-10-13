@@ -10,6 +10,9 @@ export interface UnreadableNativeFile { path: string; size: number; mtime: numbe
 const maxFileBytes = 8 * 1024 * 1024;
 const maxVaultBytes = 128 * 1024 * 1024;
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+class OversizeReadError extends Error {
+  constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
+}
 function visible(path: string): boolean { return path.split("/").every(part => !part.startsWith(".")); }
 function safePath(path: string): void {
   if (!isSyncablePath(path) || path.split("/").some(part => !part || part === "." || part === ".."
@@ -49,8 +52,10 @@ export class GitObsidianVault implements LocalVault {
     this.assertActive();
     const adapter = this.app.vault.adapter;
     if (!(await adapter.exists(path))) return null;
+    const stat = await adapter.stat(path);
+    if (stat?.type === "file" && stat.size > maxFileBytes) throw new OversizeReadError(path);
     const bytes = new Uint8Array(await adapter.readBinary(path));
-    if (bytes.length > maxFileBytes) throw new Error(`File exceeds 8 MiB: ${path}`);
+    if (bytes.length > maxFileBytes) throw new OversizeReadError(path);
     return bytes;
   }
   private async oid(path: string): Promise<string | null> {
@@ -86,7 +91,7 @@ export class GitObsidianVault implements LocalVault {
     return stat?.type === "file" ? stat.mtime : null;
   }
   private async preserve(path: string, intent: FileIntent, kind: "interrupted" | "displaced"): Promise<ApplyResult> {
-    const bytes = path === intent.path ? await this.read(path) : await this.hiddenBytes(path);
+    const bytes = await this.hiddenBytes(path);
     if (bytes === "oversize") {
       await this.transactions?.retainOversize(intent.path, path, intent.expectedEntry, intent.nextEntry,
         this.oversized.get(path) ?? maxFileBytes + 1, await this.hiddenMtime(path));
@@ -123,8 +128,33 @@ export class GitObsidianVault implements LocalVault {
     await this.transactions?.finish(intent.path);
     return result;
   }
+  /** A pending intent cannot interpret an unreadable live source as absent. */
+  private async pendingSource(intent: FileIntent): Promise<ApplyResult | null> {
+    if (!this.transactions) return null;
+    const bytes = await this.hiddenBytes(intent.path);
+    if (bytes === "oversize") {
+      await this.transactions.retainOversize(intent.path, intent.path, intent.expectedEntry, intent.nextEntry,
+        this.oversized.get(intent.path) ?? maxFileBytes + 1, await this.hiddenMtime(intent.path));
+    } else if (this.transactions.oversizeForSource(intent.path)) {
+      await this.transactions.supersedeOversize(intent.path, bytes);
+    } else if (this.transactions.hasAcknowledgedOversizeSource(intent.path)) {
+      await this.transactions.retainChangedAcknowledgedSource(intent.path, intent.path,
+        intent.expectedEntry, intent.nextEntry, bytes);
+    } else if (this.transactions.missingForSource(intent.path)) {
+      if (bytes !== null) await this.transactions.supersedeMissing(intent.path, bytes);
+    } else return null;
+    return { kind: "blocked", reason: `Native recovery source changed at ${intent.path}. Review the retained evidence.` };
+  }
+  private async pendingOversizeRace(intent: FileIntent, error: unknown): Promise<ApplyResult> {
+    if (!(error instanceof OversizeReadError) || error.path !== intent.path) throw error;
+    const result = await this.pendingSource(intent);
+    if (!result) await this.preserve(intent.path, intent, "interrupted");
+    return { kind: "blocked", reason: `Native recovery source changed at ${intent.path}. Review the retained evidence.` };
+  }
   private async renameTransaction(intent: FileIntent): Promise<ApplyResult> {
     if (!this.transactions) throw new Error("Native transaction journal is unavailable.");
+    const source = await this.pendingSource(intent);
+    if (source) return source;
     const adapter = this.app.vault.adapter;
     let live = await this.oid(intent.path);
     let held = intent.hold ? await this.hiddenOid(intent.hold) : null;
@@ -198,6 +228,8 @@ export class GitObsidianVault implements LocalVault {
   }
   private async textTransaction(intent: FileIntent): Promise<ApplyResult> {
     if (!intent.nextEntry || !intent.expected) throw new Error("Invalid text transaction.");
+    const source = await this.pendingSource(intent);
+    if (source) return source;
     const now = await this.oid(intent.path);
     if (now === intent.next) {
       await this.modes.set(intent.path, intent.nextEntry.mode);
@@ -247,6 +279,7 @@ export class GitObsidianVault implements LocalVault {
   private async cancelIntent(intent: FileIntent): Promise<void> {
     if (!this.transactions) return;
     if (!intent.attempted) { await this.transactions.cancel(intent.path); return; }
+    if (await this.pendingSource(intent)) return;
     const live = await this.oid(intent.path);
     const held = intent.hold ? await this.hiddenOid(intent.hold) : null;
     if (live === intent.expected && (held === null || held === intent.expected)) {
@@ -286,25 +319,50 @@ export class GitObsidianVault implements LocalVault {
     const replay = new Set(authorization.replay), cancel = new Set(authorization.cancel);
     for (const id of replay) if (cancel.has(id)) throw new Error(`Conflicting native recovery authorization: ${id}`);
     for (const intent of this.transactions.pending()) {
-      if (cancel.has(intent.id)) await this.cancelIntent(intent);
-      else if (replay.has(intent.id)) {
-        if (intent.method === "rename") await this.renameTransaction(intent);
-        else await this.textTransaction(intent);
-      }
+      try {
+        if (cancel.has(intent.id)) await this.cancelIntent(intent);
+        else if (replay.has(intent.id)) {
+          if (intent.method === "rename") await this.renameTransaction(intent);
+          else await this.textTransaction(intent);
+        }
+      } catch (error) { await this.pendingOversizeRace(intent, error); }
     }
     for (const kind of ["hold", "stage"] as const) {
       const directory = `${this.transactions.root}/${kind}`;
-      for (const path of (await this.app.vault.adapter.list(directory)).files) {
+      const listed = (await this.app.vault.adapter.list(directory)).files;
+      const paths = new Set([...listed, ...this.transactions.trackedPaths().filter(path => path.startsWith(`${directory}/`))]);
+      for (const path of paths) {
         const tracked = this.transactions.tracked(path);
         if (!tracked) continue;
         const bytes = await this.hiddenBytes(path);
-        if (bytes === null) { await this.transactions.untrack(path); continue; }
+        if (bytes === null) {
+          if (this.transactions.oversizeForSource(path)) await this.transactions.supersedeOversize(path, null);
+          else if (this.transactions.hasAcknowledgedOversizeSource(path))
+            await this.transactions.retainChangedAcknowledgedSource(tracked.path, path, tracked.expected, tracked.next, null);
+          await this.transactions.observeMissing(path);
+          continue;
+        }
         if (bytes === "oversize") {
           await this.transactions.retainOversize(tracked.path, path, tracked.expected, tracked.next,
             this.oversized.get(path) ?? maxFileBytes + 1, await this.hiddenMtime(path));
           continue;
         }
+        let changedFromMissingOrOversize = false;
+        if (this.transactions.oversizeForSource(path)) {
+          await this.transactions.supersedeOversize(path, bytes);
+          changedFromMissingOrOversize = true;
+        } else if (this.transactions.hasAcknowledgedOversizeSource(path)) {
+          await this.transactions.retainChangedAcknowledgedSource(tracked.path, path, tracked.expected, tracked.next, bytes);
+          changedFromMissingOrOversize = true;
+        } else if (this.transactions.missingForSource(path)) {
+          await this.transactions.supersedeMissing(path, bytes);
+          changedFromMissingOrOversize = true;
+        } else if (tracked.missing) {
+          await this.transactions.retainBytes(bytes, tracked.path, path, "displaced", tracked.expected, tracked.next);
+          changedFromMissingOrOversize = true;
+        }
         const oid = await hashBlob(bytes);
+        if (changedFromMissingOrOversize) { await this.transactions.observe(path, oid); continue; }
         // No atomic remove-if-hash exists. Keep even clean preimages because a
         // writer can change a hold between inspection and adapter.remove().
         const known = kind === "hold" ? tracked.expected : tracked.next;
@@ -454,7 +512,8 @@ export class GitObsidianVault implements LocalVault {
       if (pending.expected !== (expected?.oid ?? null) || pending.next !== (next?.oid ?? null)
         || pending.expectedEntry?.mode !== expected?.mode || pending.nextEntry?.mode !== next?.mode)
         return { kind: "blocked", reason: `A different native transaction is pending for ${path}.` };
-      return pending.method === "rename" ? this.renameTransaction(pending) : this.textTransaction(pending);
+      try { return pending.method === "rename" ? await this.renameTransaction(pending) : await this.textTransaction(pending); }
+      catch (error) { return this.pendingOversizeRace(pending, error); }
     }
     await this.modes.recover?.(pendingPath => this.oid(pendingPath));
     if (expected) await verifyEntry(path, expected);
