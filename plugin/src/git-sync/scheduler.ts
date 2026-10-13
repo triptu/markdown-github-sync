@@ -85,7 +85,7 @@ export class ForegroundScheduler {
       this.onError(error);
     } finally {
       this.running = false;
-      this.schedule(this.pending ? 3000 : 60000);
+      this.schedule(this.pending ? 3000 : 300000);
     }
   }
   stop(): void {

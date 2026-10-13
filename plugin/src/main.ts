@@ -1,4 +1,6 @@
 import { inspectGitTakeover, takeOverGit } from "./git-takeover";
+import { detectGitRepository, type DetectedRepository } from "./git-setup";
+import { readLocalCandidate } from "./git-sync/local-candidate";
 import {
   App,
   Modal,
@@ -6,7 +8,6 @@ import {
   Platform,
   Plugin,
   PluginSettingTab,
-  SecretComponent,
   Setting,
   debounce,
   requestUrl,
@@ -35,6 +36,8 @@ import { defaultSettings, parseSettings, type Settings } from "./settings";
 import { formatCommitMessage } from "./commit-message";
 
 const installationKey = "github-vault-sync-installation-v2";
+const activityKey = "github-vault-sync-activity";
+const tokenUrl = "https://github.com/settings/personal-access-tokens/new";
 function failure(error: unknown): string {
   return error instanceof Error
     ? error.message
@@ -91,6 +94,8 @@ export default class GitVaultSync extends Plugin {
       await this.owner().run(async () => {
         const settings = parseSettings(await this.loadData());
         this.owner().assertActive();
+        // Never-connected vaults name commits after the platform; a connected vault keeps the name it already commits with.
+        if (!settings.owner && settings.deviceName === defaultSettings().deviceName) settings.deviceName = deviceSuggestion();
         this.settings = settings;
       });
     } catch (error) {
@@ -276,22 +281,41 @@ export default class GitVaultSync extends Plugin {
     );
     if (status.kind === "enrolled") this.scheduler?.schedule(1000);
   }
-  private createRepository(installation: string, scopeRules: "visible-only" | "config/1"): GitHubRepository {
+  /** `target` checks a draft repository or unsaved token without touching saved settings or status. */
+  private createRepository(installation: string, scopeRules: "visible-only" | "config/1", target?: AccessTarget): GitHubRepository {
     const owner = this.owner();
     return new GitHubRepository({
       installation,
       scopeRules,
       configDir: this.app.vault.configDir,
-      owner: this.settings.owner,
-      name: this.settings.repository,
-      branch: this.settings.branch,
+      owner: target?.owner ?? this.settings.owner,
+      name: target?.repository ?? this.settings.repository,
+      branch: target?.branch ?? this.settings.branch,
+      ...(target ? {} : {
+        readLocal: async (path: string, expectedSize: number) => {
+          owner.assertActive();
+          const bytes = await readLocalCandidate(this.app.vault.adapter, path, expectedSize);
+          owner.assertActive();
+          return bytes;
+        },
+        onReadProgress: (done: number, total: number) => {
+          owner.assertActive();
+          this.setStatus(`Checking GitHub files ${done.toLocaleString()} of ${total.toLocaleString()}`);
+        },
+      }),
       token: async () => {
         owner.assertActive();
-        const token = this.app.secretStorage.getSecret(this.settings.secretId);
+        const token = target?.token ?? this.app.secretStorage.getSecret(this.settings.secretId);
         if (!token) throw new Error("Choose a GitHub token in settings.");
         return token;
       },
       transport: {
+        requestArchive: async ({ url, method, headers }) => {
+          owner.assertActive();
+          const response = await requestUrl({ url, method, headers, throw: false });
+          owner.assertActive();
+          return { status: response.status, headers: response.headers, bytes: new Uint8Array(response.arrayBuffer) };
+        },
         request: async ({ url, method, headers, body }) => {
           owner.assertActive();
           const response = await requestUrl({
@@ -311,6 +335,81 @@ export default class GitVaultSync extends Plugin {
         },
       },
     });
+  }
+  /** Read-only guess from this vault's Git metadata, used to prefill a blank setup form. */
+  detectRepository(): Promise<DetectedRepository | null> {
+    return detectGitRepository(this.owner().fence(this.app.vault.adapter));
+  }
+  hasToken(): boolean {
+    return Boolean(this.settings.secretId && this.app.secretStorage?.getSecret(this.settings.secretId));
+  }
+  /**
+   * Stores a token under a fresh key no other vault or plugin uses, so saving
+   * never overwrites a secret something else relies on. Earlier keys are left
+   * in place. Returns the key to save in settings.
+   */
+  saveToken(value: string): string {
+    if (!this.app.secretStorage) throw new Error("Obsidian 1.11.4 or newer is required for secret storage.");
+    const id = `github-vault-sync-token-${crypto.randomUUID()}`;
+    this.app.secretStorage.setSecret(id, value.trim());
+    return id;
+  }
+  /**
+   * Reads the repository and branch head with a draft target, two GETs that
+   * download no files and change nothing. A missing `token` uses the saved
+   * one. Rejects with a message ready to show.
+   */
+  async checkAccess(target: AccessTarget): Promise<void> {
+    try { await this.probeAccess(target); }
+    catch (error) { throw new Error(accessProblem(error, target)); }
+  }
+  private async probeAccess(target: AccessTarget): Promise<void> {
+    if (target.token === undefined && !this.hasToken()) throw new Error("No token is saved on this device. Paste one.");
+    const saved: unknown = this.app.loadLocalStorage(installationKey);
+    const installation = typeof saved === "string" ? saved : crypto.randomUUID();
+    await this.createRepository(installation, "visible-only", target).checkAccess();
+  }
+  /** Re-checks the saved repository and token for the settings page. Being offline is not recorded as a token problem. */
+  async verifyAccess(): Promise<void> {
+    const checked = this.settings;
+    // A token replaced or settings saved while this check ran makes its result obsolete.
+    const current = () => {
+      this.owner().assertActive();
+      const now = this.settings;
+      return now.secretId === checked.secretId && now.owner === checked.owner && now.repository === checked.repository && now.branch === checked.branch;
+    };
+    try { await this.probeAccess(checked); }
+    catch (error) {
+      if (current() && (rejectedAccess(error) || !this.hasToken())) this.noteAccess(accessProblem(error, checked));
+      return;
+    }
+    if (current()) this.noteAccess(null);
+  }
+  /** Verifies `value` against the connected repository, then saves it. On failure the working token stays. Skips saving once `wanted` turns false. */
+  async replaceToken(value: string, wanted: () => boolean = () => true): Promise<boolean> {
+    const token = value.trim();
+    await this.checkAccess({ ...this.settings, token });
+    if (!wanted()) return false;
+    const secretId = this.saveToken(token);
+    await this.saveConfiguration({ ...this.settings, secretId });
+    this.noteAccess(null);
+    return true;
+  }
+  get activity(): Activity {
+    const value: unknown = this.app.loadLocalStorage(activityKey);
+    if (typeof value !== "object" || value === null) return {};
+    const read = (key: string) => { const field: unknown = Reflect.get(value, key); return typeof field === "number" && Number.isFinite(field) ? field : undefined; };
+    const problem: unknown = Reflect.get(value, "problem");
+    return { checkedAt: read("checkedAt"), syncedAt: read("syncedAt"), problem: typeof problem === "string" ? problem : undefined };
+  }
+  /** `null` records working access now; a message records a failed check and keeps the last good time. */
+  noteAccess(problem: string | null, synced = false): void {
+    const now = Date.now(), last = this.activity;
+    const next: Activity = problem === null
+      ? { checkedAt: now, syncedAt: synced ? now : last.syncedAt }
+      : { ...last, problem };
+    this.app.saveLocalStorage(activityKey, next);
+    for (const fn of this.listeners) fn();
   }
   previewConfigurationUpgrade() {
     return this.owner().run(async () => {
@@ -461,7 +560,13 @@ export default class GitVaultSync extends Plugin {
       await this.assertSingleWriter();
       this.owner().assertActive();
       this.setStatus("Syncing…");
-      const outcome = await this.rawSession.sync();
+      let outcome: SyncOutcome;
+      try { outcome = await this.rawSession.sync(); }
+      catch (error) {
+        if (rejectedAccess(error)) this.noteAccess(accessProblem(error, this.settings));
+        throw error;
+      }
+      if (outcome.kind === "synced" || outcome.kind === "up-to-date") this.noteAccess(null, true);
       this.setStatus(describeOutcome(outcome));
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
         try { await this.compactRecoveryOwned(); }
@@ -594,6 +699,41 @@ function describeOutcome(outcome: SyncOutcome): string {
       return "A file needs attention · open Sync status";
   }
 }
+interface AccessTarget { owner: string; repository: string; branch: string; token?: string }
+/** Per-vault, per-device record of the last working GitHub access, for the settings page. */
+interface Activity { checkedAt?: number; syncedAt?: number; problem?: string }
+function httpStatus(error: unknown): unknown {
+  return typeof error === "object" && error !== null ? Reflect.get(error, "status") : undefined;
+}
+/** Failures that mean the token or its repository access is wrong, not a network hiccup. */
+function rejectedAccess(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && typeof Reflect.get(error, "retryAt") === "number") return false;
+  const status = httpStatus(error);
+  return status === 401 || status === 403 || status === 404 || /credential unavailable/.test(failure(error));
+}
+function accessProblem(error: unknown, target: Pick<AccessTarget, "owner" | "repository" | "branch">): string {
+  const message = failure(error), status = httpStatus(error);
+  const name = `${target.owner}/${target.repository}`;
+  if (/No token is saved/.test(message)) return message;
+  if (/Invalid repository coordinates/.test(message)) return "Enter the repository as owner/name.";
+  if (/Invalid branch name/.test(message)) return `"${target.branch}" isn't a valid branch name.`;
+  if (/branch missing|empty\/unborn/.test(message)) return `Branch "${target.branch}" wasn't found on GitHub, or the repository is empty.`;
+  if (/rate limit/.test(message)) return "GitHub is limiting requests. Sync will retry automatically.";
+  if (status === 401 || /credential unavailable/.test(message)) return "GitHub rejected this token. It may be mistyped, expired or revoked.";
+  if (status === 403) return `GitHub denied access to ${name}. Check that the token has Contents read and write permission.`;
+  if (status === 404) return `This token can't see ${name}. Check the name and the token's repository access.`;
+  if (/private GitHub repository/.test(message)) return `${name} is public. Sync only works with a private repository.`;
+  if (/identity mismatch/.test(message)) return `GitHub returned a different repository for ${name}. Check the name.`;
+  if (/transport failed/.test(message)) return "Couldn't reach GitHub. Check your connection.";
+  return message;
+}
+function ago(at: number, now = Date.now()): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return `on ${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}`;
+}
 function parseRepository(value: string): { owner: string; repository: string } | null {
   const match = /^(?:(?:https?:\/\/)?github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(value.trim());
   return match ? { owner: match[1]!, repository: match[2]! } : null;
@@ -632,9 +772,85 @@ function renderCommitSettings(el: HTMLElement, draft: CommitDraft, changed: () =
   el.appendChild(preview.settingEl);
   update();
 }
+function tokenDescription(): DocumentFragment {
+  return createFragment(fragment => {
+    fragment.appendText("A fine-grained token for this repository with Contents set to read and write. Create one at ");
+    fragment.createEl("span", { text: tokenUrl, cls: "git-sync-code git-sync-selectable" });
+  });
+}
+/** Masked token field. Blank keeps the saved token; the saved value is never read back into the page. */
+function tokenInput(setting: Setting, saved: boolean, handlers: { edited(): void; committed(value: string): void }) {
+  let input: HTMLInputElement | null = null;
+  setting.addText(text => {
+    input = text.inputEl;
+    input.type = "password";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    text.setPlaceholder(saved ? "Token saved" : "github_pat_…");
+  });
+  setting.addButton(button => button.setButtonText("Copy link").onClick(async () => {
+    try {
+      await navigator.clipboard.writeText(tokenUrl);
+      new Notice("Link copied. Open it in your browser.");
+    } catch {
+      new Notice("Couldn't copy. Select the link above and copy it.");
+    }
+  }));
+  const field = input as HTMLInputElement | null;
+  if (!field) throw new Error("Token field failed to render.");
+  // Checks run on leave or Enter, and after a pause in typing or pasting.
+  const commit = () => { pause.cancel(); const value = field.value.trim(); if (value) handlers.committed(value); };
+  const pause = debounce(commit, 800, true);
+  field.addEventListener("input", () => { handlers.edited(); pause(); });
+  field.addEventListener("change", commit);
+  return {
+    value: () => field.value.trim(),
+    saved: () => { field.value = ""; field.placeholder = "Token saved"; },
+  };
+}
+/** One status line under a setting. A result for superseded input is dropped. */
+function accessLine(setting: Setting) {
+  const line = setting.descEl.createDiv({ cls: "git-sync-line" });
+  let current = 0;
+  const show = (text: string, tone?: "ok" | "error") => {
+    line.setText(text);
+    line.toggleClass("mod-success", tone === "ok");
+    line.toggleClass("mod-warning", tone === "error");
+  };
+  return {
+    clear: () => { current++; show(""); },
+    /** Resolves true only if the check passed and nothing changed meanwhile. */
+    run: async (check: () => Promise<unknown>, verified = "Repository access verified"): Promise<boolean> => {
+      const id = ++current;
+      show("Checking access…");
+      try {
+        await check();
+        if (id === current) show(`✓ ${verified}`, "ok");
+        return id === current;
+      } catch (error) {
+        if (id === current) show(failure(error), "error");
+        return false;
+      }
+    },
+  };
+}
+/** Last sync and last verified access, or the reason access failed. */
+function describeActivity(activity: Activity): { text: string; problem: boolean } {
+  if (activity.problem) return { text: `Access problem: ${activity.problem}`, problem: true };
+  const parts: string[] = [];
+  if (activity.syncedAt) parts.push(`Last synced ${ago(activity.syncedAt)}`);
+  if (activity.checkedAt) parts.push(`${parts.length ? "access" : "Access"} verified ${ago(activity.checkedAt)}`);
+  return { text: parts.join(" · "), problem: false };
+}
+type SettingsView = "setup" | "paused" | "syncing";
+function settingsView(status: Awaited<ReturnType<SyncSession["status"]>> | { kind: "corrupt" } | undefined): SettingsView {
+  if (status?.kind !== "enrolled") return "setup";
+  return status.pause ? "paused" : "syncing";
+}
 class GitSettings extends PluginSettingTab {
   private generation = 0;
   private unsubscribe: (() => void) | null = null;
+  private watching: (() => void) | null = null;
   constructor(
     app: App,
     private plugin: GitVaultSync,
@@ -648,6 +864,23 @@ class GitSettings extends PluginSettingTab {
     this.generation++;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.watching?.();
+    this.watching = null;
+  }
+  /**
+   * Re-renders when sync starts, pauses or resumes, whichever modal or command
+   * caused it, so the page never shows setup behind a running sync. Typing in
+   * the setup form is kept because a status change within one view is ignored.
+   */
+  private watch(view: SettingsView, generation: number): void {
+    this.watching?.();
+    const check = debounce(async () => {
+      if (generation !== this.generation) return;
+      const status = await this.plugin.session?.status().catch(() => undefined);
+      if (generation === this.generation && settingsView(status) !== view) this.display();
+    }, 500, true);
+    const unsubscribe = this.plugin.subscribe(() => { check(); });
+    this.watching = () => { unsubscribe(); check.cancel(); };
   }
   private async render(): Promise<void> {
     const generation = ++this.generation;
@@ -656,6 +889,7 @@ class GitSettings extends PluginSettingTab {
     const session = this.plugin.session;
     const status = await session?.status().catch((error: unknown) => ({ kind: "corrupt" as const, detail: failure(error) }));
     if (generation !== this.generation) return;
+    this.watch(settingsView(status), generation);
     const el = this.containerEl;
     el.empty();
     el.addClass("git-sync-panel");
@@ -670,7 +904,7 @@ class GitSettings extends PluginSettingTab {
     }
     if (status?.kind === "corrupt") this.renderProblem(el, status.detail);
     else if (!session && this.plugin.settings.owner && this.plugin.settings.secretId) this.renderProblem(el, this.plugin.statusText);
-    this.renderSetup(el);
+    await this.renderSetup(el, generation);
   }
   private renderProblem(el: HTMLElement, detail: string): void {
     new Setting(el).setName("Can't connect").setDesc(detail)
@@ -680,48 +914,88 @@ class GitSettings extends PluginSettingTab {
         catch (error) { this.plugin.setStatus(failure(error)); new Notice(failure(error), 12000); button.setDisabled(false); }
       }));
   }
-  private renderSetup(el: HTMLElement): void {
+  private async renderSetup(el: HTMLElement, generation: number): Promise<void> {
     const draft = { ...this.plugin.settings };
-    let repository = draft.owner && draft.repository ? `${draft.owner}/${draft.repository}` : "";
     new Setting(el).setName("Connect to GitHub").setHeading()
       .setDesc("Your notes are saved as commits in a private GitHub repository you own.");
+    // Detection only fills blanks; anything already saved or typed wins.
+    let detected = false;
+    if (!draft.owner || !draft.repository) {
+      const found = await this.plugin.detectRepository().catch(() => null);
+      if (generation !== this.generation) return;
+      if (found) {
+        draft.owner = found.owner; draft.repository = found.repository; draft.branch = found.branch;
+        detected = true;
+      }
+    }
+    let repository = draft.owner && draft.repository ? `${draft.owner}/${draft.repository}` : "";
+    const target = (): AccessTarget | null => {
+      const parsed = parseRepository(repository);
+      return parsed && { ...parsed, branch: draft.branch || "main", token: token.value() || undefined };
+    };
+    const check = (): Promise<boolean> => {
+      const next = target();
+      if (generation !== this.generation) return Promise.resolve(false);
+      if (!next || (!next.token && !this.plugin.hasToken())) { access.clear(); return Promise.resolve(false); }
+      return access.run(() => this.plugin.checkAccess(next));
+    };
+    const recheck = debounce(() => { void check(); }, 800, true);
+    const edited = () => { access.clear(); recheck(); };
     new Setting(el).setName("Repository")
-      .setDesc("Owner and name, or paste the repository link.")
+      .setDesc(detected ? "Found in this vault's Git folder. Edit if it's wrong." : "Owner and name, or paste the repository link.")
       .addText(text => text.setValue(repository).setPlaceholder("username/notes")
-        .onChange(value => { repository = value; }));
+        .onChange(value => { repository = value; edited(); }));
     new Setting(el).setName("Branch")
       .addText(text => text.setValue(draft.branch).setPlaceholder("main")
-        .onChange(value => { draft.branch = value.trim(); }));
-    new Setting(el).setName("Access token")
-      .setDesc(createFragment(fragment => {
-        fragment.appendText("A fine-grained token for this repository with Contents set to read and write. ");
-        fragment.createEl("a", { text: "Create a token", href: "https://github.com/settings/personal-access-tokens/new" });
-      }))
-      .addComponent(container => new SecretComponent(this.app, container)
-        .setValue(draft.secretId)
-        .onChange(value => { draft.secretId = value ?? ""; }));
-    new Setting(el).setName("Also sync Obsidian settings")
-      .setDesc("Themes, hotkeys and plugins. Changes from other devices wait for your OK.")
+        .onChange(value => { draft.branch = value.trim(); edited(); }));
+    const tokenSetting = new Setting(el).setName("Access token").setDesc(tokenDescription());
+    const access = accessLine(tokenSetting);
+    const token = tokenInput(tokenSetting, this.plugin.hasToken(), {
+      edited: () => { recheck.cancel(); access.clear(); },
+      committed: () => { recheck.cancel(); void check(); },
+    });
+    void check();
+    new Setting(el).setName("Sync themes, hotkeys and plugins")
+      .setDesc(this.plugin.session === null
+        ? "Include Obsidian settings on this device. Notes and attachments always sync."
+        : "Include Obsidian settings on this device. Notes and attachments always sync. Already chosen for this vault; change it after syncing starts.")
       .addToggle(toggle => toggle.setValue(draft.configuration ?? false)
         .setDisabled(this.plugin.session !== null)
         .onChange(value => { draft.configuration = value; }));
     const commits = el.createEl("details", { cls: "git-sync-advanced" });
     commits.createEl("summary", { text: "Commit messages" });
     renderCommitSettings(commits, draft, () => {});
-    new Setting(el).addButton(button => button.setButtonText("Connect").setCta().onClick(async () => {
+    const connect = new Setting(el);
+    connect.addButton(button => button.setButtonText("Connect").setCta().onClick(async () => {
       const parsed = parseRepository(repository);
       if (!draft.commitMessageTemplate.trim() || !draft.commitDateFormat.trim()) { new Notice("Commit message and date format can't be empty."); return; }
       if (!parsed) { new Notice("Enter the repository as owner/name, for example your-name/notes."); return; }
-      if (!draft.secretId) { new Notice("Choose an access token first."); return; }
+      if (!token.value() && !this.plugin.hasToken()) { new Notice("Paste a GitHub access token first."); return; }
       button.setDisabled(true);
+      recheck.cancel();
+      // Nothing is saved until the token can read this repository and branch.
+      if (!(await check())) { button.setDisabled(false); return; }
+      if (generation !== this.generation) return;
+      // The first check reads every file on GitHub, so show its progress while Connect runs.
+      this.unsubscribe?.();
+      const unsubscribe = this.plugin.subscribe(() => {
+        if (generation === this.generation) connect.setDesc(this.plugin.statusText);
+      });
+      this.unsubscribe = unsubscribe;
+      connect.setDesc("Connecting…");
       try {
-        await this.plugin.saveConfiguration({ ...draft, ...parsed, branch: draft.branch || "main" });
+        const secretId = token.value() ? this.plugin.saveToken(token.value()) : draft.secretId;
+        await this.plugin.saveConfiguration({ ...draft, ...parsed, secretId, branch: draft.branch || "main" });
+        this.plugin.noteAccess(null);
+        if (generation !== this.generation) return;
         if (!this.plugin.session) { this.display(); throw new Error(this.plugin.statusText); }
         await this.review(button);
       } catch (error) {
         new Notice(failure(error), 12000);
       } finally {
-        button.setDisabled(false);
+        unsubscribe();
+        if (this.unsubscribe === unsubscribe) this.unsubscribe = null;
+        if (generation === this.generation) { connect.setDesc(""); button.setDisabled(false); }
       }
     }));
   }
@@ -747,21 +1021,37 @@ class GitSettings extends PluginSettingTab {
     const draft = { ...plugin.settings };
     const save = debounce(() => {
       plugin.saveConfiguration({ ...plugin.settings, automatic: draft.automatic, deviceName: draft.deviceName,
-        commitMessageTemplate: draft.commitMessageTemplate, commitDateFormat: draft.commitDateFormat, secretId: draft.secretId })
+        commitMessageTemplate: draft.commitMessageTemplate, commitDateFormat: draft.commitDateFormat })
         .catch(error => new Notice(failure(error), 12000));
     }, 600, true);
 
-    const status = new Setting(el).setName(`${repository.owner}/${repository.name}`).setDesc(plugin.statusText)
+    const status = new Setting(el).setName(`${repository.owner}/${repository.name}`)
       .addButton(button => button.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, plugin).open()))
       .addButton(button => button.setButtonText("Status").onClick(() => new ChangesModal(this.app, plugin).open()))
-      .addButton(button => button.setButtonText("Sync now").setCta().onClick(async () => {
-        button.setDisabled(true);
-        await plugin.syncNow();
-        button.setDisabled(false);
-      }));
-    this.unsubscribe = plugin.subscribe(() => status.setDesc(plugin.statusText));
+      .addButton(button => button.setButtonText("Sync now").setCta()
+        .setTooltip("Upload this device's changes and download changes from GitHub")
+        .onClick(async () => {
+          button.setDisabled(true);
+          await plugin.syncNow();
+          button.setDisabled(false);
+        }));
+    const current = status.descEl.createDiv();
+    const activity = status.descEl.createDiv({ cls: "git-sync-line" });
+    const refresh = () => {
+      current.setText(plugin.statusText);
+      const described = describeActivity(plugin.activity);
+      activity.setText(described.text);
+      activity.toggleClass("mod-warning", described.problem);
+    };
+    refresh();
+    const unsubscribe = plugin.subscribe(refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    this.unsubscribe = () => { unsubscribe(); window.clearInterval(timer); };
+    // Opening settings re-checks a token that hasn't been proven in the last few minutes.
+    const { checkedAt } = plugin.activity;
+    if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void plugin.verifyAccess();
     new Setting(el).setName("Sync automatically")
-      .setDesc("Sync shortly after you edit, and check for changes every minute while Obsidian is open.")
+      .setDesc("Sync shortly after you edit, and check GitHub for changes every 5 minutes while Obsidian is open.")
       .addToggle(toggle => toggle.setValue(draft.automatic).onChange(value => { draft.automatic = value; save(); }));
     const configuration = new Setting(el).setName("Obsidian settings");
     void this.describeConfiguration(configuration, generation);
@@ -770,13 +1060,22 @@ class GitSettings extends PluginSettingTab {
     renderCommitSettings(el, draft, save);
 
     const advanced = el.createEl("details", { cls: "git-sync-advanced" });
+    advanced.open = Boolean(plugin.activity.problem);
     advanced.createEl("summary", { text: "Advanced" });
     new Setting(advanced).setName("Repository")
       .setDesc(`${repository.owner}/${repository.name} · ${repository.branch}. To sync a different repository, use another vault.`);
-    new Setting(advanced).setName("Access token")
-      .addComponent(container => new SecretComponent(this.app, container)
-        .setValue(draft.secretId)
-        .onChange(value => { if (value) { draft.secretId = value; save(); } }));
+    // A replacement is saved only after it can read this repository; until then the working token stays.
+    const tokenSetting = new Setting(advanced).setName("Access token").setDesc(tokenDescription());
+    const access = accessLine(tokenSetting);
+    const token = tokenInput(tokenSetting, plugin.hasToken(), {
+      edited: () => access.clear(),
+      committed: value => {
+        void access.run(async () => {
+          if (!(await plugin.replaceToken(value, () => generation === this.generation && token.value() === value))) throw new Error("Superseded");
+          token.saved();
+        }, "Repository access verified · token saved");
+      },
+    });
     new Setting(advanced).setName("File history")
       .setDesc("Restore an earlier version of one note.")
       .addButton(button => button.setButtonText("Open").onClick(() => new RestoreModal(this.app, plugin).open()));

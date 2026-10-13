@@ -116,3 +116,22 @@ test("default timers retain the browser global receiver during schedule and stop
     if (created !== 2 || cleared !== 2) throw Error('Timers were not scheduled and cleared');
   `);
 });
+
+test("idle foreground checks wait five minutes while saved edits still sync after three seconds", async () => {
+  const time = fakeClock();
+  let runs = 0;
+  const scheduler = new ForegroundScheduler(async () => { runs++; }, () => true, () => true, error => { throw error; }, time.clock);
+  await scheduler.now();
+  await time.advance(60000);
+  assert.equal(runs, 1);
+  await time.advance(239999);
+  assert.equal(runs, 1);
+  await time.advance(1);
+  assert.equal(runs, 2);
+  scheduler.schedule();
+  await time.advance(2999);
+  assert.equal(runs, 2);
+  await time.advance(1);
+  assert.equal(runs, 3);
+  scheduler.stop();
+});

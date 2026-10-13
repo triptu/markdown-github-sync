@@ -1,4 +1,5 @@
 import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+import { ArchiveError, selectArchiveFiles } from "./archive";
 import { assertNoNestedGitignore, canonicalFilesystemPath, compileScope, scopeForTree } from "./scope";
 import type { Scope, ScopeRules } from "./scope";
 
@@ -10,7 +11,16 @@ export interface GitHubRequest {
   body?: string;
 }
 export interface GitHubResponse { status: number; headers: Record<string, string>; json: unknown }
-export interface GitHubTransport { request(request: GitHubRequest): Promise<GitHubResponse> }
+export interface GitHubBinaryResponse { status: number; headers: Record<string, string>; bytes: Uint8Array }
+export interface GitHubTransport {
+  request(request: GitHubRequest): Promise<GitHubResponse>;
+  /**
+   * Optional raw-bytes GET for repository archives. It may follow redirects;
+   * if it does not, a 3xx with a `Location` on codeload.github.com is
+   * re-requested without the Authorization header.
+   */
+  requestArchive?(request: GitHubRequest): Promise<GitHubBinaryResponse>;
+}
 export interface FileHistoryPage {
   at: string;
   entries: { commit: string; message: string; author: string; date: string }[];
@@ -34,6 +44,21 @@ export interface GitHubRepositoryOptions {
   scopeRules?: ScopeRules["rules"];
   /** Vault configuration directory; defaults to `.obsidian`. */
   configDir?: string;
+  /**
+   * Snapshot blob download progress: `(0, total)` before the first download,
+   * then once per verified blob. Not called when every blob is already known.
+   * Exceptions thrown by the callback are ignored.
+   */
+  onReadProgress?: (done: number, total: number) => void;
+  /**
+   * Current local bytes at a repository path, or null when missing or
+   * unreadable. Callers may return null without reading when the size differs
+   * from `expectedSize` (at most 8 MiB). Bytes are reused only after their Git
+   * blob hash matches the tree; a mismatch is an ordinary local edit and the
+   * remote version is downloaded. Nothing is ever written locally. A throw
+   * fails the read.
+   */
+  readLocal?: (path: string, expectedSize: number) => Promise<Uint8Array | null>;
 }
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number, readonly retryAt?: number) { super(message); this.name = "GitHubError"; }
@@ -44,6 +69,13 @@ const SNAPSHOT_LIMIT = 128 * 1024 * 1024;
 // This bounds cache payload accounting, not engine-dependent total heap usage.
 const CACHE_LIMIT = 128 * 1024 * 1024;
 const CACHE_OBJECT_LIMIT = 4096;
+const READ_CONCURRENCY = 4;
+const LOCAL_CONCURRENCY = 8;
+// Below this many missing blobs, per-blob reads beat downloading the whole archive.
+const ARCHIVE_THRESHOLD = 32;
+// The zipball carries every blob, including excluded ones; skip it above this tree size.
+const ARCHIVE_LIMIT = 256 * 1024 * 1024;
+const ARCHIVE_REDIRECTS = 2;
 const ENCODED_LIMIT = 4 * Math.ceil(FILE_LIMIT / 3);
 const INSTALLATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ZERO_OID = "0".repeat(40);
@@ -199,6 +231,19 @@ async function verifyTree(items: TreeItem[], root: string): Promise<void> {
   }
 }
 
+/** Runs `work` at most `width` at a time; on any failure, starts no more and rejects after in-flight work settles. */
+async function pool<T>(items: T[], width: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0, failure: { error: unknown } | undefined;
+  const worker = async (): Promise<void> => {
+    while (failure === undefined && next < items.length) {
+      try { await work(items[next++]); }
+      catch (error) { failure ??= { error }; return; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  if (failure !== undefined) throw failure.error;
+}
+
 /** GitHub.com repository adapter. See docs/github-client.md for transport and failure semantics. */
 export class GitHubRepository implements Repository {
   private readonly base: string;
@@ -209,6 +254,14 @@ export class GitHubRepository implements Repository {
   private readonly cache = new Map<string, { object: CachedObject; cost: number }>();
   private readonly scopeCache = new Map<string, Scope>();
   private cacheCost = 0;
+  /**
+   * Verified blobs of the most recent complete snapshot, outside the LRU so a
+   * snapshot larger than CACHE_LIMIT does not thrash on every poll. Bounded by
+   * SNAPSHOT_LIMIT decoded bytes (one snapshot); it shares string instances
+   * with the LRU and with the snapshot the caller already holds. Strings are
+   * immutable and every returned Entry is a fresh object.
+   */
+  private retained = new Map<string, { data: string; size: number }>();
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
@@ -248,14 +301,17 @@ export class GitHubRepository implements Repository {
     this.cache.set(key, { object, cost });
     this.cacheCost += cost;
   }
-  private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown, extra: Record<string, string> = {}): Promise<GitHubResponse> {
+  private async credential(): Promise<string> {
     let token: string;
     try { token = await this.options.token(); } catch { throw new GitHubError("GitHub credential unavailable"); }
     if (!token || /[\r\n]/.test(token)) throw new GitHubError("GitHub credential unavailable");
-    let response: GitHubResponse;
-    try {
-      response = await this.options.transport.request({ url, method, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    } catch { throw new GitHubError("GitHub transport failed; request outcome may be unknown"); }
+    return token;
+  }
+  private headers(token: string): Record<string, string> {
+    return { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" };
+  }
+  /** Throws on rate limits and non-2xx statuses (3xx too unless `redirect`); returns lowercased headers. */
+  private check(response: { status: number; headers: Record<string, string>; json?: unknown }, redirect = false): Map<string, string> {
     if (!Number.isInteger(response.status)) throw new GitHubError("Malformed GitHub HTTP status");
     const headers = new Map(Object.entries(record(response.headers)).map(([key, value]) => [key.toLowerCase(), string(value)]));
     const retry = headers.get("retry-after");
@@ -271,8 +327,45 @@ export class GitHubRepository implements Repository {
       if (reset !== undefined && /^\d+$/.test(reset) && Number.isFinite(Number(reset) * 1000)) dates.push(Number(reset) * 1000);
       throw new GitHubError("GitHub rate limit; schedule a later attempt", response.status, Math.max(...dates));
     }
-    if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) throw new GitHubError(`GitHub API request rejected (HTTP ${response.status})`, response.status);
+    if ((response.status < 200 || response.status >= 300) && !(redirect && response.status >= 300 && response.status < 400)) throw new GitHubError(`GitHub API request rejected (HTTP ${response.status})`, response.status);
+    return headers;
+  }
+  private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown, extra: Record<string, string> = {}): Promise<GitHubResponse> {
+    const token = await this.credential();
+    let response: GitHubResponse;
+    try {
+      response = await this.options.transport.request({ url, method, headers: { ...this.headers(token), "Content-Type": "application/json", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    } catch { throw new GitHubError("GitHub transport failed; request outcome may be unknown"); }
+    this.check(response);
     return response;
+  }
+  /**
+   * The zipball of an exact commit. GitHub answers with a redirect to a
+   * short-lived codeload.github.com URL that carries its own authorization,
+   * so a redirect is followed without the token and only to that host.
+   */
+  private async archive(commitOid: string): Promise<Uint8Array> {
+    const transport = this.options.transport;
+    if (!transport.requestArchive) throw new ArchiveError("Archive transport unavailable");
+    let url = `${this.base}/zipball/${oid(commitOid)}`;
+    let headers = this.headers(await this.credential());
+    for (let hop = 0; ; hop++) {
+      let response: GitHubBinaryResponse;
+      try { response = await transport.requestArchive({ url, method: "GET", headers }); }
+      catch { throw new ArchiveError("GitHub archive transport failed"); }
+      const lowered = this.check(response, true);
+      if (response.status >= 300) {
+        const location = lowered.get("location");
+        let next: URL;
+        try { next = new URL(location ?? "", url); } catch { throw new ArchiveError("Invalid GitHub archive redirect"); }
+        if (hop >= ARCHIVE_REDIRECTS || next.protocol !== "https:" || next.hostname !== "codeload.github.com" || next.username || next.password) throw new ArchiveError("Unexpected GitHub archive redirect");
+        url = next.href; headers = { Accept: "application/zip" };
+        continue;
+      }
+      if (!(response.bytes instanceof Uint8Array)) throw new ArchiveError("Malformed GitHub archive response");
+      if (response.bytes.length > ARCHIVE_LIMIT) throw new ArchiveError("GitHub archive size limit exceeded");
+      return response.bytes;
+    }
   }
   private async rest(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<unknown> {
     return (await this.request(this.base + path, method, body)).json;
@@ -283,6 +376,15 @@ export class GitHubRepository implements Repository {
     const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
     return { id, owner, name, branch: this.options.branch };
+  }
+  /**
+   * Read-only reachability check: the token can read the private repository
+   * and the configured branch exists. Two GETs, no blobs, no mutations. It
+   * cannot establish Contents write permission; only a publication does.
+   */
+  async checkAccess(): Promise<void> {
+    await this.identity();
+    await this.headOid();
   }
   async history(input: { path?: string; at?: string; page?: number }): Promise<FileHistoryPage> {
     if (input.path !== undefined) {
@@ -355,12 +457,17 @@ export class GitHubRepository implements Repository {
     this.remember(hash, { kind: "tree", items });
     return items;
   }
-  private async blob(hash: string, length: number): Promise<string> {
+  private knownBlob(hash: string, length: number): string | undefined {
     const cached = this.cached("blob", hash);
-    if (cached?.kind === "blob") {
-      if (cached.size !== length) throw new GitHubError("Blob identity or size mismatch");
-      return cached.data;
-    }
+    const known = cached?.kind === "blob" ? cached : this.retained.get(hash);
+    if (known === undefined) return undefined;
+    if (known.size !== length) throw new GitHubError("Blob identity or size mismatch");
+    return known.data;
+  }
+  private async blob(hash: string, length: number): Promise<string> {
+    return this.knownBlob(hash, length) ?? this.fetchBlob(hash, length);
+  }
+  private async fetchBlob(hash: string, length: number): Promise<string> {
     const blob = record(await this.rest(`/git/blobs/${hash}`));
     if (oid(blob.sha) !== hash || blob.encoding !== "base64" || size(blob.size) !== length) throw new GitHubError("Blob identity or size mismatch");
     const bytes = decode(string(blob.content), true);
@@ -416,21 +523,110 @@ export class GitHubRepository implements Repository {
       total += length;
       if (length > FILE_LIMIT || total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded");
     }
+    const sizes = new Map<string, number>();
+    for (const item of included) {
+      const length = size(item.size), known = sizes.get(item.sha);
+      if (known !== undefined && known !== length) throw new GitHubError("Blob identity or size mismatch");
+      sizes.set(item.sha, length);
+    }
+    const blobs = new Map<string, string>();
+    const missing: [string, number][] = [];
+    for (const [hash, length] of sizes) {
+      const known = this.knownBlob(hash, length);
+      if (known === undefined) missing.push([hash, length]); else blobs.set(hash, known);
+    }
+    const paths = new Map<string, string[]>();
+    for (const item of included) paths.set(item.sha, [...paths.get(item.sha) ?? [], item.path]);
+    const remote = await this.reuseLocal(missing, paths, blobs);
+    await this.download(value.oid, items, remote, paths, blobs);
     const files: Snapshot = Object.create(null);
     for (const item of included) {
       if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
-      files[item.path] = { oid: item.sha, mode: item.mode, data: await this.blob(item.sha, size(item.size)) };
+      const data = blobs.get(item.sha);
+      if (data === undefined) throw new GitHubError("Blob read incomplete");
+      files[item.path] = { oid: item.sha, mode: item.mode, data };
     }
+    this.retained = new Map(Array.from(sizes, ([hash, length]) => [hash, { data: blobs.get(hash) ?? "", size: length }]));
     return { oid: value.oid, treeOid: value.treeOid, files };
   }
-  async readCommit(hash: string): Promise<CommitSnapshot> {
-    const value = await this.getCommit(hash);
-    return this.snapshot(value, await this.tree(value.treeOid));
+  /** Reuses local files whose bytes hash to a missing blob; returns the blobs still missing. */
+  private async reuseLocal(missing: [string, number][], paths: Map<string, string[]>, into: Map<string, string>): Promise<[string, number][]> {
+    const readLocal = this.options.readLocal;
+    if (!readLocal || missing.length === 0) return missing;
+    const remaining: [string, number][] = [];
+    await pool(missing, LOCAL_CONCURRENCY, async ([hash, length]) => {
+      for (const path of paths.get(hash) ?? []) {
+        const bytes = await readLocal(path, length);
+        if (bytes instanceof Uint8Array && await this.accept(hash, length, bytes, into)) return;
+      }
+      remaining.push([hash, length]);
+    });
+    return remaining;
   }
+  /** Records `bytes` when they are exactly the blob; false for any mismatch. */
+  private async accept(hash: string, length: number, bytes: Uint8Array, into: Map<string, string>): Promise<boolean> {
+    if (bytes.length !== length || await gitBlobOid(bytes) !== hash) return false;
+    checkLfs(bytes);
+    const data = encodeGitData(bytes);
+    this.remember(hash, { kind: "blob", size: length, data });
+    into.set(hash, data);
+    return true;
+  }
+  /**
+   * Fetches missing blobs: from the commit's zipball when many are missing,
+   * then per blob for anything the archive lacked or got wrong. Malformed,
+   * oversized or 5xx archives fall back; auth failures, other 4xx statuses and
+   * rate limits propagate.
+   */
+  private async download(commitOid: string, items: TreeItem[], missing: [string, number][], paths: Map<string, string[]>, into: Map<string, string>): Promise<void> {
+    if (missing.length === 0) return;
+    let done = 0;
+    this.progress(0, missing.length);
+    const treeBytes = items.reduce((sum, item) => sum + (item.size ?? 0), 0);
+    if (this.options.transport.requestArchive && missing.length >= ARCHIVE_THRESHOLD && treeBytes <= ARCHIVE_LIMIT) {
+      const wanted = new Map<string, number>();
+      for (const [hash, length] of missing) for (const path of paths.get(hash) ?? []) wanted.set(path, length);
+      let files: Map<string, Uint8Array> | undefined;
+      try { files = selectArchiveFiles(await this.archive(commitOid), wanted); }
+      catch (error) {
+        const unavailable = error instanceof GitHubError && error.retryAt === undefined && error.status !== undefined && error.status >= 500;
+        if (!(error instanceof ArchiveError || unavailable)) throw error;
+      }
+      if (files) {
+        const remaining: [string, number][] = [];
+        for (const [hash, length] of missing) {
+          let found = false;
+          for (const path of paths.get(hash) ?? []) {
+            const bytes = files.get(path);
+            if (bytes && await this.accept(hash, length, bytes, into)) { found = true; break; }
+          }
+          if (found) this.progress(++done, missing.length); else remaining.push([hash, length]);
+        }
+        missing = remaining;
+      }
+    }
+    const total = done + missing.length;
+    await pool(missing, READ_CONCURRENCY, async ([hash, length]) => {
+      into.set(hash, await this.fetchBlob(hash, length));
+      this.progress(++done, total);
+    });
+  }
+  private progress(done: number, total: number): void {
+    try { this.options.onReadProgress?.(done, total); } catch { /* Display only. */ }
+  }
+  private async read(hash: string, rules = this.ruleVersion): Promise<CommitSnapshot> {
+    const value = await this.getCommit(hash);
+    const items = await this.tree(value.treeOid);
+    const result = await this.snapshot(value, items, rules);
+    // Blobs of a large snapshot can push its own commit and tree out of the LRU.
+    this.remember(hash, { kind: "commit", value });
+    this.remember(value.treeOid, { kind: "tree", items });
+    return result;
+  }
+  readCommit(hash: string): Promise<CommitSnapshot> { return this.read(hash); }
   async readCommitForScope(hash: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot> {
     if (rules !== "visible-only" && rules !== this.ruleVersion) throw new GitHubError("Unsupported historical scope read");
-    const value = await this.getCommit(hash);
-    return this.snapshot(value, await this.tree(value.treeOid), rules);
+    return this.read(hash, rules);
   }
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
     oid(ancestor); oid(descendant);

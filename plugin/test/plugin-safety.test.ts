@@ -30,7 +30,7 @@ async function bundle(name: string) {
     plugins: [{ name: "host-boundaries", setup(build) {
       build.onResolve({ filter: /^obsidian$/ }, () => ({ path: hostModule, external: true }));
       build.onResolve({ filter: /^\.\/git-sync\/github$/ }, () => ({ path: "github", namespace: "host" }));
-      build.onLoad({ filter: /.*/, namespace: "host" }, () => ({ contents: `export class GitHubRepository { constructor(options) { globalThis.safetyOptions = options; return { ...globalThis.safetyRepository.device(options.installation), history: (...args) => globalThis.safetyRepository.history(...args) }; } }` }));
+      build.onLoad({ filter: /.*/, namespace: "host" }, () => ({ contents: `export class GitHubRepository { constructor(options) { globalThis.safetyOptions = options; return { ...globalThis.safetyRepository.device(options.installation), history: (...args) => globalThis.safetyRepository.history(...args), checkAccess: async () => { globalThis.safetyAccessOptions = options; await globalThis.safetyAccess?.(options); } }; } }` }));
     } }],
   });
   return loadBundle(outfile) as BundleApi;
@@ -615,4 +615,103 @@ test("Start syncing adopts an existing vault after review, preserving Git metada
   assert.equal(kept?.[1], "ref: refs/heads/main\n");
   assert.equal(new TextDecoder().decode(host.docs.get("a.md")?.data), "base");
   await plugin.assertSingleWriter();
+});
+
+function accessHost() {
+  const host = harness(), secrets = new Map<string, string>([["secret", "old"]]);
+  host.app.secretStorage = Object.assign(host.app.secretStorage, {
+    getSecret: (id: string) => secrets.get(id) ?? null,
+    setSecret: (id: string, value: string) => { secrets.set(id, value); },
+  });
+  return { host, secrets };
+}
+function rejectWith(status: number | undefined, message: string) {
+  Reflect.set(globalThis, "safetyAccess", async () => { throw Object.assign(new Error(message), { name: "GitHubError", status }); });
+}
+const accessOptions = () => Reflect.get(globalThis, "safetyAccessOptions") as ConstructorParameters<typeof GitHubRepository>[0];
+
+test("a draft access check uses the typed repository and token without saving or reporting progress", async () => {
+  loaded.useRepository(await MemoryRepository.create({ "a.md": await entryFromText("base") }));
+  const { host } = accessHost(), plugin = host.create();
+  Reflect.set(globalThis, "safetyAccess", undefined);
+  await plugin.checkAccess({ owner: "someone", repository: "notes", branch: "dev", token: "typed" });
+  const options = accessOptions();
+  assert.deepEqual([options.owner, options.name, options.branch, await options.token()], ["someone", "notes", "dev", "typed"]);
+  assert.equal(options.onReadProgress, undefined);
+  assert.equal(plugin.settings.secretId, "secret");
+  rejectWith(401, "GitHub API request rejected (HTTP 401)");
+  await assert.rejects(plugin.checkAccess({ ...settings, token: "bad" }), /rejected this token/);
+  rejectWith(404, "Unsupported enrollment: branch missing or repository empty/unborn");
+  await assert.rejects(plugin.checkAccess(settings), /Branch "main" wasn't found/);
+  rejectWith(404, "GitHub API request rejected (HTTP 404)");
+  await assert.rejects(plugin.checkAccess(settings), /can't see me\/vault/);
+  assert.deepEqual(plugin.activity, {});
+  Reflect.set(globalThis, "safetyAccess", undefined);
+});
+
+test("a replacement token is saved under a fresh key only after it verifies; a failure keeps the working token", async () => {
+  const { plugin } = await setup();
+  const secrets = new Map<string, string>([["secret", "old"]]);
+  plugin.app.secretStorage = Object.assign(plugin.app.secretStorage, {
+    getSecret: (id: string) => secrets.get(id) ?? null,
+    setSecret: (id: string, value: string) => { secrets.set(id, value); },
+  });
+  rejectWith(401, "GitHub API request rejected (HTTP 401)");
+  await assert.rejects(plugin.replaceToken(" wrong "), /rejected this token/);
+  assert.equal(plugin.settings.secretId, "secret");
+  assert.deepEqual([...secrets.keys()], ["secret"]);
+  Reflect.set(globalThis, "safetyAccess", undefined);
+  assert.equal(await plugin.replaceToken("stale", () => false), false);
+  assert.deepEqual([...secrets.keys()], ["secret"]);
+  assert.equal(await plugin.replaceToken(" fresh "), true);
+  assert.equal(await accessOptions().token(), "fresh");
+  const first = plugin.settings.secretId;
+  assert.match(first, /^github-vault-sync-token-[0-9a-f-]{36}$/);
+  assert.equal(secrets.get(first), "fresh");
+  assert.equal(secrets.get("secret"), "old");
+  assert.equal((plugin.app as unknown as { savedSettings: { secretId: string } }).savedSettings.secretId, first);
+  assert.equal(await loaded.options().token(), "fresh");
+  assert.equal(await plugin.replaceToken("newer"), true);
+  assert.notEqual(plugin.settings.secretId, first);
+  assert.equal(secrets.get(first), "fresh");
+  assert.ok(plugin.activity.checkedAt);
+});
+
+test("access health records rejection, ignores being offline, and clears on the next successful sync", async () => {
+  const { plugin } = await setup();
+  rejectWith(undefined, "GitHub transport failed; request outcome may be unknown");
+  await plugin.verifyAccess();
+  assert.equal(plugin.activity.problem, undefined);
+  Reflect.set(globalThis, "safetyAccess", async () => { throw Object.assign(new Error("GitHub rate limit; schedule a later attempt"), { status: 403, retryAt: Date.now() + 60_000 }); });
+  await plugin.verifyAccess();
+  assert.equal(plugin.activity.problem, undefined, "rate limiting is not a rejected token");
+  await assert.rejects(plugin.checkAccess(settings), /limiting requests/);
+  rejectWith(403, "GitHub API request rejected (HTTP 403)");
+  await assert.rejects(plugin.checkAccess(settings), /Contents read and write/);
+  rejectWith(401, "GitHub API request rejected (HTTP 401)");
+  await plugin.verifyAccess();
+  assert.match(plugin.activity.problem ?? "", /rejected this token/);
+  Reflect.set(globalThis, "safetyAccess", undefined);
+  await plugin.syncOnce();
+  const activity = plugin.activity;
+  assert.equal(activity.problem, undefined);
+  assert.ok(activity.syncedAt && activity.checkedAt && activity.syncedAt === activity.checkedAt);
+});
+
+test("an access check that finishes after the token was replaced cannot record the old token's failure", async () => {
+  const { plugin } = await setup();
+  const secrets = new Map<string, string>([["secret", "old"]]);
+  plugin.app.secretStorage = Object.assign(plugin.app.secretStorage, {
+    getSecret: (id: string) => secrets.get(id) ?? null,
+    setSecret: (id: string, value: string) => { secrets.set(id, value); },
+  });
+  const gate = deferred();
+  Reflect.set(globalThis, "safetyAccess", async () => { await gate.promise; throw Object.assign(new Error("GitHub API request rejected (HTTP 401)"), { status: 401 }); });
+  const stale = plugin.verifyAccess();
+  Reflect.set(globalThis, "safetyAccess", undefined);
+  assert.equal(await plugin.replaceToken("fresh"), true);
+  const verified = plugin.activity;
+  gate.resolve(); await stale;
+  assert.deepEqual(plugin.activity, verified);
+  assert.equal(plugin.activity.problem, undefined);
 });

@@ -1,0 +1,29 @@
+{
+  "repository": "your-name/notes",
+  "commit": "2cd6f1489cada22340161e9682e21ef67f4bacde",
+  "files": 652,
+  "existing": {
+    "requests": 6,
+    "blobs": 2,
+    "archives": 0,
+    "errors": 0,
+    "localReads": 633
+  },
+  "unchangedHead": {
+    "requests": 1,
+    "blobs": 0,
+    "archives": 0,
+    "errors": 0,
+    "localReads": 0
+  },
+  "coldArchive": {
+    "requests": 5,
+    "blobs": 1,
+    "archives": 1,
+    "errors": 0,
+    "localReads": 0
+  },
+  "byteIdentical": true,
+  "writes": 0,
+  "scope": "One read-only Node transport run; not an Android latency measurement"
+}

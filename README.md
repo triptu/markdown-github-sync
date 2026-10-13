@@ -25,7 +25,7 @@ npm run package
 Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` into `<test-vault>/.obsidian/plugins/github-vault-sync/`. The archive is `dist/github-vault-sync.zip`. Enable community plugins and **GitHub Vault Sync**.
 
 1. Open your existing vault and turn off the old sync plugin in **Settings → Community plugins**.
-2. In **GitHub Vault Sync**, enter your repository (`owner/name` or its GitHub URL), branch and access token. The token needs Contents read/write and Metadata read for that private repository.
+2. Open **GitHub Vault Sync**. The repository and current upstream branch are filled from this vault's `.git` folder when available. Paste your access token into the masked field; access is checked automatically. The token needs Contents read/write and Metadata read for that private repository. Use **Copy link** to create a token in your browser.
 3. Expand **Commit messages** if you want to change the device name, message or date format. A preview shows the result. The default uses local device time, like `vault backup Mac (3): 14th Oct, 2026 03:40:04`. `{{device}}`, `{{count}}`, `{{date}}` and the old Git plugin's `{{hostname}}` / `{{numFiles}}` aliases work.
 4. Click **Connect**, review the first sync, then **Start syncing**. Existing notes stay in this vault. If it has an ordinary `.git` folder, the plugin keeps that folder under `.git-vault-sync/previous-git/<id>/dot-git`; it no longer runs as a local Git checkout. No force push or Git history rewrite occurs.
 5. Use **Sync now**, **Sync status**, **Sync history** or **File history** from the command palette. Automatic sync runs while Obsidian is open. Sync history shows repository commits through this device's last synced version.
@@ -33,6 +33,10 @@ Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` 
 Install and connect each device separately. Copy only the three plugin files, not device journals or app-local storage. Android installation uses the same `.obsidian/plugins/github-vault-sync` folder. Recovery tools are available in Sync status and Advanced settings.
 
 The saved Git folder is a snapshot from the switch, not a continuously updated backup. To return to terminal Git later, disable this plugin and reconcile that saved checkout with GitHub and your current notes before enabling another sync tool.
+
+Once connected, settings shows the current sync status, last successful sync and last verified repository access. **Sync now** uploads and downloads in one operation. Automatic sync runs shortly after saved edits and checks GitHub every five minutes while Obsidian is open. To replace a token, paste it under Advanced; it is checked before replacing the working token.
+
+Downloads reuse local files after verifying their Git blob hashes, including after a restart. Large initial downloads use a ZIP of the exact GitHub commit, checked against its tree; small changes fetch only missing blobs. An unchanged head needs no file downloads. ZIP extraction happens in memory, never over your notes. Files omitted or transformed by Git archive attributes are fetched separately when needed.
 
 ## Conflicts and recovery
 

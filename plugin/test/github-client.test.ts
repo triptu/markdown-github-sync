@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { zipSync } from "fflate";
 import { GitHubError, GitHubRepository, encodeGitData, gitBlobOid } from "../src/git-sync/github";
 import { ScopeError } from "../src/git-sync/scope";
-import type { GitHubRequest, GitHubResponse, GitHubTransport } from "../src/git-sync/github";
+import type { GitHubBinaryResponse, GitHubRequest, GitHubResponse, GitHubTransport } from "../src/git-sync/github";
 import type { Changes, Entry, Snapshot } from "../src/git-sync/contracts";
 
 function hash(kind: string, bytes: Uint8Array): string {
@@ -180,6 +181,75 @@ test("577-file polling reuses verified objects and preparation reuses the parent
   const delta = await repo.head();
   assert.equal(delta.files["notes/42.md"].data, file("remote changed").data);
   assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 });
+});
+function trackBlobReads(api: FakeGitHub): { maximum: () => number } {
+  const original = api.request.bind(api);
+  let active = 0, maximum = 0;
+  api.request = async request => {
+    const read = request.method === "GET" && request.url.includes("/git/blobs/");
+    if (read) { active++; maximum = Math.max(maximum, active); await new Promise<void>(resolve => setImmediate(resolve)); }
+    try { return await original(request); } finally { if (read) active--; }
+  };
+  return { maximum: () => maximum };
+}
+test("657-file first read downloads at most four blobs at once and reports progress", async () => {
+  const initial = Object.fromEntries(Array.from({ length: 657 }, (_, i) => [`notes/${i}.md`, file(`note ${i}`)]));
+  const api = new FakeGitHub(initial), tracker = trackBlobReads(api), progress: [number, number][] = [];
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, onReadProgress: (done, total) => { progress.push([done, total]); } });
+  const head = await repo.head();
+  assert.equal(Object.keys(head.files).length, 657);
+  assert.equal(tracker.maximum(), 4);
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 657, refs: 1 });
+  assert.deepEqual(progress, Array.from({ length: 658 }, (_, i) => [i, 657]));
+  api.requests = []; progress.length = 0;
+  assert.deepEqual(await repo.head(), head);
+  assert.deepEqual(objectGets(api), { commits: 0, trees: 0, blobs: 0, refs: 1 });
+  assert.deepEqual(progress, [], "no progress when nothing downloads");
+});
+test("a failed blob read rejects without a partial snapshot and stops starting new reads", async () => {
+  const initial = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`n${i}.md`, file(`note ${i}`)]));
+  const api = new FakeGitHub(initial), bad = file("note 10").oid;
+  trackBlobReads(api);
+  api.intercept = r => r.url.endsWith(`/git/blobs/${bad}`) ? response({ message: "boom" }, 500) : undefined;
+  const repo = client(api);
+  await assert.rejects(repo.head(), error => error instanceof GitHubError && error.status === 500);
+  const attempted = objectGets(api).blobs;
+  assert.ok(attempted < 40, `stopped after failure (${attempted} reads)`);
+  api.intercept = undefined; api.requests = [];
+  const head = await repo.head();
+  assert.equal(Object.keys(head.files).length, 40);
+  assert.equal(objectGets(api).blobs, 40 - (attempted - 1), "verified blobs from the failed attempt are reused");
+});
+test("a snapshot over the LRU budget polls with one ref read, resists mutation and still sees remote changes", async () => {
+  // 9 x 6 MiB = 54 MiB decoded, about 144 MiB of retained base64 accounting.
+  const initial = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`large/${i}.bin`, file(Buffer.alloc(6 * 1024 * 1024, i))]));
+  const api = new FakeGitHub(initial), repo = client(api);
+  const first = await repo.head();
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 9, refs: 1 });
+  first.files["large/0.bin"].data = file("forged").data;
+  for (let i = 0; i < 3; i++) {
+    api.requests = [];
+    const again = await repo.head();
+    assert.equal(again.files["large/0.bin"].data, initial["large/0.bin"].data);
+    assert.deepEqual(objectGets(api), { commits: 0, trees: 0, blobs: 0, refs: 1 });
+  }
+  api.head = api.addCommit({ ...initial, "large/3.bin": file("remote edit") }, api.head);
+  api.requests = [];
+  const changed = await repo.head();
+  assert.equal(changed.oid, api.head);
+  assert.equal(changed.files["large/3.bin"].data, file("remote edit").data);
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 });
+});
+test("checkAccess is two fresh GETs with no blob reads or mutations, and surfaces auth and branch failures", async () => {
+  const api = new FakeGitHub(), repo = client(api);
+  await repo.checkAccess();
+  assert.equal(api.requests.length, 2);
+  assert.ok(api.requests.every(r => r.method === "GET" && !r.url.includes("/git/blobs/")));
+  api.intercept = r => r.url.includes("/git/ref/heads/") ? response({ message: "Not Found" }, 404) : undefined;
+  await assert.rejects(repo.checkAccess(), /branch missing/);
+  api.intercept = () => response({ message: "Bad credentials" }, 401);
+  await assert.rejects(repo.checkAccess(), error => error instanceof GitHubError && error.status === 401);
+  assert.equal(api.requests.filter(r => r.method === "POST").length, 0);
 });
 test("one-file deltas fetch only the new blob, even across an unrelated head and force rewind", async () => {
   const initial = { "a.md": file("a"), "b.md": file("b"), "run.sh": file("run") };
@@ -965,4 +1035,173 @@ test("sync history lists all files and pins pagination without a path filter", a
   assert.equal(first.entries[0].message, "vault backup mac (1): 6th Oct, 2026 13:08:19");
   api.head = api.addCommit({ "note.md": file("changed") }, api.head);
   assert.equal((await repo.history({ at: first.at, page: 2 })).entries.length, 1);
+});
+
+/** Serves real deflated zipballs of exact commits, like api.github.com's 302 to codeload. */
+class ArchiveGitHub extends FakeGitHub {
+  archives: GitHubRequest[] = [];
+  redirect = false;
+  /** Edits the archived files (repository path -> bytes) before zipping. */
+  shape?: (files: Record<string, Uint8Array>) => void;
+  archiveIntercept?: (request: GitHubRequest) => GitHubBinaryResponse | undefined;
+  async requestArchive(request: GitHubRequest): Promise<GitHubBinaryResponse> {
+    this.archives.push(request);
+    const intercepted = this.archiveIntercept?.(request); if (intercepted) return intercepted;
+    const url = new URL(request.url);
+    if (url.hostname === "api.github.com" && this.redirect) return { status: 302, headers: { Location: `https://codeload.github.com/owner/repo/legacy.zip/${url.pathname.split("/").pop()}?token=SHORT` }, bytes: new Uint8Array() };
+    const sha = url.pathname.split("/").pop() ?? "", commit = this.commits.get(sha);
+    if (!commit) return { status: 404, headers: {}, bytes: new Uint8Array() };
+    const files: Record<string, Uint8Array> = {};
+    for (const [path, entry] of this.files.get(commit.tree.sha) ?? []) files[path] = Buffer.from(entry.data, "base64");
+    this.shape?.(files);
+    const zip: Record<string, Uint8Array> = {};
+    for (const [path, bytes] of Object.entries(files)) zip[`owner-repo-${sha.slice(0, 7)}/${path}`] = bytes;
+    return { status: 200, headers: { "content-type": "application/zip" }, bytes: zipSync(zip, { level: 6 }) };
+  }
+}
+function vault(count: number, prefix = "note"): Snapshot {
+  return Object.fromEntries(Array.from({ length: count }, (_, i) => [`notes/${i}.md`, file(`${prefix} ${i}\n${"body ".repeat(i)}`)]));
+}
+function archiveClient(api: FakeGitHub, local?: Map<string, Uint8Array>, reads?: string[]): GitHubRepository {
+  return new GitHubRepository({
+    owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, now: () => 1_000_000,
+    ...(local ? { readLocal: async (path: string, expectedSize: number) => { reads?.push(path); const bytes = local.get(path); return bytes && bytes.length === expectedSize ? bytes : null; } } : {})
+  });
+}
+function localCopy(snapshot: Snapshot): Map<string, Uint8Array> {
+  return new Map(Object.entries(snapshot).map(([path, entry]) => [path, Buffer.from(entry.data, "base64")]));
+}
+test("an empty vault's first read is one zipball of the pinned commit, verified against the tree", async () => {
+  const initial = { ...vault(60), ".obsidian/app.json": file("{}") };
+  const api = new ArchiveGitHub(initial), progress: [number, number][] = [];
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, readLocal: async () => null, onReadProgress: (done, total) => { progress.push([done, total]); } });
+  const head = await repo.head();
+  assert.equal(Object.keys(head.files).length, 60);
+  for (const [path, entry] of Object.entries(vault(60))) assert.deepEqual(head.files[path], entry);
+  assert.equal(api.archives.length, 1);
+  assert.equal(new URL(api.archives[0].url).pathname, `/repos/owner/repo/zipball/${api.head}`);
+  assert.equal(api.archives[0].headers.Authorization, "Bearer t");
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 0, refs: 1 });
+  assert.deepEqual(progress, Array.from({ length: 61 }, (_, i) => [i, 60]));
+  api.requests = []; api.archives = [];
+  assert.deepEqual(await repo.head(), head);
+  assert.deepEqual(objectGets(api), { commits: 0, trees: 0, blobs: 0, refs: 1 });
+  assert.equal(api.archives.length, 0, "no zipball for an unchanged tree");
+});
+test("a redirect to codeload is followed without credentials; any other host is refused and blobs are read instead", async () => {
+  const api = new ArchiveGitHub(vault(40)), repo = archiveClient(api);
+  api.redirect = true;
+  await repo.head();
+  assert.equal(api.archives.length, 2);
+  assert.equal(new URL(api.archives[1].url).hostname, "codeload.github.com");
+  assert.equal(api.archives[1].headers.Authorization, undefined);
+  assert.equal(objectGets(api).blobs, 0);
+  const evil = new ArchiveGitHub(vault(40));
+  evil.archiveIntercept = r => new URL(r.url).hostname === "api.github.com" ? { status: 302, headers: { location: "https://evil.example/zip" }, bytes: new Uint8Array() } : undefined;
+  assert.equal(Object.keys((await archiveClient(evil).head()).files).length, 40);
+  assert.equal(evil.archives.length, 1);
+  assert.equal(objectGets(evil).blobs, 40);
+});
+test("export-ignore, export-subst and wrong-size archive members fall back to single blobs", async () => {
+  const initial = vault(40), api = new ArchiveGitHub(initial);
+  api.shape = files => {
+    delete files["notes/1.md"];
+    files["notes/2.md"] = Buffer.from("$Format:%H$ expanded");
+    const same = Buffer.from(files["notes/3.md"]); same[0] ^= 1; files["notes/3.md"] = same;
+    files["notes/4.md"] = Buffer.alloc(9 * 1024 * 1024, 1);
+  };
+  const head = await archiveClient(api).head();
+  for (const [path, entry] of Object.entries(initial)) assert.deepEqual(head.files[path], entry);
+  const fetched = api.requests.filter(r => r.url.includes("/git/blobs/")).map(r => r.url.split("/").pop());
+  assert.deepEqual(fetched.sort(), [1, 2, 3, 4].map(i => initial[`notes/${i}.md`].oid).sort());
+});
+test("duplicate, truncated, oversized or failed archives fall back to blobs; auth and rate limits do not", async () => {
+  const cases: [string, (api: ArchiveGitHub) => void][] = [
+    ["duplicate", api => { api.archiveIntercept = () => { const zip = Buffer.from(zipSync({ "r/notes/0.md": Buffer.from("note 0\n"), "r/notes/X.md": Buffer.from("forged\n") }, { level: 0 })); for (let i = zip.indexOf("notes/X.md"); i >= 0; i = zip.indexOf("notes/X.md", i + 1)) zip.write("notes/0.md", i); return { status: 200, headers: {}, bytes: zip }; }; }],
+    ["truncated", api => { const original = api.requestArchive.bind(api); api.requestArchive = async r => { const result = await original(r); return { ...result, bytes: result.bytes.subarray(0, result.bytes.length - 100) }; }; }],
+    ["oversized", api => { api.archiveIntercept = () => ({ status: 200, headers: {}, bytes: new Uint8Array(256 * 1024 * 1024 + 1) }); }],
+    ["server error", api => { api.archiveIntercept = () => ({ status: 502, headers: {}, bytes: new Uint8Array() }); }],
+    ["transport", api => { api.requestArchive = async () => { throw new Error("socket SHOULD_NOT_ESCAPE"); }; }],
+  ];
+  for (const [name, arrange] of cases) {
+    const initial = vault(40), api = new ArchiveGitHub(initial);
+    arrange(api);
+    const head = await archiveClient(api).head();
+    for (const [path, entry] of Object.entries(initial)) assert.deepEqual(head.files[path], entry, name);
+    assert.equal(objectGets(api).blobs, 40, name);
+  }
+  for (const [status, headers, check] of [
+    [401, {}, (e: GitHubError) => e.status === 401 && e.retryAt === undefined],
+    [403, {}, (e: GitHubError) => e.status === 403 && e.retryAt === undefined],
+    [404, {}, (e: GitHubError) => e.status === 404],
+    [429, { "retry-after": "120" }, (e: GitHubError) => e.retryAt === 1_000_000 + 120_000],
+    [403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "5000" }, (e: GitHubError) => e.retryAt === 5_000_000],
+  ] as [number, Record<string, string>, (e: GitHubError) => boolean][]) {
+    const api = new ArchiveGitHub(vault(40));
+    api.archiveIntercept = () => ({ status, headers, bytes: new Uint8Array() });
+    await assert.rejects(archiveClient(api).head(), error => error instanceof GitHubError && check(error) && !error.message.includes("SHOULD_NOT_ESCAPE"));
+    assert.equal(objectGets(api).blobs, 0, `HTTP ${status} is not masked by blob reads`);
+  }
+});
+test("existing vault reuses verified local bytes and downloads only changed or unreadable files without writing", async () => {
+  const initial = vault(651), api = new ArchiveGitHub(initial), local = localCopy(initial), reads: string[] = [];
+  local.set("notes/7.md", Buffer.from("local edit, same size?"));
+  const edited = Buffer.from(local.get("notes/8.md") ?? []); edited[0] ^= 1; local.set("notes/8.md", edited);
+  local.delete("notes/9.md");
+  const before = new Map(local);
+  const head = await archiveClient(api, local, reads).head();
+  for (const [path, entry] of Object.entries(initial)) assert.deepEqual(head.files[path], entry);
+  assert.equal(reads.length, 651);
+  assert.equal(api.archives.length, 0, "three missing blobs stay below the archive threshold");
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 3, refs: 1 });
+  assert.deepEqual(local, before, "local candidates are only read");
+});
+test("many local mismatches use the archive; a matching tree with an identical blob at two paths reads the first match", async () => {
+  const initial = { ...vault(50), "copy.md": file("note 0\n") }, api = new ArchiveGitHub(initial);
+  const local = localCopy(initial);
+  for (let i = 10; i < 50; i++) local.set(`notes/${i}.md`, Buffer.from(`stale ${i}`));
+  local.delete("notes/0.md");
+  const head = await archiveClient(api, local).head();
+  for (const [path, entry] of Object.entries(initial)) assert.deepEqual(head.files[path], entry);
+  assert.equal(api.archives.length, 1);
+  assert.equal(objectGets(api).blobs, 0);
+});
+test("after a restart, a one-file remote change costs one blob and the rest is verified locally", async () => {
+  const initial = vault(651), api = new ArchiveGitHub(initial);
+  const synced = await archiveClient(api).head();
+  assert.equal(api.archives.length, 1);
+  const local = localCopy(synced.files);
+  api.head = api.addCommit({ ...initial, "notes/42.md": file("remote change") }, api.head);
+  api.requests = []; api.archives = [];
+  const restarted = archiveClient(api, local), after = await restarted.head();
+  assert.equal(after.files["notes/42.md"].data, file("remote change").data);
+  assert.equal(api.archives.length, 0);
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 });
+  api.head = api.addCommit({ ...initial, "notes/42.md": file("again") }, api.head);
+  api.requests = [];
+  await restarted.head();
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 }, "in-memory delta, no local rereads needed");
+});
+test("a failed read publishes no partial snapshot, and readLocal failures fail the read", async () => {
+  const initial = vault(40), api = new ArchiveGitHub(initial), bad = initial["notes/5.md"].oid;
+  api.shape = files => { delete files["notes/5.md"]; };
+  api.intercept = r => r.url.endsWith(`/git/blobs/${bad}`) ? response({ message: "boom" }, 500) : undefined;
+  const repo = archiveClient(api);
+  await assert.rejects(repo.head(), error => error instanceof GitHubError && error.status === 500);
+  api.intercept = undefined; api.requests = []; api.archives = [];
+  const head = await repo.head();
+  assert.deepEqual(head.files["notes/5.md"], initial["notes/5.md"]);
+  assert.deepEqual([api.archives.length, objectGets(api).blobs], [0, 1], "verified archive blobs were retained, nothing else refetched");
+  const fenced = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: new ArchiveGitHub(initial), token: async () => "t", installation: INSTALLATION, readLocal: async () => { throw new Error("vault owner changed"); } });
+  await assert.rejects(fenced.head(), /vault owner changed/);
+});
+test("the root .gitignore establishing scope is read on its own before the archive", async () => {
+  const initial: Snapshot = { ...vault(40), ".gitignore": file("private/\n"), "private/secret.md": file("x"), ".obsidian/app.json": file("{}") };
+  const api = new ArchiveGitHub(initial);
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, scopeRules: "config/1" });
+  const head = await repo.head();
+  assert.equal(head.files["private/secret.md"], undefined);
+  assert.deepEqual(head.files["notes/3.md"], initial["notes/3.md"]);
+  assert.equal(objectGets(api).blobs, 1);
+  assert.equal(api.archives.length, 1);
 });
