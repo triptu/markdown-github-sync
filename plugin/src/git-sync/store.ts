@@ -24,6 +24,22 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+async function mapObjects<T, R>(items: T[], operation: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const failures: unknown[] = [];
+  await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+    while (failures.length === 0 && next < items.length) {
+      const index = next++;
+      try { results[index] = await operation(items[index]); }
+      catch (error) { failures.push(error); }
+    }
+  }));
+  // Every started object write has settled before the journal queue can advance.
+  if (failures.length) throw failures[0];
+  return results;
+}
+
 /** Append-only, verified journal. A corrupt latest record blocks recovery instead of silently using an older checkpoint. */
 export class FileJournalStore implements DurableStore {
   private sequence = 0;
@@ -82,13 +98,22 @@ export class FileJournalStore implements DurableStore {
         out[key] = { journalBlob: hash };
       } else if (key === "blobs" && isObject(item)) {
         const references: Record<string, unknown> = Object.create(null);
-        for (const [oid, data] of Object.entries(item)) {
+        const pending = new Map<string, Promise<string>>();
+        const packed = await mapObjects(Object.entries(item), async ([oid, data]) => {
           if (typeof data !== "string")
             throw new Error("Invalid journal blob table");
-          const hash = await digest(data);
-          await this.put(`${this.directory}/objects/${hash}.json`, data);
-          references[oid] = { journalBlob: hash };
-        }
+          let object = pending.get(data);
+          if (!object) {
+            object = (async () => {
+              const hash = await digest(data);
+              await this.put(`${this.directory}/objects/${hash}.json`, data);
+              return hash;
+            })();
+            pending.set(data, object);
+          }
+          return { oid, hash: await object };
+        });
+        for (const { oid, hash } of packed) references[oid] = { journalBlob: hash };
         out[key] = references;
       } else out[key] = await this.pack(item);
     }
@@ -115,8 +140,15 @@ export class FileJournalStore implements DurableStore {
       return bytes;
     }
     const result: Record<string, unknown> = Object.create(null);
-    for (const [key, item] of Object.entries(value))
-      result[key] = await this.unpack(item);
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "blobs" && isObject(item)) {
+        const unpacked = await mapObjects(Object.entries(item), async ([oid, reference]) =>
+          ({ oid, bytes: await this.unpack(reference) }));
+        const blobs: Record<string, unknown> = Object.create(null);
+        for (const { oid, bytes } of unpacked) blobs[oid] = bytes;
+        result[key] = blobs;
+      } else result[key] = await this.unpack(item);
+    }
     return result;
   }
   load(): Promise<unknown> {

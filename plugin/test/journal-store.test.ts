@@ -2,6 +2,69 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FileJournalStore, type JournalFiles } from "../src/git-sync/store";
 const identity = "12345678-1234-1234-1234-123456789abc";
+
+test("parallel object verification remains bounded and detects later corruption", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  const state = { blobs: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`oid-${i}`, btoa(`content-${i}`)])) };
+  await store.save(state);
+  const read = files.read.bind(files);
+  let active = 0, peak = 0, reads = 0;
+  files.read = async path => {
+    if (!path.includes("/objects/")) return read(path);
+    active++; reads++; peak = Math.max(peak, active);
+    try { await new Promise(resolve => setTimeout(resolve, 2)); return await read(path); }
+    finally { active--; }
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), state);
+  assert.equal(reads, 12); assert.equal(peak, 4);
+  reads = 0;
+  await store.save({ ...state, revision: 1 });
+  assert.equal(reads, 12); assert.equal(active, 0);
+  const path = [...files.values.keys()].find(path => path.includes("/objects/"));
+  assert.ok(path); files.values.set(path, "corrupt");
+  await assert.rejects(store.load(), /checksum/);
+  await assert.rejects(store.save(state), /corrupt/);
+  assert.equal(active, 0);
+});
+
+test("failed parallel object writes drain before a queued save starts", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  await store.save({ phase: "baseline" });
+  const rename = files.rename.bind(files);
+  let active = 0, peak = 0, calls = 0;
+  files.rename = async (from, to) => {
+    if (!to.includes("/objects/")) { assert.equal(active, 0); return rename(from, to); }
+    const fail = calls++ === 0;
+    active++; peak = Math.max(peak, active);
+    try {
+      await new Promise(resolve => setTimeout(resolve, fail ? 1 : 10));
+      if (fail) throw undefined;
+      return await rename(from, to);
+    } finally { active--; }
+  };
+  const state = { blobs: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`oid-${i}`, btoa(`new-${i}`)])) };
+  const rejected = assert.rejects(store.save(state));
+  const next = store.save({ phase: "next" });
+  await rejected; assert.equal(active, 0);
+  await next; assert.ok(peak > 1 && peak <= 4);
+  assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), { phase: "next" });
+});
+
+test("duplicate blob bodies cannot race commits to the same immutable object", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  const rename = files.rename.bind(files);
+  let objectCommits = 0;
+  files.rename = async (from, to) => {
+    if (to.includes("/objects/")) {
+      objectCommits++; assert.equal(files.values.has(to), false);
+      await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    return rename(from, to);
+  };
+  const state = { blobs: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`oid-${i}`, btoa("same bytes")])) };
+  await store.save(state); assert.equal(objectCommits, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), state);
+});
 class Files implements JournalFiles {
   values = new Map<string, string>();
   folders = new Set<string>();
