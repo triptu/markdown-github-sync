@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-13T10:39:09+00:00",
+  "generatedAt": "2026-10-13T14:12:13+00:00",
   "title": "Design System: GitHub Sync Proposal",
   "extensions": {
-    "scope": "Standalone docs/github-sync-proposal.html proposal site only; not plugin UI, not an approved brand. Responsive layout verified at 390, 768, and 1440px.",
+    "scope": "Standalone proposal/documentation surfaces only (docs/github-sync-proposal.html, docs/assets/proposal.css, proposal.js). Not the Obsidian plugin UI. Implemented direction pending user feedback; not an approved brand. Mobile hero layout is provisional.",
     "colorMeta": {
       "paper": {
         "role": "neutral",
@@ -204,7 +204,7 @@
     "typographyMeta": {
       "display": {
         "displayName": "Display",
-        "purpose": "Hero h1 only."
+        "purpose": "Hero h1 only; closing em upright at 400 in #557446."
       },
       "headline": {
         "displayName": "Headline",
@@ -224,7 +224,7 @@
       },
       "label": {
         "displayName": "Label",
-        "purpose": "Diagram labels, captions, badges, phase steps."
+        "purpose": "Diagram labels, captions, badges, phase steps; tracking 0.04-0.1em by context."
       },
       "code": {
         "displayName": "Code",
@@ -267,6 +267,18 @@
         "name": "phone",
         "value": "max-width: 600px"
       }
+    ],
+    "fonts": [
+      {
+        "family": "DM",
+        "source": "docs/assets/dm-sans-{400,500,600,700}.woff2",
+        "license": "docs/assets/dm-sans-LICENSE.txt"
+      },
+      {
+        "family": "Newsreader",
+        "source": "docs/assets/newsreader-{400,500}.woff2",
+        "license": "docs/assets/newsreader-LICENSE.txt"
+      }
     ]
   },
   "components": [
@@ -295,78 +307,90 @@
       "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-choices{display:flex;gap:7px}.ds-choice{font:11px DM,'DM Sans',sans-serif;padding:8px 12px;border:1px solid #c9cebd;border-radius:5px;color:#213f35;background:#fffef9;cursor:pointer}.ds-choice:hover{background:#edf0e6}.ds-choice[aria-pressed=\"true\"]{border-color:#254f40;background:#254f40;color:#fffef9}.ds-choice:focus-visible{outline:3px solid #a36535;outline-offset:5px;}"
     },
     {
-      "name": "Demo Badge",
+      "name": "Decision Badge",
       "kind": "chip",
-      "refersTo": "badge-demo",
-      "description": "Amber label marking synthetic or draft content.",
-      "html": "<span class=\"ds-badge\">Synthetic example</span>",
+      "refersTo": "badge-decision",
+      "description": "Amber resolver badge for a pending decision ('1 decision needed').",
+      "html": "<span class=\"ds-badge\">1 decision needed</span>",
       "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-badge{display:inline-block;font:11px DM,'DM Sans',sans-serif;padding:3px 9px;background:#f4e1c9;color:#8e4a25;border-radius:4px}"
     },
     {
       "name": "Note Sheet",
       "kind": "card",
       "refersTo": "hero-map",
-      "description": "Depicted Markdown note on a green-wash map; the only shadowed element.",
-      "html": "<div class=\"ds-map\"><div class=\"ds-note\"><span class=\"ds-file\">Daily/2026-10-13.md</span><p>Call the plumber <mark>before Friday</mark>.</p><span class=\"ds-draft\">Local draft</span></div></div>",
+      "description": "White note sheet with sample note text on the green-wash hero map; the only shadowed element.",
+      "html": "<div class=\"ds-map\"><div class=\"ds-note\"><span class=\"ds-file\">Meeting.md</span><p>Meet on <mark>Tuesday.</mark><br>Bring the sketches.</p><span class=\"ds-draft\">Saved locally</span></div></div>",
       "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-map{background:#e5ebdf;border-radius:18px;padding:28px}.ds-note{background:#fffef9;padding:17px 15px 13px;border-radius:4px;box-shadow:0 6px 16px #0000000d}.ds-file{font-size:11px;color:#596554}.ds-note p{font:18px/1.4 Newsreader,Georgia,serif;margin:17px 0}.ds-note mark{background:#f4e1c9;color:#74401e;padding:2px}.ds-draft{font-size:11px;color:#8e4a25;text-transform:uppercase;letter-spacing:.06em}"
     },
     {
       "name": "Transaction Phase",
       "kind": "custom",
       "refersTo": null,
-      "description": "One column of the four-phase sync strip; authority phase is tinted.",
-      "html": "<div class=\"ds-phases\"><div class=\"ds-phase\"><span class=\"ds-step\">02</span><h3>Commit to GitHub</h3><p>The commit becomes the shared version.</p><span class=\"ds-state\">Authoritative</span></div><div class=\"ds-phase ds-auth\"><span class=\"ds-step\">03</span><h3>Pull on phone</h3><p>Phone fetches the committed tree.</p><span class=\"ds-state\">Shared</span></div></div>",
+      "description": "Two of the four sync phases; the Publish phase is tinted and its state is bold.",
+      "html": "<div class=\"ds-phases\"><div class=\"ds-phase\"><span class=\"ds-step\">2 / RECONCILE</span><h3>Compare three versions</h3><p>Base commit, local draft, and the latest GitHub snapshot.</p><span class=\"ds-state\">Ready to publish</span></div><div class=\"ds-phase ds-auth\"><span class=\"ds-step\">3 / PUBLISH</span><h3>Create the shared version</h3><p>Advance the branch only if its head still matches our plan.</p><span class=\"ds-state\">Accepted on GitHub</span></div></div>",
       "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-phases{display:grid;grid-template-columns:1fr 1fr;border-block:1px solid #d6d9ca;font-family:DM,'DM Sans',sans-serif}.ds-phase{padding:27px 23px 24px;border-right:1px solid #d6d9ca;display:flex;flex-direction:column}.ds-phase:last-child{border-right:0}.ds-auth{background:#e9eddf}.ds-step{font-size:11px;letter-spacing:.09em;color:#55614e;margin-bottom:26px}.ds-phase h3{font-size:19px;line-height:1.25;font-weight:500;margin:0 0 14px}.ds-phase p{font-size:13px;line-height:1.65;color:#55614e;margin:0 0 25px}.ds-state{font-size:11px;margin-top:auto;align-self:flex-start;border-bottom:1px solid #a7b594;padding-bottom:4px}.ds-auth .ds-state{font-weight:600}"
     },
     {
       "name": "Masthead Navigation",
       "kind": "nav",
       "refersTo": null,
-      "description": "Brand left, text links right, hairline below.",
-      "html": "<header class=\"ds-mast\"><a class=\"ds-brand\" href=\"#\">Vault Sync <span>proposal</span></a><nav><a href=\"#\">How it works</a><a href=\"#\">Conflicts</a><a href=\"#\">Evidence</a></nav></header>",
+      "description": "Branch icon and bold brand left, text links and external spec link right, hairline below.",
+      "html": "<header class=\"ds-mast\"><a class=\"ds-brand\" href=\"#\">Vault / <span>a sync proposal</span></a><nav><a href=\"#\">Architecture</a><a href=\"#\">Conflicts</a><a href=\"#\">Evidence</a></nav><a href=\"#\">Read the spec</a></header>",
       "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-mast{display:flex;align-items:center;justify-content:space-between;gap:30px;padding:30px 0;border-bottom:1px solid #d6d9ca;font:14px DM,'DM Sans',sans-serif;color:#213f35}.ds-mast a{color:inherit;text-decoration:none}.ds-brand{font-weight:700}.ds-brand span{font-weight:400;color:#55614e}.ds-mast nav{display:flex;gap:30px}.ds-mast a:hover{color:#9c522d}.ds-mast a:focus-visible{outline:3px solid #a36535;outline-offset:5px;}"
+    },
+    {
+      "name": "Commit History Card",
+      "kind": "card",
+      "refersTo": "commit-history",
+      "description": "Solid green Git history card; latest commit node fills pale lime and is tagged 'Accepted commit'.",
+      "html": "<div class=\"ds-hist\"><div class=\"ds-repo\">notes<small>private repository / main</small></div><div class=\"ds-commit ds-latest\"><i></i><div><strong>Update meeting note</strong><code>b08f3a2</code><span>Accepted commit</span></div></div><div class=\"ds-commit\"><i></i><div><strong>Add sketches</strong><code>c7e9d10</code></div></div></div>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-hist{background:#254f40;color:#fffef9;border-radius:12px;padding:20px 16px;font-family:DM,'DM Sans',sans-serif;max-width:260px}.ds-repo{font-size:14px;border-bottom:1px solid #537360;padding-bottom:18px;margin-bottom:23px}.ds-repo small{display:block;font-size:11px;color:#ced9c8;margin-top:3px}.ds-commit{position:relative;display:flex;gap:12px;padding-bottom:25px;font-size:11px}.ds-commit:not(:last-child):before{content:'';position:absolute;left:4px;top:13px;bottom:0;width:1px;background:#70916b}.ds-commit i{flex-shrink:0;width:9px;height:9px;border:1px solid #b5c9a9;border-radius:50%;margin-top:4px;z-index:1;background:#254f40}.ds-latest i{background:#d9e9a3;border-color:#d9e9a3}.ds-commit strong{display:block;font-weight:500}.ds-commit code{display:block;color:#cbdbc4;font:11px ui-monospace,monospace;margin-top:4px}.ds-commit span{display:inline-block;margin-top:7px;color:#e3efbb}"
     }
   ],
   "narrative": {
-    "northStar": "The Field Report",
-    "overview": "The page is a printed technical brief on warm paper: a serif editorial voice for headings, a quiet sans for explanation, and deep forest green for anything that represents committed, authoritative state. Amber marks what is local, unresolved, or synthetic. Density is moderate: generous section rhythm (104px) with compact 11–13px labels inside diagrams.\n\nDepth comes from tonal panels and hairline rules rather than shadows. Explanations are built from diagrams and concrete states (device-to-repo map, four-phase transaction strip, conflict resolver demo), not decorative imagery.",
+    "northStar": "The Editorial Field Guide",
+    "overview": "The page reads as a printed field guide to one mechanism: warm paper, forest-green ink, a literary serif for headings, and a quiet sans for explanation. It is a scroll narrative (hero diagram → four-phase transaction → conflict workspace → alternatives → evidence band → closing) inside a bounded 1240px column, with generous 104px section rhythm and compact 11–13px labels inside diagrams.\n\nExplanation comes from concrete depicted states, not decoration: sample note text (\"Meet on Tuesday.\"), a Git commit history with short hashes, a laptop-to-GitHub-to-phone map, and a central interactive conflict resolver. Every depicted state is synthetic and says so in words. Depth comes from tonal panels and hairline rules; the only shadow belongs to depicted paper.",
     "keyCharacteristics": [
-      "Warm off-white paper ground with green-ink text; light scheme only.",
-      "Newsreader serif headlines, DM Sans for everything else.",
-      "Green = committed/authoritative; amber = draft, conflict, or demo.",
-      "Hairline `line` rules divide content; tonal green panels group it.",
-      "Bounded 1240px container; reading paragraphs capped around 420–510px."
+      "Warm paper ground, green-ink text; light scheme only.",
+      "Newsreader serif for headings and depicted note text; DM Sans for everything else.",
+      "Solid green = committed GitHub authority or the selected action; amber = local, unresolved, or not yet real.",
+      "Hairline rules divide content; tonal green panels group it.",
+      "Bounded 1240px container; reading paragraphs capped around 420–510px.",
+      "Synthetic examples and the unreleased proposal status are labelled in plain words."
     ],
     "rules": [
       {
         "name": "The Authority Color Rule",
-        "body": "Solid green fill means \"this is the committed/shared version or the selected action.\" Don't use it for decoration.",
+        "body": "Solid green fill means \"the committed, shared version\" or \"the selected action\". Never decoration.",
         "section": "colors"
       },
       {
-        "name": "The Synthetic Is Amber Rule",
-        "body": "Demo, draft, and conflict states are labelled in amber so illustrative content is never mistaken for real vault data.",
+        "name": "The Amber Is Not Yet Shared Rule",
+        "body": "Amber marks things that are local, awaiting a decision, or only proposed. It never marks committed state.",
         "section": "colors"
       },
       {
         "name": "The Two Voices Rule",
-        "body": "Serif is for headings and for depicted note content; never for UI controls or labels.",
+        "body": "Serif is for headings and depicted note content; never for controls or labels.",
         "section": "typography"
       },
       {
         "name": "The Paper-Only Shadow Rule",
-        "body": "Shadows belong to depicted documents, not to UI panels or buttons.",
+        "body": "Shadows belong to depicted documents, never to UI panels or buttons.",
         "section": "elevation"
       }
     ],
     "dos": [
       "**Do** use forest green fill only for committed authority and selected actions.",
-      "**Do** label every synthetic example with amber demo/draft styling.",
-      "**Do** separate content with 1px `line` hairlines and tonal panels.",
+      "**Do** label every synthetic example and simulated outcome in words (\"Illustrative\", \"INTERACTIVE PROTOTYPE\", \"Simulation only\").",
+      "**Do** keep the proposal status visible (\"Proposed design · not installed in your vault\").",
+      "**Do** explain with sample note text and commit history rather than abstract boxes.",
+      "**Do** separate content with 1px hairlines and tonal panels.",
       "**Do** keep reading paragraphs within ~420–510px inside the 1240px container."
     ],
     "donts": [
-      "**Don't** treat these tokens as the Obsidian plugin's UI or an approved brand.",
+      "**Don't** apply these tokens to the Obsidian plugin UI or treat them as an approved brand.",
+      "**Don't** let a simulated state read as real sync or a released feature.",
       "**Don't** add shadows to panels or buttons; the paper-sheet shadow is the only one.",
       "**Don't** use Newsreader for controls, labels, or captions."
     ]
