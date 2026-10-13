@@ -46,6 +46,17 @@ function entryPreview(value: Entry | null): string {
           ? "\n[Preview truncated; full bytes retained]"
           : "");
 }
+function configurationEntryPreview(container: HTMLElement, value: Entry | null): void {
+  const preview = container.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
+  const decoded = value ? entryText(value) : null;
+  if (decoded !== null && decoded.length > 16000) {
+    new Setting(container).setDesc("The initial preview is shortened. Expand it to inspect every character before approving.")
+      .addButton(button => button.setButtonText("Show full text").onClick(() => {
+        preview.setText(decoded);
+        button.setDisabled(true).setButtonText("Full text shown");
+      }));
+  }
+}
 export default class GitVaultSync extends Plugin {
   settings: Settings = defaultSettings();
   session: SyncSession | null = null;
@@ -744,7 +755,7 @@ class ConfigurationModal extends Modal {
             const modal = new Modal(this.app);
             modal.contentEl.addClass("git-sync-panel");
             modal.contentEl.createEl("h2", { text: preview.path });
-            modal.contentEl.createEl("pre", { text: entryPreview(preview.entry), cls: "git-sync-preview" });
+            configurationEntryPreview(modal.contentEl, preview.entry);
             new Setting(modal.contentEl).addButton(approve => approve.setButtonText("Allow this version to publish").setCta().onClick(async () => {
               approve.setDisabled(true);
               try {
@@ -768,9 +779,9 @@ class ConfigurationModal extends Modal {
         const details = el.createEl("details");
         details.createEl("summary", { text: item.path });
         details.createEl("h4", { text: "Expected local version" });
-        details.createEl("pre", { text: entryPreview(item.expectedEntry), cls: "git-sync-preview" });
+        configurationEntryPreview(details, item.expectedEntry);
         details.createEl("h4", { text: "Incoming committed version" });
-        details.createEl("pre", { text: entryPreview(item.incomingEntry), cls: "git-sync-preview" });
+        configurationEntryPreview(details, item.incomingEntry);
         if (item.blockedReason) details.createEl("p", { text: item.blockedReason });
       }
       for (const blocked of preview.blocked) el.createEl("p", { text: `${blocked.path}: ${blocked.reason}` });
