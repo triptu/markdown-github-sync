@@ -11,7 +11,7 @@ The helper performs no action on load. Root invokes **Git Sync Final Acceptance:
 - Both vaults must have no existing visible files before their first helper command. Existing `.obsidian` files may remain. The production plugin must be unconfigured and unenrolled. The helper fails closed on an unknown vault path, a different installed bundle hash, a public/wrong repository, an unexpected enrollment preview, or pre-existing visible files.
 - The only remote target is the private `your-name/vault-sync-test` repository, on a new `native-final-<UUID>` branch. Run the devices **sequentially**, desktop first, then Android. Never use `your-name/notes`.
 
-The Android mobile adapter must expose the exact vault base path through `getBasePath()`. If it does not, the helper refuses to run; inspect the adapter and update this path guard in a fresh helper build rather than relaxing it during a run.
+The desktop adapter supplies `getBasePath()`; the observed Android Capacitor adapter supplies `basePath`, exactly `/storage/emulated/0/Documents/Vault Sync Final Lab`. The helper checks that canonical Android path, which ADB also exposes through `/sdcard`. Unknown paths are refused. This adapter difference was inspected before starting Android acceptance; the corrected helper uses a fresh run UUID.
 
 ## Build and branch setup
 

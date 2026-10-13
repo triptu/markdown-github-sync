@@ -77,8 +77,8 @@ export default class NativeFinalAcceptance extends Plugin {
     const expected = device === "desktop" ? DESKTOP_VAULT_PATH : ANDROID_VAULT_PATH;
     const adapter = this.app.vault.adapter;
     const getBasePath: unknown = Reflect.get(adapter, "getBasePath");
-    if (typeof getBasePath !== "function") throw new Error("Native vault path unavailable; refusing to run");
-    const actual: unknown = Reflect.apply(getBasePath, adapter, []);
+    const actual: unknown = device === "android" ? Reflect.get(adapter, "basePath")
+      : typeof getBasePath === "function" ? Reflect.apply(getBasePath, adapter, []) : null;
     if (actual !== expected || this.app.vault.getName() !== expected.split("/").at(-1) ||
         actual === "/sdcard/Documents/Vault Sync Lab")
       throw new Error("This is not the exact disposable acceptance vault");

@@ -12,7 +12,7 @@ const runId = randomUUID();
 const branch = `native-final-${runId}`;
 const output = `dist/native-final-acceptance/${runId}`;
 const desktopVault = "/tmp/github-vault-sync-desktop-v2-1791919653/Vault Sync Lab";
-const androidVault = "/sdcard/Documents/Vault Sync Final Lab";
+const androidVault = "/storage/emulated/0/Documents/Vault Sync Final Lab";
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
 await mkdir(output, { recursive: true });
 await require("esbuild").build({
