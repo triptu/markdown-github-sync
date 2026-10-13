@@ -2632,3 +2632,161 @@ test("E2-3: failed acknowledgement after oversize decision blocks publication an
   assert.equal(repository.branchHead, head);
   assert.ok((await parseState(await a.store.load())).holds["n.md"]);
 });
+
+const configurationPath = ".obsidian/appearance.json";
+
+async function deferredConfiguration(previous: string | null = null): Promise<{ repository: MemoryRepository; device: Device }> {
+  const starting: Record<string, string> = { "note.md": "base" };
+  if (previous !== null) starting[configurationPath] = previous;
+  const repository = await MemoryRepository.create(await snapshot(starting));
+  repository.scopeRules = "config/1";
+  const configured = await enrolled(repository, "A", starting);
+  await repository.push({ [configurationPath]: await entryFromText("remote configuration") });
+  const outcome = await configured.session.sync();
+  assert.ok(outcome.kind === "synced" || outcome.kind === "up-to-date", JSON.stringify(outcome));
+  assert.equal(configured.vault.text(configurationPath), previous);
+  return { repository, device: configured };
+}
+
+test("R3-1: mixed malformed recovery retains a superseding issue through crash windows and a clean restart", async () => {
+  for (const crash of [null, "before", "after"] as const) {
+    const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+    const a = await enrolled(repository);
+    const expected = (await a.vault.capture())["n.md"]!;
+    await repository.push({ "n.md": await entryFromText("remote") });
+    const sourcePath = ".git-vault-sync/A/hold/source";
+    a.vault.issues = [{ id: "old-large", path: "n.md", kind: "oversize", sourcePath, size: 9_000_000, mtime: 1, expected, next: null }];
+    assert.equal((await a.session.sync()).kind, "needs-decision");
+    const replacement = await entryFromText("readable source");
+    a.vault.issues = [
+      { id: "new-readable", path: "n.md", sourcePath, kind: "displaced", expected, next: null, found: replacement },
+      { id: "bad-neighbor", path: "other.md", kind: "interrupted", expected: null, next: null, found: { ...replacement, data: "wrong" } },
+    ];
+    if (crash) failSaveMatching(a.store, (state) => state.holds["n.md"]?.ids.includes("new-readable") && state.holds["n.md"]?.ids.includes("old-large") || false, crash);
+    if (crash) await assert.rejects(a.restart().sync(), Crash);
+    else await a.restart().sync();
+    a.store.fault = null;
+    assert.ok(!a.vault.acknowledged.includes("new-readable"), `${crash}: replacement remains available for authoritative recovery`);
+    a.vault.issues = a.vault.issues.filter((item) => item.id === "new-readable");
+    const fresh = await a.restart().sync();
+    assert.equal(fresh.kind, "needs-decision", `${crash}: ${JSON.stringify(fresh)}`);
+    const saved = await parseState(await a.store.load());
+    assert.deepEqual(saved.holds["n.md"]?.ids, ["new-readable"]);
+    assert.equal(saved.holds["n.md"]?.base?.oid, expected.oid);
+    assert.ok(a.vault.acknowledged.includes("new-readable"));
+    if (fresh.kind !== "needs-decision") continue;
+    const conflict = fresh.conflicts.find((item) => item.kind === "displaced-write");
+    assert.ok(conflict);
+    await a.session.resolve({ conflictId: conflict.id, choice: { kind: "expected" } });
+    const settled = await a.session.sync();
+    assert.notEqual(settled.kind, "blocked", `${crash}: obsolete native ID cannot strand the decision`);
+    await a.vault.write("other.md", "other edit");
+    assert.notEqual((await a.restart().sync()).kind, "blocked");
+    assert.equal(entryText(repository.fullHeadFiles()["other.md"]!), "other edit");
+  }
+});
+
+test("R3-2: direct configuration apply obeys repository and installation fences", async () => {
+  for (const fence of ["identity", "installation"] as const) {
+    const { repository, device: a } = await deferredConfiguration();
+    const session = fence === "installation"
+      ? new SyncSession({ repository: repository.device("B"), vault: a.vault, store: a.store, scopeRules: "config/1", now: NOW, delay: async () => {} })
+      : a.restart();
+    if (fence === "identity") repository.identityValue.name = "other-repository";
+    const preview = await session.previewApplyConfiguration();
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") continue;
+    const before = a.vault.applyCalls;
+    const outcome = await session.applyConfiguration({ token: preview.token });
+    assert.equal(outcome.kind, "paused", `${fence}: ${JSON.stringify(outcome)}`);
+    assert.equal(a.vault.applyCalls, before);
+    assert.equal(a.vault.text(configurationPath), null);
+  }
+});
+
+test("R3-3: configuration CAS races retain the original preimage across result-save crashes", async () => {
+  for (const previous of [null, "old configuration"] as const) for (const crash of [null, "before", "after"] as const) {
+    const { repository, device: a } = await deferredConfiguration(previous);
+    const preview = await a.session.previewApplyConfiguration();
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") continue;
+    assert.equal(preview.items[0]?.expectedEntry ? entryText(preview.items[0]!.expectedEntry!) : null, previous);
+    assert.equal(entryText(preview.items[0]!.incomingEntry!), "remote configuration");
+    a.vault.beforeApply = async (path, vault) => {
+      if (path !== configurationPath) return;
+      vault.beforeApply = null;
+      await vault.write(path, "racing local draft");
+    };
+    if (crash) failSaveMatching(a.store, (state) => state.operation?.kind === "configuration" && state.operation.steps.some((step) => step.status === "changed"), crash);
+    if (crash) await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
+    else assert.equal((await a.session.applyConfiguration({ token: preview.token })).kind, "applied");
+    a.store.fault = null;
+    const before = repository.branchHead;
+    const reviewed = await a.restart().sync();
+    assert.equal(reviewed.kind, "needs-decision", `${previous}/${crash}: ${JSON.stringify(reviewed)}`);
+    assert.equal(repository.branchHead, before);
+    assert.equal(a.vault.text(configurationPath), "racing local draft");
+    if (reviewed.kind !== "needs-decision") continue;
+    const conflict = reviewed.conflicts.find((item) => "path" in item && item.path === configurationPath);
+    assert.ok(conflict && "base" in conflict);
+    assert.equal(conflict.base ? entryText(conflict.base) : null, previous);
+  }
+});
+
+test("R3-4: editing deferred configuration opens a conflict and remote choice stays deferred", async () => {
+  const { repository, device: a } = await deferredConfiguration();
+  await a.vault.write(configurationPath, "local draft");
+  const head = repository.branchHead;
+  const reviewed = await a.restart().sync();
+  assert.equal(reviewed.kind, "needs-decision", JSON.stringify(reviewed));
+  assert.equal(repository.branchHead, head);
+  if (reviewed.kind !== "needs-decision") return;
+  const conflict = reviewed.conflicts.find((item) => "path" in item && item.path === configurationPath);
+  assert.ok(conflict && "base" in conflict && conflict.base === null);
+  assert.equal((await a.session.resolve({ conflictId: conflict.id, choice: { kind: "remote" } })).kind, "recorded");
+  const deferred = await a.session.sync();
+  assert.ok(deferred.kind === "up-to-date" || deferred.kind === "synced", JSON.stringify(deferred));
+  assert.equal(a.vault.text(configurationPath), "local draft", "review does not apply remote configuration");
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind === "preview") {
+    assert.equal(preview.items[0]?.path, configurationPath);
+    assert.equal(entryText(preview.items[0]!.expectedEntry!), "local draft");
+    assert.equal(entryText(preview.items[0]!.incomingEntry!), "remote configuration");
+  }
+});
+
+test("R3-5: successful sync reports held, unreadable and deferred work alongside publication progress", async () => {
+  const { repository, device: a } = await deferredConfiguration();
+  const deferred = await a.session.sync();
+  assert.ok(deferred.kind === "up-to-date" && deferred.attention?.deferred === 1, JSON.stringify(deferred));
+  const expected = (await a.vault.capture())["note.md"]!;
+  a.vault.issues = [{ id: "oversize", path: "note.md", kind: "oversize", sourcePath: ".git-vault-sync/A/hold/source", size: 9_000_000, mtime: 1, expected, next: null }];
+  a.vault.unreadable.add("note.md");
+  await a.vault.write("other.md", "publishable note");
+  const outcome = await a.restart().sync();
+  assert.ok(outcome.kind === "synced" && outcome.published, JSON.stringify(outcome));
+  if (outcome.kind === "synced") assert.deepEqual(outcome.attention, { unreadable: ["note.md"], held: ["note.md"], deferred: 1 });
+  assert.equal(entryText(repository.fullHeadFiles()["other.md"]!), "publishable note");
+});
+
+test("configuration and hidden publication previews expose exact verified bytes and expire on edit", async () => {
+  const { device: a } = await deferredConfiguration();
+  const beforeConfigurationPreview = a.store.raw;
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.equal(preview.items[0]?.expectedEntry, null);
+  assert.equal(entryText(preview.items[0]!.incomingEntry!), "remote configuration");
+  assert.equal(a.store.raw, beforeConfigurationPreview, "configuration preview is read-only");
+  const before = a.store.raw;
+  await a.vault.write(".obsidian/plugins/foo/data.json", "local secret draft");
+  const hidden = await a.session.previewHiddenPublication(".obsidian/plugins/foo/data.json");
+  assert.equal(hidden.kind, "preview");
+  if (hidden.kind !== "preview") return;
+  assert.equal(entryText(hidden.entry), "local secret draft");
+  assert.equal(hidden.version.oid, hidden.entry.oid);
+  assert.equal(a.store.raw, before, "exact-content previews are read-only");
+  await a.vault.write(".obsidian/plugins/foo/data.json", "new secret draft");
+  assert.equal((await a.session.consentHiddenPublication({ path: hidden.path, token: hidden.token })).kind, "stale");
+});

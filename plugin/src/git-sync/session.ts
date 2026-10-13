@@ -71,9 +71,9 @@ export type BlockedStep = { path: string; reason: string };
 export type SyncOutcome =
   | Unavailable
   | { kind: "paused"; pause: Pause }
-  | { kind: "up-to-date"; commit: string }
+  | { kind: "up-to-date"; commit: string; attention?: OutstandingWork }
   /** The checkpoint advanced to `commit`; `carried` lists newer local edits kept as drafts. */
-  | { kind: "synced"; commit: string; published: boolean; carried: string[] }
+  | { kind: "synced"; commit: string; published: boolean; carried: string[]; attention?: OutstandingWork }
   /** `published`/`carried` report what this same sync accomplished before stopping for decisions. */
   | { kind: "needs-decision"; conflicts: Conflict[]; merged: string[]; published: boolean; carried: string[] }
   /** Commit `commit` is partly applied; the listed paths need `keepLocal` or a manual change. */
@@ -96,6 +96,13 @@ export type SyncOutcome =
   | { kind: "publication-unknown"; operationId: string; parent: string; candidate: string; head: string; fenced: boolean }
   /** Native recovery evidence of unknown scope could not be verified; nothing was planned. */
   | { kind: "native-error"; errors: NativeError[] };
+
+/** Successful content progress can coexist with work deliberately held aside. */
+export interface OutstandingWork {
+  unreadable: string[];
+  held: string[];
+  deferred: number;
+}
 
 export type EnrollmentAction =
   /** A native transaction is unfinished here; enrolling cancels it without installing its intent (recoverable). */
@@ -168,9 +175,9 @@ export interface ConfigurationListing {
 }
 export type ConfigurationPreview =
   | Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "disabled" }
-  | { kind: "preview"; token: string; items: ConfigurationListing["deferred"]; blocked: BlockedStep[] };
-export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] };
-export type HiddenPublicationPreview = Unavailable | { kind: "disabled" } | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref };
+  | { kind: "preview"; token: string; items: Array<ConfigurationListing["deferred"][number] & { expectedEntry: Entry | null; incomingEntry: Entry | null }>; blocked: BlockedStep[] };
+export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] } | { kind: "native-error"; errors: NativeError[] };
+export type HiddenPublicationPreview = Unavailable | { kind: "disabled" } | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref; entry: Entry };
 
 export interface PublicationRecoveryPreview {
   kind: "preview";
@@ -380,17 +387,20 @@ export class SyncSession {
     if (!entry || this.#unreadable.some((item) => item.path === path)) return { kind: "missing" };
     const version = toRef(entry);
     const token = await digestText(JSON.stringify(["hidden-consent/1", this.#previewSession, state.base.commit, head.oid, scope.digest, path, version]));
-    return { kind: "preview", token, path, version };
+    return { kind: "preview", token, path, version, entry };
   }
 
   previewApplyConfiguration(): Promise<ConfigurationPreview> {
     return this.#exclusive(async () => this.#configurationPreview());
   }
 
-  async #configurationPreview(): Promise<ConfigurationPreview> {
-    const loaded = await this.#load();
-    if (loaded.kind !== "enrolled") return loaded;
-    const state = loaded.state;
+  async #configurationPreview(currentState?: StoredState): Promise<ConfigurationPreview> {
+    let state = currentState;
+    if (!state) {
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      state = loaded.state;
+    }
     if (state.scope.rules !== "config/1") return { kind: "disabled" };
     if (state.pause) return { kind: "paused", pause: state.pause };
     if (state.operation) return { kind: "busy" };
@@ -399,11 +409,14 @@ export class SyncSession {
     const local = await this.#capture(state, "configuration preview", false, scope);
     const items = Object.entries(state.deferred).sort(([a], [b]) => a.localeCompare(b)).map(([path, item]) => ({
       path, expected: item.expected, next: item.next, blockedReason: item.blockedReason,
+      expectedEntry: item.expected ? materialize(state, dictionary([[path, item.expected]]))[path]! : null,
+      incomingEntry: item.next ? materialize(state, dictionary([[path, item.next]]))[path]! : null,
     }));
     const blocked: BlockedStep[] = [];
     for (const item of items) {
       if (item.blockedReason) blocked.push({ path: item.path, reason: item.blockedReason });
       else if (item.path.endsWith("/community-plugins.json") && local[item.path] && enabledCompetingReason(local[item.path]!)) blocked.push({ path: item.path, reason: enabledCompetingReason(local[item.path]!)! });
+      else if (this.#quarantined(state).has(item.path)) blocked.push({ path: item.path, reason: "Native recovery for this configuration needs review" });
       else if (!sameEntry(local[item.path], item.expected)) blocked.push({ path: item.path, reason: "Local configuration changed since it was deferred; sync to review the conflict" });
       else if (this.#unreadable.some((entry) => entry.path === item.path)) blocked.push({ path: item.path, reason: "Local configuration cannot be read" });
     }
@@ -413,14 +426,34 @@ export class SyncSession {
 
   applyConfiguration(input: { token: string }): Promise<ConfigurationOutcome> {
     return this.#exclusive(async () => {
-      const preview = await this.#configurationPreview();
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const initial = loaded.state;
+      if (initial.scope.rules !== "config/1") return { kind: "disabled" };
+      if (initial.pause) return { kind: "paused", pause: initial.pause };
+      if (initial.operation) return { kind: "busy" };
+      const identity = await this.#repository.identity();
+      if (!sameIdentity(identity, initial.repository)) {
+        const result = await this.#pause(initial, "repository-changed", `Expected ${describe(initial.repository)}, found ${describe(identity)}`);
+        if (result.kind !== "paused") throw new IntegrityError("Repository identity fence returned an unexpected outcome");
+        return result;
+      }
+      const bound = await this.#bindLedger(initial);
+      if (bound) {
+        if (bound.kind !== "paused") throw new IntegrityError("Ledger binding returned an unexpected outcome");
+        return bound;
+      }
+      const native = await this.#recoverNative(initial);
+      if (native) {
+        if (native.kind !== "native-error") throw new IntegrityError("Native recovery returned an unexpected outcome");
+        return native;
+      }
+      const preview = await this.#configurationPreview(initial);
       if (preview.kind !== "preview") return preview;
       if (preview.token !== input.token) return { kind: "stale" };
       if (preview.blocked.length) return { kind: "blocked", steps: preview.blocked };
       if (preview.items.length === 0) return { kind: "applied", paths: [] };
-      const loaded = await this.#load();
-      if (loaded.kind !== "enrolled") return loaded;
-      const state = loaded.state;
+      const state = initial;
       const expected: Snapshot = dictionary();
       const incoming: Snapshot = dictionary();
       const steps: StoredStep[] = preview.items.map((item) => {
@@ -574,14 +607,24 @@ export class SyncSession {
         if (outcome.kind === "synced" || outcome.kind === "needs-decision") {
           published ||= outcome.published;
           outcome.carried.forEach((path) => carried.add(path));
-          return { ...outcome, ...report() };
+          return this.#withAttention(state, { ...outcome, ...report() });
         }
         if (outcome.kind === "up-to-date" && (published || carried.size > 0)) {
-          return { kind: "synced", commit: outcome.commit, ...report() };
+          return this.#withAttention(state, { kind: "synced", commit: outcome.commit, ...report() });
         }
-        return outcome;
+        return this.#withAttention(state, outcome);
       }
     });
+  }
+
+  #withAttention(state: StoredState, outcome: SyncOutcome): SyncOutcome {
+    if (outcome.kind !== "up-to-date" && outcome.kind !== "synced") return outcome;
+    const attention: OutstandingWork = {
+      unreadable: [...new Set(this.#unreadable.map((item) => item.path))].sort(),
+      held: [...new Set([...Object.keys(state.holds), ...state.nativeErrors.flatMap((item) => item.path === null ? [] : [item.path])])].sort(),
+      deferred: Object.keys(state.deferred).length,
+    };
+    return attention.unreadable.length || attention.held.length || attention.deferred ? { ...outcome, attention } : outcome;
   }
 
   /** Records a decision for a conflict from the latest review. Applied by a later `sync` only while its exact versions persist. */
@@ -881,11 +924,21 @@ export class SyncSession {
     }
     for (const [path, deferred] of Object.entries(state.deferred)) {
       const next = head.files[path] ?? null;
-      if (sameEntry(next, deferred.next)) continue;
-      if (next) this.#record(state, "incoming", dictionary([[path, next]]));
-      deferred.next = next && toRef(next);
-      deferred.commit = head.oid;
-      deferred.blockedReason = configurationBlockReason(path, next);
+      if (!sameEntry(next, deferred.next)) {
+        if (next) this.#record(state, "incoming", dictionary([[path, next]]));
+        deferred.next = next && toRef(next);
+        deferred.commit = head.oid;
+        deferred.blockedReason = configurationBlockReason(path, next);
+      }
+      const observed = this.#observeLocal(state, local, path);
+      if (observed.kind === "unknown" || sameEntry(observed.entry, deferred.expected)) continue;
+      // The deferred remote version never became the local merge base. Move
+      // its original preimage into carry before ordinary conflict planning.
+      const origin = deferred.expected ? materialize(state, dictionary([[path, deferred.expected]]))[path]! : null;
+      state.carry[path] = deferred.expected;
+      if (origin) planBase[path] = origin;
+      else delete planBase[path];
+      delete state.deferred[path];
     }
     // A deferred live path and every unconsented hidden addition are held out
     // of all automatic reconciliation, including remote deletion counting.
@@ -1591,6 +1644,7 @@ export class SyncSession {
       const result = await this.#vault.apply(step.path, current, next);
       if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
       else markStep(step, result.kind);
+      if (result.kind === "changed") state.carry[step.path] = step.expected;
       if (result.kind === "interrupted" || result.kind === "displaced") {
         await this.#ingest(state, [result.issue], { requiredPath: step.path, known: [local, next ? dictionary([[step.path, next]]) : dictionary()] });
       }
@@ -1681,6 +1735,10 @@ export class SyncSession {
       }
       const issue = checked.issue;
       const prior = state.holds[issue.path];
+      // A malformed neighbor makes this listing non-authoritative. Keep a
+      // replacement in the native journal until a clean listing can prove the
+      // old oversized ID was actually superseded and retire it durably.
+      const obsoleteOversize = prior?.oversize.some((item) => item.sourcePath === issue.sourcePath && !currentIds.has(item.id) && sameRef(prior.expected, issue.expected) && sameRef(prior.next, issue.next)) ?? false;
       if (authoritative && prior && issue.sourcePath) {
         const stale = prior.oversize.filter((item) => item.sourcePath === issue.sourcePath && !currentIds.has(item.id));
         if (stale.length > 0 && sameRef(prior.expected, issue.expected) && sameRef(prior.next, issue.next)) {
@@ -1701,7 +1759,13 @@ export class SyncSession {
           changed = true;
         }
       }
-      if (known.has(issue.id)) continue;
+      if (known.has(issue.id)) {
+        if (authoritative && issue.kind !== "oversize" && !state.unacknowledged.includes(issue.id)) {
+          state.unacknowledged.push(issue.id);
+          changed = true;
+        }
+        continue;
+      }
       known.add(issue.id);
       delete state.deferred[issue.path];
       const base = prior ? prior.base : await this.#origin(state, issue.path, options.known ?? []);
@@ -1717,7 +1781,7 @@ export class SyncSession {
         state.holds[issue.path] = prior
           ? { ...prior, ids: [...prior.ids, issue.id], kind: prior.kind === "interrupted" || issue.kind === "interrupted" ? "interrupted" : "displaced", found }
           : { ids: [issue.id], kind: issue.kind, base, expected: issue.expected && toRef(issue.expected), next: issue.next && toRef(issue.next), found, oversize: [] };
-        state.unacknowledged.push(issue.id);
+        if (authoritative || !obsoleteOversize) state.unacknowledged.push(issue.id);
       }
       changed = true;
     }
