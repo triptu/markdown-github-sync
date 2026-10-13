@@ -3051,6 +3051,93 @@ test("a restored old-host guard holds a stale flush after crash recovery on a ne
   assert.equal(recovered.operation, null);
 });
 
+test("reviewed configuration written by a resumed host guards that host's stale flush", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  failSaveMatching(a.store, (state) => state.operation?.kind === "configuration" && state.operation.steps.every((step) => step.status === "pending"), "after");
+  await assert.rejects(h1.applyConfiguration({ token: preview.token }), Crash);
+  a.store.fault = null;
+  assert.equal(a.vault.text(configurationPath), "old configuration");
+
+  const h2 = session("host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal(a.vault.text(configurationPath), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  await a.vault.write(configurationPath, "old configuration");
+  assert.equal((await h2.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+});
+
+test("native replay on a new host guards the host that completed the write", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: configurationPath, mode: "refuse" };
+  assert.equal((await h1.applyConfiguration({ token: preview.token })).kind, "blocked");
+  const calls = a.vault.applyCalls;
+  const h2 = session("host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal(a.vault.applyCalls, calls, "native recovery completed the write before apply resumed");
+  assert.equal(a.vault.text(configurationPath), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  await a.vault.write(configurationPath, "old configuration");
+  assert.equal((await h2.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+});
+
+test("an already landed native write retires cleanly on restart", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: configurationPath, mode: "crash" };
+  await assert.rejects(h1.applyConfiguration({ token: preview.token }), Crash);
+  assert.equal(a.vault.text(configurationPath), "remote configuration");
+  const h2 = session("host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath], undefined);
+  await a.vault.write(configurationPath, "host-2 edit");
+  assert.equal((await h2.sync()).kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "host-2 edit");
+});
+
+test("resuming multiple reviewed steps preserves the writing host's existing guard", async () => {
+  const secondPath = ".obsidian/hotkeys.json";
+  const starting = { "note.md": "base", [configurationPath]: "old appearance", [secondPath]: "old hotkeys" };
+  const repository = await MemoryRepository.create(await snapshot(starting));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository, "A", starting);
+  await repository.push({ [configurationPath]: await entryFromText("new appearance"), [secondPath]: await entryFromText("new hotkeys") });
+  assert.ok(["synced", "up-to-date"].includes((await a.session.sync()).kind));
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  const h1 = session("host-1");
+  const preview = await h1.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  failSaveMatching(a.store, (state) => state.operation?.kind === "configuration" && state.operation.steps.every((step) => step.status === "pending"), "after");
+  await assert.rejects(h1.applyConfiguration({ token: preview.token }), Crash);
+  a.store.fault = null;
+
+  a.vault.pendingNext = { path: secondPath, mode: "refuse" };
+  const h2 = session("host-2");
+  assert.equal((await h2.sync()).kind, "blocked");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  assert.ok(["synced", "up-to-date"].includes((await h2.sync()).kind));
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  await a.vault.write(configurationPath, "old appearance");
+  assert.equal((await h2.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "new appearance");
+});
+
 test("a previously poisoned legacy migration record loads only under its reviewed scope pause", async () => {
   const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
   const a = await enrolled(repository);

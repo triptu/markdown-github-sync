@@ -1721,7 +1721,7 @@ export class SyncSession {
     const local = await this.#capture(state, "configuration application capture", true, scope);
     // A prior call may have saved an applied step before a crash. Rebuild its
     // guard before the operation can retire or another transaction can plan.
-    for (const step of operation.steps) if (step.status === "applied") this.#setConfigurationGuard(state, operation, step);
+    for (const step of operation.steps) if (step.status === "applied") this.#restoreConfigurationGuard(state, operation, step);
     for (const step of operation.steps) {
       if (step.status !== "pending" && step.status !== "blocked") continue;
       const observed = this.#observeLocal(state, local, step.path);
@@ -1735,7 +1735,7 @@ export class SyncSession {
       const current = observed.entry;
       if (sameEntry(current, step.next)) {
         markStep(step, "applied");
-        this.#setConfigurationGuard(state, operation, step);
+        this.#restoreConfigurationGuard(state, operation, step);
         delete state.deferred[step.path];
         await this.#save(state);
         continue;
@@ -1751,7 +1751,7 @@ export class SyncSession {
       const result = await this.#vault.apply(step.path, current, next);
       if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
       else markStep(step, result.kind);
-      if (result.kind === "applied") this.#setConfigurationGuard(state, operation, step);
+      if (result.kind === "applied") this.#setConfigurationGuard(state, step, this.#hostLifetimeId);
       if (result.kind === "changed") state.carry[step.path] = step.expected;
       if (result.kind === "interrupted" || result.kind === "displaced") {
         await this.#ingest(state, [result.issue], { requiredPath: step.path, known: [local, next ? dictionary([[step.path, next]]) : dictionary()] });
@@ -1769,8 +1769,14 @@ export class SyncSession {
     return changed.length > 0 ? { kind: "review-needed", applied, changed } : { kind: "applied", paths: applied };
   }
 
-  #setConfigurationGuard(state: StoredState, operation: ConfigurationOperation, step: StoredStep): void {
-    state.configurationGuards[step.path] = { hostLifetimeId: operation.hostLifetimeId, applied: step.next, consent: null };
+  #restoreConfigurationGuard(state: StoredState, operation: ConfigurationOperation, step: StoredStep): void {
+    const existing = state.configurationGuards[step.path];
+    if (existing && sameRef(existing.applied, step.next)) return;
+    this.#setConfigurationGuard(state, step, operation.hostLifetimeId);
+  }
+
+  #setConfigurationGuard(state: StoredState, step: StoredStep, hostLifetimeId: string | null): void {
+    state.configurationGuards[step.path] = { hostLifetimeId, applied: step.next, consent: null };
   }
 
   /**
@@ -1790,6 +1796,7 @@ export class SyncSession {
     const pending = await this.#pendingIntents();
     const operation = state.operation;
     const replay: string[] = [];
+    const configurationReplay: StoredStep[] = [];
     const cancel: string[] = [];
     for (const intent of pending) {
       const step = operation?.kind === "apply" || operation?.kind === "configuration" ? operation.steps.find((item) => item.path === intent.path) :
@@ -1803,6 +1810,21 @@ export class SyncSession {
         !this.#quarantined(state).has(step.path) &&
         !this.#unreadable.some((item) => item.path === step.path);
       (authorized ? replay : cancel).push(intent.id);
+      if (authorized && operation?.kind === "configuration" && step) configurationReplay.push(step);
+    }
+    if (configurationReplay.length > 0) {
+      // Recovery may install `next` before the resumed step observes it. Make
+      // the current host's guard durable first when replay can write from the
+      // still-present preimage. Already-applied bytes need no new-host guard.
+      const local = await this.#capture(state, "native configuration replay preimage", false);
+      let changed = false;
+      for (const step of configurationReplay) {
+        const observed = this.#observeLocal(state, local, step.path);
+        if (observed.kind !== "known" || !sameEntry(observed.entry, step.expected) || sameEntry(observed.entry, step.next)) continue;
+        this.#setConfigurationGuard(state, step, this.#hostLifetimeId);
+        changed = true;
+      }
+      if (changed) await this.#save(state);
     }
     const issues = await this.#vault.recover({ replay, cancel });
     // Anything still pending was refused by the vault: hold its path untouched.
