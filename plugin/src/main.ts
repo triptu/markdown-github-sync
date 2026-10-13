@@ -19,7 +19,7 @@ import {
 } from "./git-sync/session";
 import { parseState } from "./git-sync/state";
 import type { Entry, FileMode, RepositoryIdentity } from "./git-sync/contracts";
-import type { VersionConflict } from "./git-sync/reconcile";
+import type { VersionConflict, NativeConflict, BulkDeletionConflict } from "./git-sync/reconcile";
 import { decodeBase64, encodeBase64, entryText } from "./git-sync/codec";
 import { GitObsidianVault } from "./git-sync/obsidian-vault";
 import { FileJournalStore } from "./git-sync/store";
@@ -198,6 +198,7 @@ export default class GitVaultSync extends Plugin {
         "Obsidian 1.11.4 or newer is required for secret storage.",
       );
     const repository = new GitHubRepository({
+      installation,
       owner: this.settings.owner,
       name: this.settings.repository,
       branch: this.settings.branch,
@@ -446,8 +447,8 @@ function describeOutcome(outcome: SyncOutcome): string {
       return `${outcome.steps.length} file updates held · open Changes`;
     case "publication-unknown":
       return "Publication uncertain · open Changes to review";
-    case "rejected":
-      return outcome.message;
+    case "settling":
+      return "Waiting for GitHub to confirm the upload; retrying automatically";
     case "contended":
       return "Another device is publishing; retrying shortly";
   }
@@ -707,6 +708,13 @@ class ChangesModal extends Modal {
           });
           continue;
         }
+        if (conflict.kind === "bulk-deletion") {
+          new Setting(el).setName(`${conflict.paths.length} files would be deleted`)
+            .setDesc(conflict.direction === "local" ? "Review deletions from this device before publishing." : "Review deletions from GitHub before applying.")
+            .addButton(button => button.setButtonText("Review deletions").onClick(() =>
+              new BulkDeletionModal(this.app, this.plugin, conflict, () => { void this.render(); }).open()));
+          continue;
+        }
         new Setting(el)
           .setName(conflict.path)
           .setDesc(conflict.kind.replaceAll("-", " "))
@@ -758,11 +766,32 @@ class ChangesModal extends Modal {
     }
   }
 }
+class BulkDeletionModal extends Modal {
+  constructor(app: App, private plugin: GitVaultSync, private conflict: BulkDeletionConflict, private done: () => void) { super(app); }
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: `Review deletion of ${this.conflict.paths.length} files` });
+    el.createEl("p", { text: this.conflict.direction === "local" ? "These files were removed on this device. Confirm before removing them from GitHub too." : "These files were removed from GitHub. Confirm before removing them from this device too." });
+    el.createEl("pre", { text: this.conflict.paths.join("\n"), cls: "git-sync-preview" });
+    for (const deletion of [false, true]) {
+      new Setting(el).addButton(button => button.setButtonText(deletion ? "Confirm these deletions" : "Keep these files").onClick(async () => {
+        button.setDisabled(true);
+        try {
+          const kind = (this.conflict.direction === "local") === deletion ? "mine" : "remote";
+          const result = await this.plugin.session?.resolve({ conflictId: this.conflict.id, choice: { kind } });
+          if (result?.kind !== "recorded") throw new Error("The file list changed. Refresh Changes and review again.");
+          this.close(); await this.plugin.syncNow(); this.done();
+        } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
+      }));
+    }
+  }
+}
 class ConflictModal extends Modal {
   constructor(
     app: App,
     private plugin: GitVaultSync,
-    private conflict: VersionConflict,
+    private conflict: VersionConflict | NativeConflict,
     private done: () => void,
   ) {
     super(app);
@@ -772,7 +801,9 @@ class ConflictModal extends Modal {
     el.addClass("git-sync-panel");
     el.createEl("h2", { text: this.conflict.path });
     el.createEl("p", {
-      text: "Both reviewed versions remain recoverable. Your decision is rechecked if either version changes.",
+      text: "expected" in this.conflict
+        ? "A file write was interrupted or an edit was found in recovery. This file will not merge or publish automatically. Compare the saved versions and choose what to keep."
+        : "Both reviewed versions remain recoverable. Your decision is rechecked if either version changes.",
     });
     for (const [label, value] of [
       ["Common version", this.conflict.base],
@@ -784,6 +815,12 @@ class ConflictModal extends Modal {
         text: entryPreview(value),
         cls: "git-sync-preview",
       });
+    }
+    if ("expected" in this.conflict) {
+      for (const [label, value] of [["Before the interrupted operation", this.conflict.expected], ["Intended update", this.conflict.next], ["Recovered bytes", this.conflict.found]] as const) {
+        el.createEl("h3", { text: label });
+        el.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
+      }
     }
     let choice: ChoiceInput | null = null;
     const result = el.createEl("pre", {
@@ -808,6 +845,9 @@ class ConflictModal extends Modal {
                 : "Accept GitHub deletion",
               both: "Keep both",
               edit: "Write merged note",
+              expected: "Restore before the operation",
+              next: "Use the intended update",
+              found: "Use recovered bytes",
             }[kind],
           )
           .onClick(() => {
@@ -833,11 +873,13 @@ class ConflictModal extends Modal {
               choice = { kind };
               result.setText(
                 kind === "both"
-                  ? `GitHub version: ${this.conflict.path}\nYour version: ${this.conflict.sibling}`
+                  ? `GitHub version: ${this.conflict.path}\nYour version: ${"sibling" in this.conflict ? this.conflict.sibling : ""}`
                   : entryPreview(
                       kind === "mine"
                         ? this.conflict.local
-                        : this.conflict.remote,
+                        : (kind === "expected" || kind === "next" || kind === "found") && "expected" in this.conflict
+                          ? this.conflict[kind]
+                          : this.conflict.remote,
                     ),
               );
             }

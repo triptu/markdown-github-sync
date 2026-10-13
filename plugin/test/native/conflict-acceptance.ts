@@ -2,7 +2,7 @@ import { Plugin, TFile, requestUrl } from "obsidian";
 import type GitVaultSync from "../../src/main";
 import { decodeBase64, entryFromBytes, entryFromText } from "../../src/git-sync/codec";
 import { GitHubRepository } from "../../src/git-sync/github";
-import type { Entry } from "../../src/git-sync/contracts";
+import type { Entry, Changes, CommitSnapshot, PreparedPublication } from "../../src/git-sync/contracts";
 
 const owner = "triptu";
 const repository = "vault-sync-test";
@@ -18,6 +18,19 @@ const holdBlocked = ".git-sync-native-conflict-hold-blocked";
 type Check = { name: string; pass: boolean };
 const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean =>
   left.length === right.length && left.every((byte, index) => byte === right[index]);
+
+// Lab-only fixture publisher. An unconfirmed fixture aborts the run; it is never retried as a new candidate.
+async function prepareFixture(remote: GitHubRepository, parent: CommitSnapshot, changes: Changes, message: string) {
+  const ledger = await remote.readLedger();
+  const anchor = ledger.kind === "present" ? ledger.value : null;
+  const candidate = await remote.prepare(parent, changes, message, { anchor, operation: crypto.randomUUID() });
+  return { ...candidate, anchor, parent: parent.oid };
+}
+async function publishFixture(remote: GitHubRepository, candidate: PreparedPublication & { anchor: string | null; parent: string }): Promise<boolean> {
+  await remote.publish({ parent: candidate.parent, candidate: candidate.oid, anchor: candidate.anchor, receipt: candidate.receipt });
+  const ledger = await remote.readLedger();
+  return ledger.kind === "present" && ledger.value === candidate.receipt;
+}
 
 export default class NativeConflictAcceptance extends Plugin {
   onload(): void {
@@ -63,7 +76,7 @@ export default class NativeConflictAcceptance extends Plugin {
       check("automatic lab configuration guarded", plugin.settings.owner === owner && plugin.settings.repository === repository && plugin.settings.branch === branch && plugin.settings.secretId === "git-sync-native-lab" && plugin.settings.automatic);
       check("automatic session enrolled", (await plugin.session?.inspect())?.kind === "enrolled");
       const remote = new GitHubRepository({
-        owner, name: repository, branch,
+        owner, name: repository, branch, installation: crypto.randomUUID(),
         token: async () => this.app.secretStorage.getSecret("git-sync-native-lab") ?? "",
         transport: {
           request: async ({ url, method, headers, body }) => {
@@ -101,8 +114,8 @@ export default class NativeConflictAcceptance extends Plugin {
       const directory = `Native Automatic Acceptance ${crypto.randomUUID()}`;
       paths = { local: `${directory}/Android.md`, remote: `${directory}/GitHub.md` };
       check("fresh pair paths unused", !Object.hasOwn(initial.files, paths.local) && !Object.hasOwn(initial.files, paths.remote) && !this.app.vault.getAbstractFileByPath(directory));
-      const candidateCommit = await remote.prepare(initial, { [paths.remote]: await entryFromText(remoteText) }, `Native automatic pair ${directory}`);
-      check("fresh remote file published", (await remote.publish(initial.oid, candidateCommit.oid)).kind === "accepted");
+      const candidateCommit = await prepareFixture(remote, initial, { [paths.remote]: await entryFromText(remoteText) }, `Native automatic pair ${directory}`);
+      check("fresh remote file published", await publishFixture(remote, candidateCommit));
       await this.app.vault.createFolder(directory);
       await this.app.vault.create(paths.local, localText);
       const deadline = Date.now() + 180_000;
@@ -177,7 +190,7 @@ export default class NativeConflictAcceptance extends Plugin {
       check("automatic sync paused for controlled scenario", !plugin.settings.automatic);
 
       const remote = new GitHubRepository({
-        owner, name: repository, branch,
+        owner, name: repository, branch, installation: crypto.randomUUID(),
         token: async () => this.app.secretStorage.getSecret("git-sync-native-lab") ?? "",
         transport: {
           request: async ({ url, method, headers, body }) => {
@@ -202,12 +215,12 @@ export default class NativeConflictAcceptance extends Plugin {
       const removedText = "Original text must remain on Android after remote deletion.\n";
       const binaryBefore = new Uint8Array([0, 255, 17, 35, 68, 0, 201, 10]);
       const binaryAfter = new Uint8Array([0, 255, 17, 35, 69, 0, 202, 10]);
-      const seeded = await remote.prepare(initial, {
+      const seeded = await prepareFixture(remote, initial, {
         [overlap]: await entryFromText(baseText),
         [binary]: await entryFromBytes(binaryBefore),
         [removed]: await entryFromText(removedText),
       }, `Native conflict acceptance fixture ${runId}`);
-      check("fixture seed published with exact expected head", (await remote.publish(initial.oid, seeded.oid)).kind === "accepted");
+      check("fixture seed published with exact expected head", await publishFixture(remote, seeded));
       commits.seed = seeded.oid;
       await progress("seeded");
       await plugin.syncOnce();
@@ -222,12 +235,12 @@ export default class NativeConflictAcceptance extends Plugin {
       if (!(overlapFile instanceof TFile)) throw new Error("Missing overlap fixture");
       await this.app.vault.modify(overlapFile, localText);
       await plugin.notifyLocalChange();
-      const conflictCommit = await remote.prepare(await remote.head(), { [overlap]: await entryFromText(remoteText) }, `Native overlapping edit ${runId}`);
-      check("remote overlapping edit published", (await remote.publish(seeded.oid, conflictCommit.oid)).kind === "accepted");
+      const conflictCommit = await prepareFixture(remote, await remote.head(), { [overlap]: await entryFromText(remoteText) }, `Native overlapping edit ${runId}`);
+      check("remote overlapping edit published", await publishFixture(remote, conflictCommit));
       commits.conflict = conflictCommit.oid;
       await plugin.syncOnce();
       const conflictStatus = await plugin.session?.inspect();
-      const conflict = conflictStatus?.kind === "enrolled" ? conflictStatus.conflicts.find((item) => item.kind !== "collision" && item.path === overlap) : undefined;
+      const conflict = conflictStatus?.kind === "enrolled" ? conflictStatus.conflicts.find((item) => "path" in item && item.path === overlap) : undefined;
       check("same-file conflict appears in production inbox", conflictStatus?.kind === "enrolled" && conflictStatus.phase === "needs-decision" && conflict?.kind === "content");
       check("conflicting local bytes untouched", await this.app.vault.read(overlapFile) === localText);
       await progress("conflict-inbox");
@@ -246,15 +259,15 @@ export default class NativeConflictAcceptance extends Plugin {
       check("conflict resolved and checkpoint advanced", acceptedStatus?.kind === "enrolled" && acceptedStatus.phase === "idle" && acceptedStatus.commit === accepted.oid && acceptedStatus.conflicts.length === 0);
       await progress("conflict-resolved");
 
-      const incoming = await remote.prepare(accepted, {
+      const incoming = await prepareFixture(remote, accepted, {
         [binary]: await entryFromBytes(binaryAfter),
         [removed]: null,
       }, `Native binary replacement and deletion ${runId}`);
-      check("remote binary and deletion published", (await remote.publish(accepted.oid, incoming.oid)).kind === "accepted");
+      check("remote binary and deletion published", await publishFixture(remote, incoming));
       commits.incoming = incoming.oid;
       await plugin.syncOnce();
       const deletionStatus = await plugin.session?.inspect();
-      const deletionConflict = deletionStatus?.kind === "enrolled" ? deletionStatus.conflicts.find((item) => item.kind !== "collision" && item.path === removed) : undefined;
+      const deletionConflict = deletionStatus?.kind === "enrolled" ? deletionStatus.conflicts.find((item) => "path" in item && item.path === removed) : undefined;
       check("remote deletion requires explicit review", deletionStatus?.kind === "enrolled" && deletionConflict?.kind === "remote-deletion");
       check("deletion review preserves local bytes", removedFile instanceof TFile && await this.app.vault.read(removedFile) === removedText);
       if (!deletionConflict) throw new Error("Deletion conflict disappeared");

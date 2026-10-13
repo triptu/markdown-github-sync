@@ -25,7 +25,7 @@ async function bundle(name: string) {
     plugins: [{ name: "host-boundaries", setup(build) {
       build.onResolve({ filter: /^obsidian$/ }, () => ({ path: hostModule, external: true }));
       build.onResolve({ filter: /^\.\/git-sync\/github$/ }, () => ({ path: "github", namespace: "host" }));
-      build.onLoad({ filter: /.*/, namespace: "host" }, () => ({ contents: `export class GitHubRepository { constructor(options) { globalThis.safetyOptions = options; return globalThis.safetyRepository; } }` }));
+      build.onLoad({ filter: /.*/, namespace: "host" }, () => ({ contents: `export class GitHubRepository { constructor(options) { globalThis.safetyOptions = options; return { ...globalThis.safetyRepository.device(options.installation), history: (...args) => globalThis.safetyRepository.history(...args) }; } }` }));
     } }],
   });
   return loadBundle(outfile) as BundleApi;
