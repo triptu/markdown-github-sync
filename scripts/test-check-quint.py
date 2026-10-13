@@ -52,5 +52,13 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(runner.classify(code, output), "ERROR")
         self.assertEqual(runner.classify(code, output, True), "ERROR")
 
+    def test_final_comma_grouped_state_count(self):
+        output = ("1,000 states generated, 100 distinct states found, 4 states left on queue.\n"
+                  "1,359 states generated, 444 distinct states found, 0 states left on queue.\n"
+                  "2,000 states generated, 500 distinct states found, 1 states left on queue")
+        self.assertEqual(runner.final_state_count(output),
+                         "1,359 states generated, 444 distinct states found")
+        self.assertIsNone(runner.final_state_count("no complete TLC state line"))
+
 if __name__ == "__main__":
     unittest.main()

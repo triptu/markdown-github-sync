@@ -11,7 +11,7 @@ Invocation status: PASS; unchanged inputs: True; full suite: False.
 
 | case | check | bound | expected | observed | seconds |
 |---|---|---:|---|---|---:|
-| UnknownRewind | simulation | 6 | PASS | PASS | 45.83 |
-| UnknownRewind | apalache | 6 | PASS | PASS | 23.19 |
-| NegReplay | simulation | 6 | VIOLATION | VIOLATION | 1.91 |
-| NegReplay | apalache | 6 | VIOLATION | VIOLATION | 19.78 |
+| UnknownRewind | simulation | 6 | PASS | PASS | 8.96 |
+| UnknownRewind | apalache | 6 | PASS | PASS | 14.92 |
+| NegReplay | simulation | 6 | VIOLATION | VIOLATION | 1.07 |
+| NegReplay | apalache | 6 | VIOLATION | VIOLATION | 13.21 |

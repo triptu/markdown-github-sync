@@ -1,2 +1,2 @@
 exit=0
-[ok] No violation found (4500ms at 2222 traces/second).
+[ok] No violation found (4163ms at 2402 traces/second).

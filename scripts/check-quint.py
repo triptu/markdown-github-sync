@@ -21,12 +21,13 @@ APALACHE_VERSION = "0.62.1"
 JAR_SHA256 = "880c0b2b72354816f12e9a9755829f2907071e9a181ffea1937954c23d54739d"
 # module, schedule depth, expected result, exact property for negative control
 TEMPORAL = {"NativeHandoff": "progress", "LedgerDiverged": "progress", "NativeReplace": "progress", "NativeDelete": "progress", "NativeCreate": "progress", "NativeText": "progress", "Ledger": "progress", "NegLedgerUnfair": "progress", "LiveIndependent": "convergence", "LiveConflict": "convergence", "NegUnfair": "convergence"}
-FULL_GRAPH = {"NegTornPublish", "NegIssueAck", "NegIssueEdit", "NegAttemptFlag", "NegNativeClobber", "NegNativeRehash", "NegPrefixGuess", "NegLedgerAbsent", "NegLedgerSplit", "NegLedgerAnchor", "NegSealAnchor", "NegLedgerJournal", "NegLedgerReplay","Durability", "NegVolatileObservation", "NegApprovalScope", "NegNativeGuard", "NegAccountCapture"}
+FULL_GRAPH = {"NegTornPublish", "NegIssueAck", "NegIssueBytes", "NegIssueEdit", "NegAttemptFlag", "NegNativeClobber", "NegNativeRehash", "NegPrefixGuess", "NegLedgerAbsent", "NegLedgerSplit", "NegLedgerAnchor", "NegSealAnchor", "NegLedgerJournal", "NegLedgerReplay","Durability", "NegVolatileObservation", "NegApprovalScope", "NegNativeGuard", "NegAccountCapture"}
 SCENARIOS = {"ConsentVersions", "LedgerPublishWins", "LedgerSealWins", "Independent", "ResponseLoss", "UnknownRewind", "ExactPublish", "Application", "StaleDecision", "UseRemote", "SilentDraft", "Adoption"}
 CASES = [
     ("NativeHandoff", 0, "PASS", "safe"),
     ("NegTornPublish", 16, "VIOLATION", "noAutoUnknown"),
     ("NegIssueAck", 16, "VIOLATION", "ackBacked"),
+    ("NegIssueBytes", 16, "VIOLATION", "ackBacked"),
     ("NegIssueEdit", 16, "VIOLATION", "noAutoUnknown"),
     ("NegAttemptFlag", 16, "VIOLATION", "attemptBeforeEffect"),
     ("LedgerDiverged", 0, "PASS", "safeUnderTamper"),
@@ -127,6 +128,15 @@ def classify(code, output, verification=False, temporal=False, backend=None):
                       (verification and "found a counterexample" in output)):
         return "VIOLATION"
     return "ERROR"
+
+
+def final_state_count(output):
+    """Return TLC's last complete count line, including comma-grouped values."""
+    counts = re.findall(r'(?m)^([\d,]+) states generated, ([\d,]+) distinct states found, \d[\d,]* states left on queue\.$', output)
+    if not counts:
+        return None
+    generated, distinct = counts[-1]
+    return f"{int(generated.replace(',', '')):,} states generated, {int(distinct.replace(',', '')):,} distinct states found"
 
 
 def java_env():
@@ -297,11 +307,11 @@ def main():
         observed = classify(code, output, verification=True, temporal=name in TEMPORAL, backend=args.backend)
         valid = observed == expected
         bad |= not valid
-        states = re.search(r'(\d+) states generated, (\d+) distinct states found', output)
+        states = final_state_count(output)
         records.append({"case": name, "kind": args.backend, "property": invariant, "temporal": TEMPORAL.get(name), "bound": None if name in TEMPORAL or (args.backend == "tlc" and name in FULL_GRAPH) else bound, "expected": expected,
                         "observed": observed, "valid": valid, "exit": code,
                         "seconds": round(time.monotonic() - start, 2),
-                        "states": states[0] if states else None})
+                        "states": states})
         commands.append(verify)
         print(f"{name}: {args.backend} {observed} ({'OK' if valid else 'MISMATCH'})", flush=True)
     unchanged = all(path.exists() and digest(path) == source_hashes[str(path.relative_to(ROOT))] for path in inputs)

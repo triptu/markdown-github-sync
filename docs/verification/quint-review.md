@@ -1,6 +1,6 @@
 # Quint migration verification record
 
-Implementation self-check; no independent review or subagents. Owned worktree `/tmp/vault-sync-quint-v2`, branch `implement/quint-only-v2`, baseline `e780b4c`. Root implementation/package/README and TypeScript tests were not changed or rerun here.
+Historical implementation self-check of the original Quint migration in `/tmp/vault-sync-quint-v2`, branch `implement/quint-only-v2`, baseline `e780b4c`. Its original evidence and verdicts below predate root integration commit `1b74eab` and the independent Quint review `/tmp/github-v2-quint-review-r1.md`. The current formal-fix run and updated bounds are recorded below.
 
 ## Selected design
 
@@ -18,15 +18,15 @@ The earlier conservative permanent-hold progress models were removed after selec
 
 The canonical [coverage map](quint.md) names every old obligation/control, retired guarantees, exact bounds, and unproved composition. The models do not prove TypeScript correctness or unlimited retry convergence. Ledger settlement does not imply a publication must eventually beat every cancellation race; the three-round scheduling cap is represented but not reached by the three-operation domain. Native assumptions still require confirmation against the native worker and real platform tests.
 
-## Native review remains failed
+## Historical native review verdict before integration
 
-The full independent `/tmp/github-v2-native-review-r1.md` was read. Its F1 torn-write → ordinary-change → merge/publication counterexample is a real implementation failure; F2 also requires displaced/orphan bytes to reach review. The handoff model specifies the repair and detects the collapsed-change mutation. It does not establish that the implementation now conforms. Durable issue ingestion must precede native acknowledgement, the attempted flag must precede writing, edits must not clear issue holds, and unrelated paths must continue. End-to-end regression and native platform validation remain necessary; the safety verdict is **FAIL / not ready** pending those fixes. Provenance is recorded in `formal/quint/evidence/toolchain/native-review.txt`.
+The full independent `/tmp/github-v2-native-review-r1.md` found an F1 torn-write → ordinary-change → merge/publication counterexample and an F2 displaced/orphan discovery gap in the earlier implementation. The original handoff model detected the collapsed-change mutation. Root commit `1b74eab` subsequently wired issue ingestion before acknowledgment; its reported 254 plugin and four server tests include the torn-note and retry regressions. The older **FAIL / not ready** verdict belongs to the preintegration revision. Oversized native evidence, a new independent review, and platform crash acceptance remain open. Provenance is recorded in `formal/quint/evidence/toolchain/native-review.txt`.
 
-## Executed final results
+## Original executed results
 
-The frozen full TLC invocation completed on 2026-10-13 at 15:53:10 UTC: **55/55 expected results**, comprising 24 positive passes and 31 detected negative controls. Nine positives check genuine conditional temporal properties; two negatives produce temporal counterexamples. The 44 non-temporal cases also produced their expected sampled outcomes (15 passes, 29 violations). All model/runner input hashes matched before/after execution and were independently rechecked against the final files.
+The original frozen full TLC invocation completed on 2026-10-13 at 15:53:10 UTC: **55/55 expected results**, comprising 24 positive passes and 31 detected negative controls. Nine positives check genuine conditional temporal properties; two negatives produce temporal counterexamples. The 44 non-temporal cases also produced their expected sampled outcomes (15 passes, 29 violations). Those counts and the table below describe the original model; the current manifest reflects the revised handoff and new negative control.
 
-The selected Apalache invocation completed at 15:44:30 UTC: `UnknownRewind` passed and `NegReplay` produced its expected invariant violation, each at six transitions. This is a two-case bounded check, not the full suite or temporal evidence. All six runner regressions passed. Raw logs, commands, manifests, and counterexamples are committed under `formal/quint/evidence/`.
+The original selected Apalache invocation completed at 15:44:30 UTC: `UnknownRewind` passed and `NegReplay` produced its expected invariant violation, each at six transitions. This was a two-case bounded check, not the full suite or temporal evidence. All six original runner regressions passed. The migration commit preserves that original evidence; the working tree now contains the refreshed run below.
 
 | Positive domain | Distinct TLC states | Scope |
 |---|---:|---|
@@ -40,9 +40,19 @@ The selected Apalache invocation completed at 15:44:30 UTC: `UnknownRewind` pass
 
 These state counts describe the enumerated abstractions; they do not measure implementation coverage or extend the bounds listed in the coverage map.
 
+## Current formal-fix run
+
+After independent Quint review R1, the handoff model separates durable native evidence, a volatile fetch copy, and durable engine evidence. Each record contains kind, issue ID, expected value, intended next value, found value, and hold status. The engine persists the complete fetched record atomically before acknowledgment, and acknowledgment erases native evidence. `ackBacked` then requires the engine record's exact modeled bytes and fields. The new `NegIssueBytes` mutation retains the engine hold while dropping the found value; TLC finds a counterexample after acknowledgment with native evidence absent, engine `hold = TRUE`, and engine `found = -1`. Review choices read the engine copy. This is still one issue with finite abstract byte values and assumed atomic save/capture, not a proof of the TypeScript storage path.
+
+The full TLC run completed at 2026-10-13 16:17:59 UTC with **56/56 expected results**: 24 positive passes, 32 negative violations, nine positive temporal checks, and two temporal counterexamples. The 45 safety cases also produced their expected sampled outcomes (15 passes, 30 violations). `NativeHandoff` enumerated 5,332 distinct states in its revised graph. The 56 TLC checks and safety samples consumed 479.52 seconds of recorded subprocess time. `NativeReplace` now correctly records **1,359 generated / 444 distinct** states from TLC's final complete line. The seven runner regressions passed.
+
+The selected Apalache run completed at 16:18:45 UTC: `UnknownRewind` passed and `NegReplay` violated its named invariant, both with six-step bounds. Its 38.16 seconds of recorded subprocess time includes sampling and checking. Both manifests report `PASS`, and an independent SHA-256 comparison found zero mismatches across all 70 listed inputs in each manifest. The [TLC manifest](../../formal/quint/evidence/tlc/results.json), [new negative trace](../../formal/quint/evidence/tlc/NegIssueBytes.verify.log), and [Apalache manifest](../../formal/quint/evidence/apalache/results.json) are the execution record for this revision.
+
+Root commit `1b74eab` and its reported 254 passing plugin tests plus four server tests address the original torn-note implementation path. Oversized native evidence, a subsequent independent native review, and platform crash acceptance remain pending. These separate finite models do not establish composed TypeScript or full-sync safety.
+
 ## Runner checks
 
-Six regressions cover normal/abnormal exits, a real diagnostic-then-timeout subprocess, temporal-versus-safety diagnostic separation, invalid model names/timeouts, and refusal of temporal checking through simulation or Apalache. `formal/quint/evidence/toolchain/runner-regressions.txt` records the run.
+The original six regressions covered normal/abnormal exits, a real diagnostic-then-timeout subprocess, temporal-versus-safety diagnostic separation, invalid model names/timeouts, and refusal of temporal checking through simulation or Apalache. A seventh checks comma-grouped generated-state counts and chooses the final complete TLC line. `formal/quint/evidence/toolchain/runner-regressions.txt` records the current seven-test run.
 
 The runner checks each negative's named invariant alone, or its named temporal property alongside safety. A safety failure cannot satisfy a temporal negative: the actual TLC `q_temporalProps` diagnostic is required. Success requires a normal CLI exit and complete TLC result; temporal success also requires temporal-check output. Signals, partial output, timeout, assertions, and deadlocks fail closed.
 

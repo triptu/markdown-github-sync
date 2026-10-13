@@ -3,30 +3,30 @@ exit=1
 # Usage statistics is OFF. We care about your privacy.
 # If you want to help our project, consider enabling statistics with config --enable-stats=true.
 
-Output directory: /private/tmp/vault-sync-quint-v2/formal/quint/_apalache-out/server/2026-10-13T21-19-01_17281961558844384399
-# APALACHE version: 0.62.1 | build: a321771                       I@21:19:01.106
-Starting checker server on port 54003...                          I@21:19:01.108
-The Apalache server is running on port 54003. Press Ctrl-C to stop.
-Oct 13, 2026 9:19:02 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+Output directory: /private/tmp/vault-sync-formal-fixes-v2/formal/quint/_apalache-out/server/2026-10-13T21-44-14_5769539626356550214
+# APALACHE version: 0.62.1 | build: a321771                       I@21:44:14.908
+Starting checker server on port 59711...                          I@21:44:14.910
+The Apalache server is running on port 59711. Press Ctrl-C to stop.
+Oct 13, 2026 9:44:16 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
 WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
 As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
-PASS #0: SanyParser                                               I@21:19:03.094
+PASS #0: SanyParser                                               I@21:44:16.914
 [TLC] Running TLC model checker...
 
-TLC2 Version 2026.10.13.154903
+TLC2 Version 2026.10.13.161417
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 98 and seed -2160609118281771678 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 777] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/NegAccountCapture.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/NegAccountCapture.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/Integers.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/Sequences.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/FiniteSets.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/TLC.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/Apalache.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/Variants.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/Naturals.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/tlc-15958762325780735855/TLCExt.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Running breadth-first search Model-Checking with fp 84 and seed 6754045248430037353 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 38416] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/NegAccountCapture.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/NegAccountCapture.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/Integers.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/Sequences.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/FiniteSets.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/TLC.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/Apalache.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/Variants.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/Naturals.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/tlc-3709625919249627868/TLCExt.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
 Semantic processing of module Naturals
 Semantic processing of module Integers
 Semantic processing of module Sequences
@@ -42,9 +42,9 @@ Linting of module Variants
 Linting of module TLCExt
 Linting of module _TLCTrace
 Linting of module NegAccountCapture
-Starting... (2026-10-13 21:19:03)
+Starting... (2026-10-13 21:44:17)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-13 21:19:03.
+Finished computing initial states: 1 distinct state generated at 2026-10-13 21:44:17.
 Error: Invariant q_inv is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -77,37 +77,7 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   failures |-> {},
   hint |-> FALSE ]
 
-State 2: <:= line 41, col 3 to line 45, col 5 of module NegAccountCapture>
-NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
-  head |-> 1,
-  live |-> (0 :> 1 @@ 1 :> 1),
-  disk |->
-      [ approval |->
-            [ local |-> (0 :> -1 @@ 1 :> -1),
-              remote |-> (0 :> -1 @@ 1 :> -1),
-              head |-> -1 ],
-        operation |->
-            [ local |-> (0 :> -1 @@ 1 :> -1),
-              remote |-> (0 :> -1 @@ 1 :> -1),
-              head |-> -1 ],
-        recovery |-> {},
-        done |-> {},
-        checkpoint |-> 0,
-        active |-> FALSE,
-        accounted |-> (0 :> -1 @@ 1 :> -1) ],
-  view |->
-      [ local |-> (0 :> -1 @@ 1 :> -1),
-        remote |-> (0 :> -1 @@ 1 :> -1),
-        head |-> -1 ],
-  staged |->
-      [ local |-> (0 :> -1 @@ 1 :> -1),
-        remote |-> (0 :> -1 @@ 1 :> -1),
-        head |-> -1 ],
-  lastSave |-> 1,
-  failures |-> {},
-  hint |-> TRUE ]
-
-State 3: <NegAccountCapture_durability_observe line 260, col 3 to line 265, col 7 of module NegAccountCapture>
+State 2: <NegAccountCapture_durability_observe line 260, col 3 to line 265, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 1 @@ 1 :> 1),
@@ -133,9 +103,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
         head |-> -1 ],
   lastSave |-> 1,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 4: <NegAccountCapture_durability_persistObservation line 271, col 3 to line 291, col 7 of module NegAccountCapture>
+State 3: <NegAccountCapture_durability_persistObservation line 271, col 3 to line 291, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 1 @@ 1 :> 1),
@@ -161,9 +131,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
         head |-> -1 ],
   lastSave |-> 1,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 5: <NegAccountCapture_durability_approve line 297, col 3 to line 310, col 7 of module NegAccountCapture>
+State 4: <NegAccountCapture_durability_approve line 297, col 3 to line 310, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 1 @@ 1 :> 1),
@@ -187,9 +157,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
       [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
   lastSave |-> 1,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 6: <NegAccountCapture_durability_persistApproval line 316, col 3 to line 327, col 7 of module NegAccountCapture>
+State 5: <NegAccountCapture_durability_persistApproval line 316, col 3 to line 327, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 1 @@ 1 :> 1),
@@ -213,9 +183,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
       [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
   lastSave |-> 1,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 7: <NegAccountCapture_durability_prepare line 333, col 3 to line 361, col 7 of module NegAccountCapture>
+State 6: <NegAccountCapture_durability_prepare line 333, col 3 to line 361, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 1 @@ 1 :> 1),
@@ -239,9 +209,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
       [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
   lastSave |-> 1,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 8: <NegAccountCapture_durability_save line 180, col 3 to line 189, col 7 of module NegAccountCapture>
+State 7: <NegAccountCapture_durability_save line 180, col 3 to line 189, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 2 @@ 1 :> 1),
@@ -265,9 +235,9 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
       [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
   lastSave |-> 2,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
-State 9: <NegAccountCapture_durability_account(0) line 115, col 3 to line 153, col 7 of module NegAccountCapture>
+State 8: <NegAccountCapture_durability_account(0) line 115, col 3 to line 153, col 7 of module NegAccountCapture>
 NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
   head |-> 1,
   live |-> (0 :> 2 @@ 1 :> 1),
@@ -291,12 +261,12 @@ NegAccountCapture_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
       [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
   lastSave |-> 2,
   failures |-> {},
-  hint |-> TRUE ]
+  hint |-> FALSE ]
 
 778 states generated, 192 distinct states found, 71 states left on queue.
 The depth of the complete state graph search is 9.
-Finished in 00s at (2026-10-13 21:19:03)
-Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-OnA9EZ/NegAccountCapture_TTrace_1791906543.tla
+Finished in 00s at (2026-10-13 21:44:17)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-YwC8C6/NegAccountCapture_TTrace_1791908057.tla
 
-[violation] Found an issue (367ms).
+[violation] Found an issue (341ms).
 error: found a counterexample

@@ -6,6 +6,7 @@
     "NativeHandoff",
     "NegTornPublish",
     "NegIssueAck",
+    "NegIssueBytes",
     "NegIssueEdit",
     "NegAttemptFlag",
     "LedgerDiverged",
@@ -65,7 +66,7 @@
   "java": "openjdk version \"23.0.2\" 2025-01-21",
   "node": "v23.6.0",
   "backend": "tlc",
-  "utc": "2026-10-13T15:53:10Z",
+  "utc": "2026-10-13T16:17:59Z",
   "sources": {
     "formal/quint/cases.qnt": "935b77364fa386e425e8e0edab727dbbeae178da4b2207c8b79cdee9309f1167",
     "formal/quint/durability.qnt": "b2e610f531cda3e91e299430629595c214a9d701cfa6ab1c0b590ef94f130565",
@@ -98,6 +99,7 @@
     "formal/quint/models/NegFastForward.qnt": "f18ab02c819cd5cd76c2357a94e45b539bfc00843d03e48281992482fe3e561b",
     "formal/quint/models/NegGuard.qnt": "af18bc12eda4490aaf4479810cd93ad29012125fe577b5c6b08447b109f69c19",
     "formal/quint/models/NegIssueAck.qnt": "019aa44d732ec4e290658ec9db4a2d05be18713ad28811b63260a7edbf26ac8e",
+    "formal/quint/models/NegIssueBytes.qnt": "dd4decfcac6eadf5cc269f046dee371a023e052ffd671415d9736e9e5358b051",
     "formal/quint/models/NegIssueEdit.qnt": "a458be1bb762260af4b30f7cb6ede1bde986106ffd5273f3f3a0d8648a8d8c4a",
     "formal/quint/models/NegJournal.qnt": "ade2447869d62e69d8b3de9ab69449bfc19ae4f270bb4b27fb2d9802e8304856",
     "formal/quint/models/NegLedgerAbsent.qnt": "b2685f1fdbb25971a2f63599e8dcbb2d0dd3f99609389b6e38ba0f4fa305add1",
@@ -126,33 +128,33 @@
     "formal/quint/models/StaleDecision.qnt": "61b9e69fb2b2509f18548f20eaf6c4ab031e17e1fb5d13599a46010d27a6b6c0",
     "formal/quint/models/UnknownRewind.qnt": "27d3e5e714be14ba8ddf53785717bd15223aeb0fbc7aeac65aa67463cacef6ac",
     "formal/quint/models/UseRemote.qnt": "e642c34ea1d8ae60f61edfd18d1b65518e82cfc931a2ed06edfa67fa87eacc4c",
-    "formal/quint/nativeHandoff.qnt": "0253a604e73a4e64692a6d02b09a04168c7317ae7362aeb1f48e94063e0b85c0",
+    "formal/quint/nativeHandoff.qnt": "a688c8270dfcea5aaca89d77ad33928ca703a9b9b845d2ddb6910b465aac2725",
     "formal/quint/nativeTxn.qnt": "4ce57e16526b6aa83b3e51dd7e2f4f75db3c556e8477d553384bad4c72e30be8",
     "formal/quint/progress.qnt": "c58bedb14d11d91216c088c2401b37221a2013093bbd7e1354d45d9b3781a46c",
     "formal/quint/vaultSync.qnt": "9a7ed978333d779140af94b2508a1528bee034a2e64025dd8e7c4c689a62e317",
     "formal/quint/package-lock.json": "1e6424ee53efce1575262cb1b8f6d1f878bbecabe6d442df98dcc512879c21f2",
     "formal/quint/package.json": "27f59d505c9059211541ff50950b2811f1d5b138227dde010d68d51f05c9b667",
     "formal/quint/tlc-config.json": "cef7b24458a17299872ef7da84233ec954bf19e4653a9173fa3aefed93b9773e",
-    "scripts/check-quint.py": "bea2dcd0927975f98d6f1b4acd2255387913e84bc2448a1ffe9981c711351258",
-    "scripts/test-check-quint.py": "14b7b741591407e407e8f6f541877dabce2a34a5f4d68ec8a4e765dcd292daeb",
+    "scripts/check-quint.py": "d90f1ad232b15733df4456abe9c98a405daf7a0b1d404caa0fa9a541867823ec",
+    "scripts/test-check-quint.py": "d47f67dcc7bc3addf47c80c6ff5d878c35d0cbd6202f74c0ef0be911d248108d",
     "scripts/check-model.sh": "8b386588ab83b5b9dbdebf6cdeff3a602503dace221a9c5ed60bf423b5ffd2bf"
   },
   "commands": [
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NativeHandoff.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52365",
+      "--server-endpoint=localhost:58539",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegTornPublish.qnt",
       "--backend=typescript",
@@ -160,23 +162,23 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=noAutoUnknown",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegTornPublish.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegTornPublish.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegTornPublish.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=noAutoUnknown",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52466",
+      "--server-endpoint=localhost:58560",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegIssueAck.qnt",
       "--backend=typescript",
@@ -184,23 +186,47 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=ackBacked",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegIssueAck.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegIssueAck.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegIssueAck.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=ackBacked",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52607",
+      "--server-endpoint=localhost:58578",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
+      "run",
+      "models/NegIssueBytes.qnt",
+      "--backend=typescript",
+      "--max-samples=10000",
+      "--max-steps=16",
+      "--seed=0x123456",
+      "--invariant=ackBacked",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegIssueBytes.simulation.itf.json",
+      "--verbosity=1"
+    ],
+    [
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
+      "verify",
+      "models/NegIssueBytes.qnt",
+      "--backend=tlc",
+      "--max-steps=16",
+      "--invariant=ackBacked",
+      "--apalache-version=0.62.1",
+      "--server-endpoint=localhost:58597",
+      "--verbosity=3",
+      "--tlc-config=tlc-config.json"
+    ],
+    [
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegIssueEdit.qnt",
       "--backend=typescript",
@@ -208,23 +234,23 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=noAutoUnknown",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegIssueEdit.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegIssueEdit.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegIssueEdit.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=noAutoUnknown",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52649",
+      "--server-endpoint=localhost:58628",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegAttemptFlag.qnt",
       "--backend=typescript",
@@ -232,36 +258,36 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=attemptBeforeEffect",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegAttemptFlag.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegAttemptFlag.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegAttemptFlag.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=attemptBeforeEffect",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52679",
+      "--server-endpoint=localhost:58651",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/LedgerDiverged.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safeUnderTamper",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52718",
+      "--server-endpoint=localhost:58671",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/ConsentVersions.qnt",
       "--backend=typescript",
@@ -269,24 +295,24 @@
       "--max-steps=14",
       "--seed=0x123456",
       "--invariant=safe",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/ConsentVersions.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/ConsentVersions.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/ConsentVersions.qnt",
       "--backend=tlc",
       "--max-steps=14",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52861",
+      "--server-endpoint=localhost:58749",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/LedgerPublishWins.qnt",
       "--backend=typescript",
@@ -294,24 +320,24 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=safe",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/LedgerPublishWins.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/LedgerPublishWins.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/LedgerPublishWins.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52939",
+      "--server-endpoint=localhost:58798",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/LedgerSealWins.qnt",
       "--backend=typescript",
@@ -319,76 +345,76 @@
       "--max-steps=16",
       "--seed=0x123456",
       "--invariant=safe",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/LedgerSealWins.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/LedgerSealWins.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/LedgerSealWins.qnt",
       "--backend=tlc",
       "--max-steps=16",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53008",
+      "--server-endpoint=localhost:58853",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NativeReplace.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53029",
+      "--server-endpoint=localhost:58873",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NativeDelete.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53049",
+      "--server-endpoint=localhost:58894",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NativeCreate.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53073",
+      "--server-endpoint=localhost:58910",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NativeText.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53089",
+      "--server-endpoint=localhost:58932",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegNativeClobber.qnt",
       "--backend=typescript",
@@ -396,23 +422,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=exact",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegNativeClobber.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegNativeClobber.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegNativeClobber.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=exact",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53113",
+      "--server-endpoint=localhost:58947",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegNativeRehash.qnt",
       "--backend=typescript",
@@ -420,23 +446,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=writerPreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegNativeRehash.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegNativeRehash.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegNativeRehash.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=writerPreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53139",
+      "--server-endpoint=localhost:58966",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegPrefixGuess.qnt",
       "--backend=typescript",
@@ -444,49 +470,49 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=writerPreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegPrefixGuess.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegPrefixGuess.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegPrefixGuess.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=writerPreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53160",
+      "--server-endpoint=localhost:58988",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Ledger.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53175",
+      "--server-endpoint=localhost:59006",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerUnfair.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53218",
+      "--server-endpoint=localhost:59042",
       "--verbosity=3",
       "--temporal=progress",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegLedgerAbsent.qnt",
       "--backend=typescript",
@@ -494,23 +520,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=verdictSound",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegLedgerAbsent.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegLedgerAbsent.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerAbsent.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=verdictSound",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53250",
+      "--server-endpoint=localhost:59069",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegLedgerSplit.qnt",
       "--backend=typescript",
@@ -518,23 +544,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=atomicPublication",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegLedgerSplit.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegLedgerSplit.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerSplit.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=atomicPublication",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53274",
+      "--server-endpoint=localhost:59092",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegLedgerAnchor.qnt",
       "--backend=typescript",
@@ -542,23 +568,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=exclusive",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegLedgerAnchor.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegLedgerAnchor.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerAnchor.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=exclusive",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53302",
+      "--server-endpoint=localhost:59112",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegSealAnchor.qnt",
       "--backend=typescript",
@@ -566,23 +592,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=exclusive",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegSealAnchor.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegSealAnchor.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegSealAnchor.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=exclusive",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53325",
+      "--server-endpoint=localhost:59133",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegLedgerJournal.qnt",
       "--backend=typescript",
@@ -590,23 +616,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=journalFirst",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegLedgerJournal.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegLedgerJournal.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerJournal.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=journalFirst",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53352",
+      "--server-endpoint=localhost:59156",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegLedgerReplay.qnt",
       "--backend=typescript",
@@ -614,23 +640,23 @@
       "--max-steps=20",
       "--seed=0x123456",
       "--invariant=noReplay",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegLedgerReplay.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegLedgerReplay.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegLedgerReplay.qnt",
       "--backend=tlc",
       "--max-steps=20",
       "--invariant=noReplay",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53372",
+      "--server-endpoint=localhost:59177",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/Adoption.qnt",
       "--backend=typescript",
@@ -638,24 +664,24 @@
       "--max-steps=10",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/Adoption.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/Adoption.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Adoption.qnt",
       "--backend=tlc",
       "--max-steps=10",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53452",
+      "--server-endpoint=localhost:59244",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/ProbeOptimisticLoss.qnt",
       "--backend=typescript",
@@ -663,23 +689,23 @@
       "--max-steps=13",
       "--seed=0x123456",
       "--invariant=latestSavePreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/ProbeOptimisticLoss.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/ProbeOptimisticLoss.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/ProbeOptimisticLoss.qnt",
       "--backend=tlc",
       "--max-steps=13",
       "--invariant=latestSavePreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53545",
+      "--server-endpoint=localhost:59309",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/UseRemote.qnt",
       "--backend=typescript",
@@ -687,24 +713,24 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/UseRemote.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/UseRemote.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/UseRemote.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53637",
+      "--server-endpoint=localhost:59369",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/SilentDraft.qnt",
       "--backend=typescript",
@@ -712,24 +738,24 @@
       "--max-steps=9",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/SilentDraft.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/SilentDraft.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/SilentDraft.qnt",
       "--backend=tlc",
       "--max-steps=9",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53708",
+      "--server-endpoint=localhost:59436",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegDiscardRemote.qnt",
       "--backend=typescript",
@@ -737,23 +763,23 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=latestSavePreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegDiscardRemote.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegDiscardRemote.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegDiscardRemote.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=latestSavePreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53741",
+      "--server-endpoint=localhost:59467",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegSilentDraft.qnt",
       "--backend=typescript",
@@ -761,23 +787,23 @@
       "--max-steps=9",
       "--seed=0x123456",
       "--invariant=noBlindOverwrite",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegSilentDraft.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegSilentDraft.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegSilentDraft.qnt",
       "--backend=tlc",
       "--max-steps=9",
       "--invariant=noBlindOverwrite",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53769",
+      "--server-endpoint=localhost:59491",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegReplayUnique.qnt",
       "--backend=typescript",
@@ -785,23 +811,23 @@
       "--max-steps=7",
       "--seed=0x123456",
       "--invariant=noReplay",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegReplayUnique.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegReplayUnique.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegReplayUnique.qnt",
       "--backend=tlc",
       "--max-steps=7",
       "--invariant=noReplay",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53803",
+      "--server-endpoint=localhost:59523",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegUnauthored.qnt",
       "--backend=typescript",
@@ -809,23 +835,23 @@
       "--max-steps=7",
       "--seed=0x123456",
       "--invariant=noUnauthoredChange",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegUnauthored.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegUnauthored.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegUnauthored.qnt",
       "--backend=tlc",
       "--max-steps=7",
       "--invariant=noUnauthoredChange",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53834",
+      "--server-endpoint=localhost:59549",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegOptimistic.qnt",
       "--backend=typescript",
@@ -833,23 +859,23 @@
       "--max-steps=13",
       "--seed=0x123456",
       "--invariant=checkpointPublished",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegOptimistic.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegOptimistic.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegOptimistic.qnt",
       "--backend=tlc",
       "--max-steps=13",
       "--invariant=checkpointPublished",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53868",
+      "--server-endpoint=localhost:59571",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/Durability.qnt",
       "--backend=typescript",
@@ -857,23 +883,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=safe",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/Durability.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/Durability.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Durability.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53909",
+      "--server-endpoint=localhost:59616",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegVolatileObservation.qnt",
       "--backend=typescript",
@@ -881,23 +907,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=approvalDurable",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegVolatileObservation.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegVolatileObservation.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegVolatileObservation.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=approvalDurable",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53929",
+      "--server-endpoint=localhost:59641",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegApprovalScope.qnt",
       "--backend=typescript",
@@ -905,23 +931,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=approvalScoped",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegApprovalScope.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegApprovalScope.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegApprovalScope.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=approvalScoped",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53956",
+      "--server-endpoint=localhost:59656",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegNativeGuard.qnt",
       "--backend=typescript",
@@ -929,23 +955,23 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=newerPreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegNativeGuard.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegNativeGuard.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegNativeGuard.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=newerPreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:53978",
+      "--server-endpoint=localhost:59687",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegAccountCapture.qnt",
       "--backend=typescript",
@@ -953,62 +979,62 @@
       "--max-steps=15",
       "--seed=0x123456",
       "--invariant=accountedCaptured",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegAccountCapture.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegAccountCapture.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegAccountCapture.qnt",
       "--backend=tlc",
       "--max-steps=15",
       "--invariant=accountedCaptured",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54003",
+      "--server-endpoint=localhost:59711",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/LiveIndependent.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54024",
+      "--server-endpoint=localhost:59738",
       "--verbosity=3",
       "--temporal=convergence",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/LiveConflict.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54048",
+      "--server-endpoint=localhost:59768",
       "--verbosity=3",
       "--temporal=convergence",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegUnfair.qnt",
       "--backend=tlc",
       "--max-steps=0",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54085",
+      "--server-endpoint=localhost:59802",
       "--verbosity=3",
       "--temporal=convergence",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/Core.qnt",
       "--backend=typescript",
@@ -1016,23 +1042,23 @@
       "--max-steps=5",
       "--seed=0x123456",
       "--invariant=safe",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/Core.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/Core.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Core.qnt",
       "--backend=tlc",
       "--max-steps=5",
       "--invariant=safe",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54136",
+      "--server-endpoint=localhost:59876",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/Independent.qnt",
       "--backend=typescript",
@@ -1040,24 +1066,24 @@
       "--max-steps=21",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/Independent.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/Independent.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Independent.qnt",
       "--backend=tlc",
       "--max-steps=21",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54354",
+      "--server-endpoint=localhost:60069",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/ResponseLoss.qnt",
       "--backend=typescript",
@@ -1065,24 +1091,24 @@
       "--max-steps=13",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/ResponseLoss.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/ResponseLoss.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/ResponseLoss.qnt",
       "--backend=tlc",
       "--max-steps=13",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54440",
+      "--server-endpoint=localhost:60155",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/UnknownRewind.qnt",
       "--backend=typescript",
@@ -1090,24 +1116,24 @@
       "--max-steps=6",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/UnknownRewind.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/UnknownRewind.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/UnknownRewind.qnt",
       "--backend=tlc",
       "--max-steps=6",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54504",
+      "--server-endpoint=localhost:60201",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/ExactPublish.qnt",
       "--backend=typescript",
@@ -1115,24 +1141,24 @@
       "--max-steps=5",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/ExactPublish.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/ExactPublish.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/ExactPublish.qnt",
       "--backend=tlc",
       "--max-steps=5",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54572",
+      "--server-endpoint=localhost:60244",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/Application.qnt",
       "--backend=typescript",
@@ -1140,24 +1166,24 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/Application.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/Application.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/Application.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54642",
+      "--server-endpoint=localhost:60320",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/StaleDecision.qnt",
       "--backend=typescript",
@@ -1165,24 +1191,24 @@
       "--max-steps=7",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/StaleDecision.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/StaleDecision.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/StaleDecision.qnt",
       "--backend=tlc",
       "--max-steps=7",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54705",
+      "--server-endpoint=localhost:60394",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegReplay.qnt",
       "--backend=typescript",
@@ -1190,23 +1216,23 @@
       "--max-steps=6",
       "--seed=0x123456",
       "--invariant=unknownHeld",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegReplay.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegReplay.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegReplay.qnt",
       "--backend=tlc",
       "--max-steps=6",
       "--invariant=unknownHeld",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54737",
+      "--server-endpoint=localhost:60429",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegFastForward.qnt",
       "--backend=typescript",
@@ -1214,23 +1240,23 @@
       "--max-steps=5",
       "--seed=0x123456",
       "--invariant=exactHead",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegFastForward.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegFastForward.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegFastForward.qnt",
       "--backend=tlc",
       "--max-steps=5",
       "--invariant=exactHead",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54947",
+      "--server-endpoint=localhost:60470",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegJournal.qnt",
       "--backend=typescript",
@@ -1238,23 +1264,23 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=journalFirst",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegJournal.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegJournal.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegJournal.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=journalFirst",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:54993",
+      "--server-endpoint=localhost:60499",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegGuard.qnt",
       "--backend=typescript",
@@ -1262,23 +1288,23 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=newerPreserved",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegGuard.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegGuard.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegGuard.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=newerPreserved",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:55029",
+      "--server-endpoint=localhost:60523",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegCapture.qnt",
       "--backend=typescript",
@@ -1286,23 +1312,23 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=carriedCaptured",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegCapture.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegCapture.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegCapture.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=carriedCaptured",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:55100",
+      "--server-endpoint=localhost:60555",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegCheckpoint.qnt",
       "--backend=typescript",
@@ -1310,23 +1336,23 @@
       "--max-steps=8",
       "--seed=0x123456",
       "--invariant=wholeCheckpoint",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegCheckpoint.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegCheckpoint.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegCheckpoint.qnt",
       "--backend=tlc",
       "--max-steps=8",
       "--invariant=wholeCheckpoint",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:55140",
+      "--server-endpoint=localhost:60592",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegStaleDecision.qnt",
       "--backend=typescript",
@@ -1334,18 +1360,18 @@
       "--max-steps=7",
       "--seed=0x123456",
       "--invariant=scopedDecisions",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/tlc/NegStaleDecision.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/tlc/NegStaleDecision.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegStaleDecision.qnt",
       "--backend=tlc",
       "--max-steps=7",
       "--invariant=scopedDecisions",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:55191",
+      "--server-endpoint=localhost:60616",
       "--verbosity=3",
       "--tlc-config=tlc-config.json"
     ]
@@ -1361,8 +1387,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 14.26,
-      "states": "23209 states generated, 6172 distinct states found"
+      "seconds": 3.97,
+      "states": "20,275 states generated, 5,332 distinct states found"
     },
     {
       "case": "NegTornPublish",
@@ -1373,7 +1399,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.66,
+      "seconds": 0.33,
       "witnesses": null
     },
     {
@@ -1386,8 +1412,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 19.54,
-      "states": "497 states generated, 206 distinct states found"
+      "seconds": 3.76,
+      "states": "459 states generated, 189 distinct states found"
     },
     {
       "case": "NegIssueAck",
@@ -1398,7 +1424,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.93,
+      "seconds": 0.33,
       "witnesses": null
     },
     {
@@ -1411,8 +1437,33 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 6.31,
-      "states": "112 states generated, 61 distinct states found"
+      "seconds": 3.75,
+      "states": "99 states generated, 55 distinct states found"
+    },
+    {
+      "case": "NegIssueBytes",
+      "kind": "simulation",
+      "property": "ackBacked",
+      "bound": 16,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "exit": 1,
+      "seconds": 0.34,
+      "witnesses": null
+    },
+    {
+      "case": "NegIssueBytes",
+      "kind": "tlc",
+      "property": "ackBacked",
+      "temporal": null,
+      "bound": null,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "exit": 1,
+      "seconds": 3.77,
+      "states": "354 states generated, 156 distinct states found"
     },
     {
       "case": "NegIssueEdit",
@@ -1423,7 +1474,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.54,
+      "seconds": 1.06,
       "witnesses": null
     },
     {
@@ -1436,8 +1487,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.05,
-      "states": "674 states generated, 305 distinct states found"
+      "seconds": 3.82,
+      "states": "734 states generated, 322 distinct states found"
     },
     {
       "case": "NegAttemptFlag",
@@ -1448,7 +1499,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.6,
+      "seconds": 0.34,
       "witnesses": null
     },
     {
@@ -1461,7 +1512,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 6.21,
+      "seconds": 3.77,
       "states": "18 states generated, 13 distinct states found"
     },
     {
@@ -1474,8 +1525,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 21.17,
-      "states": "679422 states generated, 147148 distinct states found"
+      "seconds": 14.91,
+      "states": "679,422 states generated, 147,148 distinct states found"
     },
     {
       "case": "ConsentVersions",
@@ -1486,7 +1537,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 6.67,
+      "seconds": 3.88,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1499,7 +1550,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 6.03,
+      "seconds": 3.82,
       "states": "16 states generated, 15 distinct states found"
     },
     {
@@ -1511,7 +1562,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 8.54,
+      "seconds": 7.4,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1524,7 +1575,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.53,
+      "seconds": 4.29,
       "states": "18 states generated, 17 distinct states found"
     },
     {
@@ -1536,7 +1587,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 12.03,
+      "seconds": 9.41,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1549,7 +1600,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.78,
+      "seconds": 4.22,
       "states": "18 states generated, 17 distinct states found"
     },
     {
@@ -1562,8 +1613,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.0,
-      "states": "359 states generated, 444 distinct states found"
+      "seconds": 3.73,
+      "states": "1,359 states generated, 444 distinct states found"
     },
     {
       "case": "NativeDelete",
@@ -1575,7 +1626,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 3.82,
+      "seconds": 3.71,
       "states": "551 states generated, 180 distinct states found"
     },
     {
@@ -1588,7 +1639,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.03,
+      "seconds": 3.7,
       "states": "451 states generated, 152 distinct states found"
     },
     {
@@ -1601,7 +1652,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.06,
+      "seconds": 3.7,
       "states": "233 states generated, 80 distinct states found"
     },
     {
@@ -1613,7 +1664,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.51,
+      "seconds": 0.36,
       "witnesses": null
     },
     {
@@ -1626,7 +1677,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.87,
+      "seconds": 3.69,
       "states": "331 states generated, 129 distinct states found"
     },
     {
@@ -1638,7 +1689,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.46,
+      "seconds": 0.42,
       "witnesses": null
     },
     {
@@ -1651,8 +1702,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.82,
-      "states": "477 states generated, 191 distinct states found"
+      "seconds": 3.69,
+      "states": "494 states generated, 200 distinct states found"
     },
     {
       "case": "NegPrefixGuess",
@@ -1663,7 +1714,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.42,
+      "seconds": 0.35,
       "witnesses": null
     },
     {
@@ -1676,8 +1727,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.98,
-      "states": "110 states generated, 53 distinct states found"
+      "seconds": 3.68,
+      "states": "113 states generated, 54 distinct states found"
     },
     {
       "case": "Ledger",
@@ -1689,8 +1740,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 10.02,
-      "states": "312130 states generated, 67664 distinct states found"
+      "seconds": 9.14,
+      "states": "312,130 states generated, 67,664 distinct states found"
     },
     {
       "case": "NegLedgerUnfair",
@@ -1702,8 +1753,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 7.26,
-      "states": "312130 states generated, 67664 distinct states found"
+      "seconds": 6.61,
+      "states": "312,130 states generated, 67,664 distinct states found"
     },
     {
       "case": "NegLedgerAbsent",
@@ -1714,7 +1765,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.66,
+      "seconds": 0.55,
       "witnesses": null
     },
     {
@@ -1727,7 +1778,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.39,
+      "seconds": 4.12,
       "states": "56 states generated, 36 distinct states found"
     },
     {
@@ -1739,7 +1790,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.66,
+      "seconds": 0.55,
       "witnesses": null
     },
     {
@@ -1752,8 +1803,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.35,
-      "states": "194 states generated, 95 distinct states found"
+      "seconds": 4.13,
+      "states": "191 states generated, 95 distinct states found"
     },
     {
       "case": "NegLedgerAnchor",
@@ -1764,7 +1815,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.7,
+      "seconds": 0.56,
       "witnesses": null
     },
     {
@@ -1777,8 +1828,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.3,
-      "states": "1719 states generated, 600 distinct states found"
+      "seconds": 4.16,
+      "states": "1,760 states generated, 617 distinct states found"
     },
     {
       "case": "NegSealAnchor",
@@ -1789,7 +1840,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.65,
+      "seconds": 0.58,
       "witnesses": null
     },
     {
@@ -1802,8 +1853,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.34,
-      "states": "1786 states generated, 631 distinct states found"
+      "seconds": 4.18,
+      "states": "1,686 states generated, 598 distinct states found"
     },
     {
       "case": "NegLedgerJournal",
@@ -1814,7 +1865,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.65,
+      "seconds": 0.57,
       "witnesses": null
     },
     {
@@ -1827,8 +1878,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.44,
-      "states": "193 states generated, 97 distinct states found"
+      "seconds": 4.13,
+      "states": "203 states generated, 104 distinct states found"
     },
     {
       "case": "NegLedgerReplay",
@@ -1839,7 +1890,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.71,
+      "seconds": 0.56,
       "witnesses": null
     },
     {
@@ -1852,8 +1903,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.34,
-      "states": "5737 states generated, 1787 distinct states found"
+      "seconds": 4.22,
+      "states": "6,373 states generated, 1,957 distinct states found"
     },
     {
       "case": "Adoption",
@@ -1864,7 +1915,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 15.27,
+      "seconds": 13.65,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1877,7 +1928,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.73,
+      "seconds": 5.25,
       "states": "16 states generated, 12 distinct states found"
     },
     {
@@ -1889,7 +1940,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 14.12,
+      "seconds": 12.54,
       "witnesses": null
     },
     {
@@ -1902,7 +1953,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.7,
+      "seconds": 5.28,
       "states": "17 states generated, 15 distinct states found"
     },
     {
@@ -1914,7 +1965,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 14.5,
+      "seconds": 12.13,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1927,7 +1978,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.58,
+      "seconds": 5.26,
       "states": "13 states generated, 10 distinct states found"
     },
     {
@@ -1939,7 +1990,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 14.91,
+      "seconds": 12.68,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -1952,7 +2003,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.69,
+      "seconds": 5.27,
       "states": "14 states generated, 11 distinct states found"
     },
     {
@@ -1964,7 +2015,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.13,
+      "seconds": 1.02,
       "witnesses": null
     },
     {
@@ -1977,7 +2028,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.51,
+      "seconds": 5.28,
       "states": "11 states generated, 9 distinct states found"
     },
     {
@@ -1989,7 +2040,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.43,
+      "seconds": 1.03,
       "witnesses": null
     },
     {
@@ -2002,7 +2053,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.96,
+      "seconds": 5.25,
       "states": "11 states generated, 10 distinct states found"
     },
     {
@@ -2014,7 +2065,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.15,
+      "seconds": 1.03,
       "witnesses": null
     },
     {
@@ -2027,7 +2078,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.54,
+      "seconds": 5.28,
       "states": "9 states generated, 8 distinct states found"
     },
     {
@@ -2039,7 +2090,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.17,
+      "seconds": 1.02,
       "witnesses": null
     },
     {
@@ -2052,7 +2103,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.75,
+      "seconds": 5.29,
       "states": "8 states generated, 8 distinct states found"
     },
     {
@@ -2064,7 +2115,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.15,
+      "seconds": 1.05,
       "witnesses": null
     },
     {
@@ -2077,7 +2128,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.58,
+      "seconds": 5.36,
       "states": "4 states generated, 3 distinct states found"
     },
     {
@@ -2089,7 +2140,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 4.94,
+      "seconds": 4.53,
       "witnesses": null
     },
     {
@@ -2102,8 +2153,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 3.98,
-      "states": "9737 states generated, 1756 distinct states found"
+      "seconds": 3.82,
+      "states": "9,737 states generated, 1,756 distinct states found"
     },
     {
       "case": "NegVolatileObservation",
@@ -2114,7 +2165,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.45,
+      "seconds": 0.37,
       "witnesses": null
     },
     {
@@ -2127,7 +2178,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.98,
+      "seconds": 3.8,
       "states": "59 states generated, 22 distinct states found"
     },
     {
@@ -2139,7 +2190,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.47,
+      "seconds": 0.41,
       "witnesses": null
     },
     {
@@ -2152,8 +2203,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 4.06,
-      "states": "499 states generated, 125 distinct states found"
+      "seconds": 3.83,
+      "states": "509 states generated, 125 distinct states found"
     },
     {
       "case": "NegNativeGuard",
@@ -2164,7 +2215,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.03,
+      "seconds": 2.83,
       "witnesses": null
     },
     {
@@ -2177,8 +2228,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.96,
-      "states": "804 states generated, 192 distinct states found"
+      "seconds": 3.83,
+      "states": "803 states generated, 196 distinct states found"
     },
     {
       "case": "NegAccountCapture",
@@ -2189,7 +2240,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 0.54,
+      "seconds": 0.46,
       "witnesses": null
     },
     {
@@ -2202,7 +2253,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 3.93,
+      "seconds": 3.83,
       "states": "778 states generated, 192 distinct states found"
     },
     {
@@ -2215,8 +2266,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.89,
-      "states": "23072 states generated, 6214 distinct states found"
+      "seconds": 5.57,
+      "states": "23,072 states generated, 6,214 distinct states found"
     },
     {
       "case": "LiveConflict",
@@ -2228,8 +2279,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 9.01,
-      "states": "108366 states generated, 29146 distinct states found"
+      "seconds": 8.34,
+      "states": "108,366 states generated, 29,146 distinct states found"
     },
     {
       "case": "NegUnfair",
@@ -2241,8 +2292,8 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.64,
-      "states": "23072 states generated, 6214 distinct states found"
+      "seconds": 5.31,
+      "states": "23,072 states generated, 6,214 distinct states found"
     },
     {
       "case": "Core",
@@ -2253,7 +2304,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 8.95,
+      "seconds": 8.37,
       "witnesses": null
     },
     {
@@ -2266,8 +2317,8 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 9.93,
-      "states": "561363 states generated, 274016 distinct states found"
+      "seconds": 8.78,
+      "states": "561,363 states generated, 274,016 distinct states found"
     },
     {
       "case": "Independent",
@@ -2278,7 +2329,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 39.72,
+      "seconds": 34.25,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2291,7 +2342,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.6,
+      "seconds": 5.38,
       "states": "45 states generated, 41 distinct states found"
     },
     {
@@ -2303,7 +2354,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 20.04,
+      "seconds": 18.35,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2316,7 +2367,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.5,
+      "seconds": 5.27,
       "states": "17 states generated, 15 distinct states found"
     },
     {
@@ -2328,7 +2379,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 10.02,
+      "seconds": 8.53,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2341,7 +2392,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.52,
+      "seconds": 5.26,
       "states": "10 states generated, 8 distinct states found"
     },
     {
@@ -2353,7 +2404,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 9.26,
+      "seconds": 7.48,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2366,7 +2417,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.74,
+      "seconds": 5.33,
       "states": "10 states generated, 7 distinct states found"
     },
     {
@@ -2378,7 +2429,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 12.87,
+      "seconds": 11.55,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2391,7 +2442,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.48,
+      "seconds": 5.31,
       "states": "12 states generated, 10 distinct states found"
     },
     {
@@ -2403,7 +2454,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 12.22,
+      "seconds": 11.01,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -2416,7 +2467,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 5.55,
+      "seconds": 5.31,
       "states": "20 states generated, 13 distinct states found"
     },
     {
@@ -2428,7 +2479,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.16,
+      "seconds": 1.06,
       "witnesses": null
     },
     {
@@ -2441,7 +2492,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 9.27,
+      "seconds": 5.3,
       "states": "8 states generated, 7 distinct states found"
     },
     {
@@ -2453,7 +2504,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.13,
+      "seconds": 1.12,
       "witnesses": null
     },
     {
@@ -2466,7 +2517,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.44,
+      "seconds": 5.39,
       "states": "8 states generated, 6 distinct states found"
     },
     {
@@ -2478,7 +2529,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.1,
+      "seconds": 1.06,
       "witnesses": null
     },
     {
@@ -2491,7 +2542,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.58,
+      "seconds": 5.25,
       "states": "5 states generated, 5 distinct states found"
     },
     {
@@ -2503,7 +2554,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.4,
+      "seconds": 1.03,
       "witnesses": null
     },
     {
@@ -2516,7 +2567,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 6.03,
+      "seconds": 5.2,
       "states": "9 states generated, 8 distinct states found"
     },
     {
@@ -2528,7 +2579,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.2,
+      "seconds": 1.03,
       "witnesses": null
     },
     {
@@ -2541,7 +2592,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.57,
+      "seconds": 5.3,
       "states": "9 states generated, 8 distinct states found"
     },
     {
@@ -2553,7 +2604,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.23,
+      "seconds": 1.06,
       "witnesses": null
     },
     {
@@ -2566,7 +2617,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.51,
+      "seconds": 5.3,
       "states": "5 states generated, 5 distinct states found"
     },
     {
@@ -2578,7 +2629,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.07,
+      "seconds": 1.06,
       "witnesses": null
     },
     {
@@ -2591,7 +2642,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 5.31,
+      "seconds": 5.32,
       "states": "12 states generated, 9 distinct states found"
     }
   ]

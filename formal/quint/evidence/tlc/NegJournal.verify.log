@@ -3,30 +3,30 @@ exit=1
 # Usage statistics is OFF. We care about your privacy.
 # If you want to help our project, consider enabling statistics with config --enable-stats=true.
 
-Output directory: /private/tmp/vault-sync-quint-v2/formal/quint/_apalache-out/server/2026-10-13T21-22-35_7125627331281539085
-# APALACHE version: 0.62.1 | build: a321771                       I@21:22:35.691
-Starting checker server on port 54993...                          I@21:22:35.693
-The Apalache server is running on port 54993. Press Ctrl-C to stop.
-Oct 13, 2026 9:22:37 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+Output directory: /private/tmp/vault-sync-formal-fixes-v2/formal/quint/_apalache-out/server/2026-10-13T21-47-26_8044075835113877290
+# APALACHE version: 0.62.1 | build: a321771                       I@21:47:26.131
+Starting checker server on port 60499...                          I@21:47:26.133
+The Apalache server is running on port 60499. Press Ctrl-C to stop.
+Oct 13, 2026 9:47:27 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
 WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
 As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
-PASS #0: SanyParser                                               I@21:22:37.762
+PASS #0: SanyParser                                               I@21:47:28.225
 [TLC] Running TLC model checker...
 
-TLC2 Version 2026.10.13.155238
+TLC2 Version 2026.10.13.161728
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 45 and seed 5139157655981748643 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 7121] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/NegJournal.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/NegJournal.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/Integers.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/Sequences.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/FiniteSets.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/TLC.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/Apalache.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/Variants.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/Naturals.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/tlc-1604300058615131163/TLCExt.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Running breadth-first search Model-Checking with fp 3 and seed -928620839988202234 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 45682] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/NegJournal.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/NegJournal.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/Integers.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/Sequences.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/FiniteSets.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/TLC.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/Apalache.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/Variants.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/Naturals.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/tlc-12685198427440539920/TLCExt.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
 Semantic processing of module Naturals
 Semantic processing of module Integers
 Semantic processing of module Sequences
@@ -42,9 +42,9 @@ Linting of module Variants
 Linting of module TLCExt
 Linting of module _TLCTrace
 Linting of module NegJournal
-Starting... (2026-10-13 21:22:38)
+Starting... (2026-10-13 21:47:29)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-13 21:22:38.
+Finished computing initial states: 1 distinct state generated at 2026-10-13 21:47:29.
 Error: Invariant q_inv is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -489,8 +489,8 @@ State 5: <NegJournal_cases_step line 1692, col 3 to line 1722, col 33 of module 
 
 5 states generated, 5 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 5.
-Finished in 00s at (2026-10-13 21:22:38)
-Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SAMFz6/NegJournal_TTrace_1791906758.tla
+Finished in 00s at (2026-10-13 21:47:29)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-PgS9gv/NegJournal_TTrace_1791908248.tla
 
-[violation] Found an issue (417ms).
+[violation] Found an issue (371ms).
 error: found a counterexample

@@ -3,30 +3,30 @@ exit=1
 # Usage statistics is OFF. We care about your privacy.
 # If you want to help our project, consider enabling statistics with config --enable-stats=true.
 
-Output directory: /private/tmp/vault-sync-quint-v2/formal/quint/_apalache-out/server/2026-10-13T21-13-44_416336334420327378
-# APALACHE version: 0.62.1 | build: a321771                       I@21:13:44.244
-Starting checker server on port 52649...                          I@21:13:44.247
-The Apalache server is running on port 52649. Press Ctrl-C to stop.
-Oct 13, 2026 9:13:46 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+Output directory: /private/tmp/vault-sync-formal-fixes-v2/formal/quint/_apalache-out/server/2026-10-13T21-39-40_9192323979355458733
+# APALACHE version: 0.62.1 | build: a321771                       I@21:39:40.522
+Starting checker server on port 58628...                          I@21:39:40.524
+The Apalache server is running on port 58628. Press Ctrl-C to stop.
+Oct 13, 2026 9:39:42 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
 WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
 As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
-PASS #0: SanyParser                                               I@21:13:47.140
+PASS #0: SanyParser                                               I@21:39:42.542
 [TLC] Running TLC model checker...
 
-TLC2 Version 2026.10.13.154347
+TLC2 Version 2026.10.13.160942
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 60 and seed -171857837073382207 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 90563] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/NegIssueEdit.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/NegIssueEdit.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/Integers.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/Sequences.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/FiniteSets.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/TLC.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/Apalache.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/Variants.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/Naturals.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/tlc-16525187155535720648/TLCExt.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Running breadth-first search Model-Checking with fp 107 and seed -5957514434190455494 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 32048] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/NegIssueEdit.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/NegIssueEdit.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/Integers.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/Sequences.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/FiniteSets.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/TLC.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/Apalache.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/Variants.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/Naturals.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/tlc-8679731393367698705/TLCExt.tla (jar:file:/private/tmp/vault-sync-formal-fixes-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
 Semantic processing of module Naturals
 Semantic processing of module Integers
 Semantic processing of module Sequences
@@ -42,28 +42,49 @@ Linting of module Variants
 Linting of module TLCExt
 Linting of module _TLCTrace
 Linting of module NegIssueEdit
-Starting... (2026-10-13 21:13:47)
+Starting... (2026-10-13 21:39:43)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-13 21:13:47.
+Finished computing initial states: 1 distinct state generated at 2026-10-13 21:39:43.
 Error: Invariant q_inv is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "prepared",
   attempted |-> FALSE,
   live |-> 0,
-  found |-> -1,
-  kind |-> "none",
   nativeIssue |-> FALSE,
+  nativeEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   fetched |-> FALSE,
+  fetchedEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   recorded |-> FALSE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   acknowledged |-> FALSE,
   ready |-> FALSE,
   loaded |-> TRUE,
-  recovery |-> {0, 1},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -72,23 +93,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "prepared",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 2: <NegIssueEdit_nativeHandoff_persistAttempt line 49, col 3 to line 55, col 7 of module NegIssueEdit>
+State 2: <NegIssueEdit_nativeHandoff_persistAttempt line 61, col 3 to line 67, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "attempting",
   attempted |-> TRUE,
   live |-> 0,
-  found |-> -1,
-  kind |-> "none",
   nativeIssue |-> FALSE,
+  nativeEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   fetched |-> FALSE,
+  fetchedEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   recorded |-> FALSE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   acknowledged |-> FALSE,
   ready |-> FALSE,
   loaded |-> TRUE,
-  recovery |-> {0, 1},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -97,23 +139,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "attempting",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 3: <NegIssueEdit_nativeHandoff_nativeEffect line 61, col 3 to line 80, col 10 of module NegIssueEdit>
+State 3: <NegIssueEdit_nativeHandoff_nativeEffect line 73, col 3 to line 93, col 10 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "effect",
   attempted |-> TRUE,
   live |-> 2,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> FALSE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> FALSE,
+  fetchedEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   recorded |-> FALSE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   acknowledged |-> FALSE,
   ready |-> FALSE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -122,23 +185,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "effect",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 4: <NegIssueEdit_nativeHandoff_recover line 86, col 3 to line 92, col 7 of module NegIssueEdit>
+State 4: <NegIssueEdit_nativeHandoff_recover line 99, col 3 to line 106, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   attempted |-> TRUE,
   live |-> 2,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> TRUE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> FALSE,
+  fetchedEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   recorded |-> FALSE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   acknowledged |-> FALSE,
   ready |-> FALSE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -147,23 +231,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 5: <NegIssueEdit_nativeHandoff_fetch line 98, col 3 to line 102, col 68 of module NegIssueEdit>
+State 5: <NegIssueEdit_nativeHandoff_fetch line 112, col 3 to line 119, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   attempted |-> TRUE,
   live |-> 2,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> TRUE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> TRUE,
+  fetchedEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   recorded |-> FALSE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> FALSE,
+        kind |-> "none",
+        id |-> -1,
+        expected |-> -1,
+        next |-> -1,
+        found |-> -1,
+        hold |-> FALSE ],
   acknowledged |-> FALSE,
   ready |-> FALSE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -172,23 +277,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 6: <NegIssueEdit_nativeHandoff_ingest line 108, col 3 to line 120, col 7 of module NegIssueEdit>
+State 6: <NegIssueEdit_nativeHandoff_ingest line 125, col 3 to line 149, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   attempted |-> TRUE,
   live |-> 2,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> TRUE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> TRUE,
+  fetchedEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   recorded |-> TRUE,
   engineIssue |-> TRUE,
+  engineEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   acknowledged |-> FALSE,
   ready |-> TRUE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -197,23 +323,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 7: <NegIssueEdit_nativeHandoff_edit line 228, col 3 to line 241, col 7 of module NegIssueEdit>
+State 7: <NegIssueEdit_nativeHandoff_edit line 262, col 3 to line 275, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   attempted |-> TRUE,
   live |-> 4,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> TRUE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> TRUE,
+  fetchedEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   recorded |-> TRUE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   acknowledged |-> FALSE,
   ready |-> TRUE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 1,
   otherPublished |-> FALSE,
@@ -222,23 +369,44 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-State 8: <NegIssueEdit_nativeHandoff_publishIssuePath line 140, col 3 to line 155, col 7 of module NegIssueEdit>
+State 8: <NegIssueEdit_nativeHandoff_publishIssuePath line 178, col 3 to line 193, col 7 of module NegIssueEdit>
 NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   attempted |-> TRUE,
   live |-> 4,
-  found |-> 2,
-  kind |-> "interrupted",
   nativeIssue |-> TRUE,
+  nativeEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   fetched |-> TRUE,
+  fetchedEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   recorded |-> TRUE,
   engineIssue |-> FALSE,
+  engineEvidence |->
+      [ present |-> TRUE,
+        kind |-> "interrupted",
+        id |-> 7,
+        expected |-> 0,
+        next |-> 1,
+        found |-> 2,
+        hold |-> TRUE ],
   acknowledged |-> FALSE,
   ready |-> TRUE,
   loaded |-> TRUE,
-  recovery |-> {0, 1, 2},
   choice |-> FALSE,
-  expected |-> -1,
-  next |-> -1,
+  choiceExpected |-> -1,
+  choiceNext |-> -1,
   reviewed |-> FALSE,
   published |-> 4,
   otherPublished |-> FALSE,
@@ -247,10 +415,10 @@ NegIssueEdit_nativeHandoff_s = [ stage |-> "issued",
   quiet |-> FALSE,
   budget |-> 2 ]
 
-674 states generated, 305 distinct states found, 133 states left on queue.
+734 states generated, 322 distinct states found, 134 states left on queue.
 The depth of the complete state graph search is 8.
-Finished in 00s at (2026-10-13 21:13:47)
-Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-3njopG/NegIssueEdit_TTrace_1791906227.tla
+Finished in 00s at (2026-10-13 21:39:43)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-2bFQ2U/NegIssueEdit_TTrace_1791907782.tla
 
-[violation] Found an issue (429ms).
+[violation] Found an issue (351ms).
 error: found a counterexample

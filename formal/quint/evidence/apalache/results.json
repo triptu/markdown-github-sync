@@ -12,7 +12,7 @@
   "java": "openjdk version \"23.0.2\" 2025-01-21",
   "node": "v23.6.0",
   "backend": "apalache",
-  "utc": "2026-10-13T15:44:30Z",
+  "utc": "2026-10-13T16:18:45Z",
   "sources": {
     "formal/quint/cases.qnt": "935b77364fa386e425e8e0edab727dbbeae178da4b2207c8b79cdee9309f1167",
     "formal/quint/durability.qnt": "b2e610f531cda3e91e299430629595c214a9d701cfa6ab1c0b590ef94f130565",
@@ -45,6 +45,7 @@
     "formal/quint/models/NegFastForward.qnt": "f18ab02c819cd5cd76c2357a94e45b539bfc00843d03e48281992482fe3e561b",
     "formal/quint/models/NegGuard.qnt": "af18bc12eda4490aaf4479810cd93ad29012125fe577b5c6b08447b109f69c19",
     "formal/quint/models/NegIssueAck.qnt": "019aa44d732ec4e290658ec9db4a2d05be18713ad28811b63260a7edbf26ac8e",
+    "formal/quint/models/NegIssueBytes.qnt": "dd4decfcac6eadf5cc269f046dee371a023e052ffd671415d9736e9e5358b051",
     "formal/quint/models/NegIssueEdit.qnt": "a458be1bb762260af4b30f7cb6ede1bde986106ffd5273f3f3a0d8648a8d8c4a",
     "formal/quint/models/NegJournal.qnt": "ade2447869d62e69d8b3de9ab69449bfc19ae4f270bb4b27fb2d9802e8304856",
     "formal/quint/models/NegLedgerAbsent.qnt": "b2685f1fdbb25971a2f63599e8dcbb2d0dd3f99609389b6e38ba0f4fa305add1",
@@ -73,20 +74,20 @@
     "formal/quint/models/StaleDecision.qnt": "61b9e69fb2b2509f18548f20eaf6c4ab031e17e1fb5d13599a46010d27a6b6c0",
     "formal/quint/models/UnknownRewind.qnt": "27d3e5e714be14ba8ddf53785717bd15223aeb0fbc7aeac65aa67463cacef6ac",
     "formal/quint/models/UseRemote.qnt": "e642c34ea1d8ae60f61edfd18d1b65518e82cfc931a2ed06edfa67fa87eacc4c",
-    "formal/quint/nativeHandoff.qnt": "0253a604e73a4e64692a6d02b09a04168c7317ae7362aeb1f48e94063e0b85c0",
+    "formal/quint/nativeHandoff.qnt": "a688c8270dfcea5aaca89d77ad33928ca703a9b9b845d2ddb6910b465aac2725",
     "formal/quint/nativeTxn.qnt": "4ce57e16526b6aa83b3e51dd7e2f4f75db3c556e8477d553384bad4c72e30be8",
     "formal/quint/progress.qnt": "c58bedb14d11d91216c088c2401b37221a2013093bbd7e1354d45d9b3781a46c",
     "formal/quint/vaultSync.qnt": "9a7ed978333d779140af94b2508a1528bee034a2e64025dd8e7c4c689a62e317",
     "formal/quint/package-lock.json": "1e6424ee53efce1575262cb1b8f6d1f878bbecabe6d442df98dcc512879c21f2",
     "formal/quint/package.json": "27f59d505c9059211541ff50950b2811f1d5b138227dde010d68d51f05c9b667",
     "formal/quint/tlc-config.json": "cef7b24458a17299872ef7da84233ec954bf19e4653a9173fa3aefed93b9773e",
-    "scripts/check-quint.py": "bea2dcd0927975f98d6f1b4acd2255387913e84bc2448a1ffe9981c711351258",
-    "scripts/test-check-quint.py": "14b7b741591407e407e8f6f541877dabce2a34a5f4d68ec8a4e765dcd292daeb",
+    "scripts/check-quint.py": "d90f1ad232b15733df4456abe9c98a405daf7a0b1d404caa0fa9a541867823ec",
+    "scripts/test-check-quint.py": "d47f67dcc7bc3addf47c80c6ff5d878c35d0cbd6202f74c0ef0be911d248108d",
     "scripts/check-model.sh": "8b386588ab83b5b9dbdebf6cdeff3a602503dace221a9c5ed60bf423b5ffd2bf"
   },
   "commands": [
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/UnknownRewind.qnt",
       "--backend=typescript",
@@ -94,23 +95,23 @@
       "--max-steps=6",
       "--seed=0x123456",
       "--invariant=safe and completed",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/apalache/UnknownRewind.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/apalache/UnknownRewind.simulation.itf.json",
       "--verbosity=1",
       "--witnesses=witness"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/UnknownRewind.qnt",
       "--backend=apalache",
       "--max-steps=6",
       "--invariant=safe and completed",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52646",
+      "--server-endpoint=localhost:60694",
       "--verbosity=3"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "run",
       "models/NegReplay.qnt",
       "--backend=typescript",
@@ -118,18 +119,18 @@
       "--max-steps=6",
       "--seed=0x123456",
       "--invariant=unknownHeld",
-      "--out-itf=/private/tmp/vault-sync-quint-v2/formal/quint/evidence/apalache/NegReplay.simulation.itf.json",
+      "--out-itf=/private/tmp/vault-sync-formal-fixes-v2/formal/quint/evidence/apalache/NegReplay.simulation.itf.json",
       "--verbosity=1"
     ],
     [
-      "/private/tmp/vault-sync-quint-v2/formal/quint/node_modules/.bin/quint",
+      "/private/tmp/vault-sync-formal-fixes-v2/formal/quint/node_modules/.bin/quint",
       "verify",
       "models/NegReplay.qnt",
       "--backend=apalache",
       "--max-steps=6",
       "--invariant=unknownHeld",
       "--apalache-version=0.62.1",
-      "--server-endpoint=localhost:52781",
+      "--server-endpoint=localhost:60752",
       "--verbosity=3"
     ]
   ],
@@ -143,7 +144,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 45.83,
+      "seconds": 8.96,
       "witnesses": "witness was witnessed in 10000 trace(s) out of 10000 explored"
     },
     {
@@ -156,7 +157,7 @@
       "observed": "PASS",
       "valid": true,
       "exit": 0,
-      "seconds": 23.19,
+      "seconds": 14.92,
       "states": null
     },
     {
@@ -168,7 +169,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 1.91,
+      "seconds": 1.07,
       "witnesses": null
     },
     {
@@ -181,7 +182,7 @@
       "observed": "VIOLATION",
       "valid": true,
       "exit": 1,
-      "seconds": 19.78,
+      "seconds": 13.21,
       "states": null
     }
   ]

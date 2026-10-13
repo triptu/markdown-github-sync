@@ -1,4 +1,4 @@
 exit=0
-[ok] No violation found (14185ms at 705 traces/second).
+[ok] No violation found (12625ms at 792 traces/second).
 Witnesses:
 witness was witnessed in 10000 trace(s) out of 10000 explored (100.00%)
