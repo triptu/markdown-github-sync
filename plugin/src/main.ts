@@ -952,6 +952,11 @@ class ChangesModal extends Modal {
         b.setButtonText("Refresh").onClick(() => {
           void this.render();
         }),
+      )
+      .addButton((b) =>
+        b.setButtonText("Review configuration").onClick(() => {
+          new ConfigurationModal(this.app, this.plugin).open();
+        }),
       );
     try {
       const status = await this.plugin.session?.inspect();
