@@ -1,0 +1,22 @@
+{
+  "runId": "e7e49654-0b53-46ac-bf8f-5171ea089fab",
+  "device": "emulator-5554",
+  "method": "independent adb byte readback",
+  "files": [
+    {
+      "path": "Native Visible Markdown T1 e7e49654-0b53-46ac-bf8f-5171ea089fab.md",
+      "exact": true,
+      "sha256": "1e62ffcc34d19be9622d74874fc2e373d5e0b719d3122e8a27403f5053e8751b"
+    },
+    {
+      "path": "Native Visible Markdown T2 e7e49654-0b53-46ac-bf8f-5171ea089fab.md",
+      "exact": true,
+      "sha256": "24460d2d773354b7e6176938ae002587df063d412765cc2534e89ee98b21150d"
+    },
+    {
+      "path": "Native Visible Markdown T3 e7e49654-0b53-46ac-bf8f-5171ea089fab.md",
+      "exact": true,
+      "sha256": "f08645d564ada894f5833f26e59fd55bdd2026617658880dfdbc486db7d4c3d8"
+    }
+  ]
+}
