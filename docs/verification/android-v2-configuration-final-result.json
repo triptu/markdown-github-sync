@@ -1,0 +1,113 @@
+{
+  "completed": true,
+  "runId": "194e2540-cbed-4ca6-8f5c-59f80905d4a3",
+  "branch": "newnative-config-194e2540-cbed-4ca6-8f5c-59f80905d4a3",
+  "productionSha256": "dc3984a2da5298d8e3a651c19b8702f0999f901e6809ec2d8cc7f64e7a83d103",
+  "configPath": ".obsidian/plugins/vault-sync-config-fixture/data.json",
+  "bytes": {
+    "initial": "{\"acceptanceFixture\":\"194e2540-cbed-4ca6-8f5c-59f80905d4a3\",\"revision\":1,\"inert\":true,\"challenge\":\"host-restart\"}\n",
+    "reviewed": "{\"acceptanceFixture\":\"194e2540-cbed-4ca6-8f5c-59f80905d4a3\",\"revision\":2,\"inert\":true,\"challenge\":\"host-restart\"}\n",
+    "stale": "{\"acceptanceFixture\":\"194e2540-cbed-4ca6-8f5c-59f80905d4a3\",\"revision\":3,\"inert\":true,\"challenge\":\"host-restart\"}\n",
+    "incomingNote": "Unrelated incoming note 194e2540-cbed-4ca6-8f5c-59f80905d4a3\n",
+    "localNote": "Unrelated local note after restart 194e2540-cbed-4ca6-8f5c-59f80905d4a3\n"
+  },
+  "firstHost": "0c485b6b-9cc6-43df-bfac-473b32ee3c13",
+  "applyHost": "0c485b6b-9cc6-43df-bfac-473b32ee3c13",
+  "restartHost": "860138d9-1ec5-4d20-9f33-8dfbbdcc1c7b",
+  "commits": {
+    "seed": "a6131730b66c1e3c6907c8ef58d32cee5bd5b7d3",
+    "initial": "5106534f26ab112e8bd3d3a5e131e766e95914ad",
+    "fixture": "63ab51751286de44709e5e1cdc765699e564cd71",
+    "beforeRestart": "63ab51751286de44709e5e1cdc765699e564cd71",
+    "note": "febfd13066e2de445c52588e434aa63d12689048",
+    "guarded": "b6351de777b4d93a99211ee6f27c77185e91e92d",
+    "restored": "035c0d20b0813cd35e7eb393eb9508cfd5fc3e70"
+  },
+  "checks": [
+    {
+      "name": "installed production enrolled default config/1 and downloaded exact seed",
+      "pass": true
+    },
+    {
+      "name": "new local hidden configuration held before consent",
+      "pass": true
+    },
+    {
+      "name": "UI consent kept exact initial local bytes",
+      "pass": true
+    },
+    {
+      "name": "exact consented hidden addition published through production",
+      "pass": true
+    },
+    {
+      "name": "synthetic incoming fixture and ledger confirmed",
+      "pass": true
+    },
+    {
+      "name": "live configuration deferred while unrelated note downloaded",
+      "pass": true
+    },
+    {
+      "name": "production apply preview contains exact incoming bytes",
+      "pass": true
+    },
+    {
+      "name": "production UI applied exact reviewed configuration",
+      "pass": true
+    },
+    {
+      "name": "stale writer held in applying host before restart",
+      "pass": true
+    },
+    {
+      "name": "fresh host and stale bytes persisted across full restart",
+      "pass": true
+    },
+    {
+      "name": "new host keeps stale configuration guarded and reviewed remote bytes",
+      "pass": true
+    },
+    {
+      "name": "unrelated incoming note still exact after restart",
+      "pass": true
+    },
+    {
+      "name": "unrelated local note converged while configuration stayed held",
+      "pass": true
+    },
+    {
+      "name": "guard preview names exact reviewed source and stale local version",
+      "pass": true
+    },
+    {
+      "name": "only exact UI consented stale configuration published",
+      "pass": true
+    },
+    {
+      "name": "prior guard retired before historical restore",
+      "pass": true
+    },
+    {
+      "name": "production file history contains incoming source commit",
+      "pass": true
+    },
+    {
+      "name": "production restore preview has exact historical configuration",
+      "pass": true
+    },
+    {
+      "name": "production history restore wrote exact reviewed source bytes",
+      "pass": true
+    },
+    {
+      "name": "historical configuration published as a new commit",
+      "pass": true
+    },
+    {
+      "name": "new restore source guard holds stale writer without overwriting restored GitHub bytes",
+      "pass": true
+    }
+  ],
+  "sourceGuardHeld": true
+}
