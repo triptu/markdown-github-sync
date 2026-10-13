@@ -1,32 +1,32 @@
-exit=1
+attempt=1 exit=1
 [TLC] Compiling to TLA+ (via Apalache)...
 # Usage statistics is OFF. We care about your privacy.
 # If you want to help our project, consider enabling statistics with config --enable-stats=true.
 
-Output directory: /private/tmp/vault-sync-quint-scope-v2/formal/quint/_apalache-out/server/2026-10-13T23-11-01_14008879497384017289
-# APALACHE version: 0.62.1 | build: a321771                       I@23:11:01.995
-Starting checker server on port 62745...                          I@23:11:01.997
-The Apalache server is running on port 62745. Press Ctrl-C to stop.
-Oct 13, 2026 11:11:03 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+Output directory: /private/tmp/vault-sync-quint-scope-v2/formal/quint/_apalache-out/server/2026-10-13T23-34-38_15282536463514258951
+# APALACHE version: 0.62.1 | build: a321771                       I@23:34:38.024
+Starting checker server on port 52831...                          I@23:34:38.025
+The Apalache server is running on port 52831. Press Ctrl-C to stop.
+Oct 13, 2026 11:34:39 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
 WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
 As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
-PASS #0: SanyParser                                               I@23:11:03.988
+PASS #0: SanyParser                                               I@23:34:40.020
 [TLC] Running TLC model checker...
 
-TLC2 Version 2026.10.13.174104
+TLC2 Version 2026.10.13.180440
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 26 and seed 1841670512630178569 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 90986] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/NegScopeNeighbor.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/NegScopeNeighbor.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/Integers.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/Sequences.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/FiniteSets.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/TLC.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/Apalache.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/Variants.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/_TLCTrace.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/Naturals.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/tlc-9523212507710610006/TLCExt.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Running breadth-first search Model-Checking with fp 66 and seed -8596891439257330395 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 60157] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/NegScopeNeighbor.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/NegScopeNeighbor.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/Integers.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/Sequences.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/FiniteSets.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/TLC.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/Apalache.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/Variants.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/_TLCTrace.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/Naturals.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/tlc-16374081950318626461/TLCExt.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
 Semantic processing of module Naturals
 Semantic processing of module Integers
 Semantic processing of module Sequences
@@ -42,9 +42,9 @@ Linting of module Variants
 Linting of module TLCExt
 Linting of module _TLCTrace
 Linting of module NegScopeNeighbor
-Starting... (2026-10-13 23:11:04)
+Starting... (2026-10-13 23:34:40)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-13 23:11:04.
+Finished computing initial states: 1 distinct state generated at 2026-10-13 23:34:40.
 Error: Invariant q_inv is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -97,8 +97,8 @@ NegScopeNeighbor_scopeHandoff_s = [ oldHold |-> TRUE,
 
 7 states generated, 4 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 3.
-Finished in 00s at (2026-10-13 23:11:04)
-Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-SwHR9U/NegScopeNeighbor_TTrace_1791913264.tla
+Finished in 00s at (2026-10-13 23:34:40)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-f6brHn/NegScopeNeighbor_TTrace_1791914680.tla
 
-[violation] Found an issue (315ms).
+[violation] Found an issue (298ms).
 error: found a counterexample

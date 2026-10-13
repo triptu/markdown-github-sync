@@ -15,6 +15,7 @@ module scopeState {
     badScope: bool, badConsent: bool, badDeferred: bool,
     arrived: bool, changed: bool, unreadable: bool, raced: bool,
     scopeChanged: bool, fenceChanged: bool, consentChanged: bool,
+    remoteChanged: bool, checkpointChanged: bool,
     crashed: bool, quiet: bool
   }
   var s: State
@@ -30,6 +31,7 @@ module scopeState {
     badScope: false, badConsent: false, badDeferred: false,
     arrived: false, changed: false, unreadable: false, raced: false,
     scopeChanged: false, fenceChanged: false, consentChanged: false,
+    remoteChanged: false, checkpointChanged: false,
     crashed: false, quiet: false
   }
   /// A remote configuration addition advances the remote checkpoint while
@@ -72,7 +74,20 @@ module scopeState {
   }
   action changeFence = all {
     s.arrived, not(s.fenceChanged), not(s.quiet),
-    s' = { ...s, repo: false, installation: false, fenceChanged: true }
+    nondet which = Set(0, 1).oneOf()
+    s' = { ...s, repo: if (which == 0) false else s.repo,
+      installation: if (which == 1) false else s.installation,
+      fenceChanged: true }
+  }
+  /// A changed remote version and a changed checkpoint are separate events.
+  /// Either can stale an otherwise exact reviewed configuration operation.
+  action advanceRemote = all {
+    s.review.valid, not(s.remoteChanged), not(s.quiet), not(s.crashed),
+    s' = { ...s, remote: 2, remoteChanged: true }
+  }
+  action advanceCheckpoint = all {
+    s.review.valid, not(s.checkpointChanged), not(s.quiet), not(s.crashed),
+    s' = { ...s, checkpoint: 2, checkpointChanged: true }
   }
   action changeScope = all {
     not(s.scopeChanged), not(s.quiet),
@@ -97,10 +112,12 @@ module scopeState {
     (s.review.valid or BUG == "missing-review"), not(s.configApplied),
     not(s.crashed),
     (s.local == s.review.local and s.local != -2 and
-      s.remote == s.review.remote and s.checkpoint == s.review.checkpoint and
+      (s.remote == s.review.remote or BUG == "skip-remote-version") and
+      (s.checkpoint == s.review.checkpoint or BUG == "skip-checkpoint") and
       (s.local != 2 or s.conflictOffered) and
-      ((s.repo == s.review.repo and s.installation == s.review.installation and
-        s.repo and s.installation) or BUG == "missing-fence-guard")) or
+      (((s.repo == s.review.repo and s.repo) or BUG == "skip-repo-fence") and
+        ((s.installation == s.review.installation and s.installation) or
+          BUG == "skip-installation-fence") or BUG == "missing-fence-guard")) or
       BUG == "missing-version-guard" or BUG == "missing-review",
     s' = { ...s, configApplied: true, local: s.remote, deferred: false,
       badUnknown: s.badUnknown or s.local == -2,
@@ -140,7 +157,8 @@ module scopeState {
   }
   action worker = any { publishHidden, offerConflict }
   action step = any { receive, becomeUnreadable, readableAgain, localEdit,
-    review, nativeChanged, offerConflict, changeFence, changeScope, consent, changeHidden,
+    review, nativeChanged, offerConflict, changeFence, advanceRemote,
+    advanceCheckpoint, changeScope, consent, changeHidden,
     applyConfiguration, publishHidden, publishDeferred, crash, restart,
     quiesce, s' = s }
   val safe = not(s.badUnknown or s.badOrigin or s.badReview or s.badFence or

@@ -1,16 +1,33 @@
 {
   "status": "PASS",
+  "selected": [
+    "ScopeState",
+    "ScopeHandoff",
+    "NegScopeReview",
+    "NegScopeVersion",
+    "NegScopeFence",
+    "NegScopeRepo",
+    "NegScopeInstallation",
+    "NegScopeRemote",
+    "NegScopeCheckpoint",
+    "NegScopePublication",
+    "NegScopeIntersection",
+    "NegScopeUnknown",
+    "NegScopeOrigin",
+    "NegScopeAck",
+    "NegScopeNeighbor"
+  ],
   "backend": "TLC via generated TLA",
   "quint": "0.33.0",
   "apalache": "0.62.1",
   "jarSha256": "880c0b2b72354816f12e9a9755829f2907071e9a181ffea1937954c23d54739d",
-  "java": "openjdk version \"23.0.2\" 2025-01-21",
-  "utc": "2026-10-13T17:41:04Z",
+  "utc": "2026-10-13T18:03:35Z",
   "inputsUnchanged": true,
   "sources": {
-    "scopeState.qnt": "c91ecc2dad24f92bd64e224de6a66481f690a27ba3718796075d2f93fae62848",
+    "scopeState.qnt": "ee8d3ae2fc090ac18fb33df102ec1c9c649718102faf2f4111687754f39ef808",
     "scopeHandoff.qnt": "49364661a9c2e0d998b0710f9a61355bcf1eb4ceb9c532e96be0e134264fc243",
-    "check-scope.py": "3cebe67ec9252eaa3d0722c8731bad33bf58c9c42a1e7b684972a0e4f20382e9",
+    "check-scope.py": "e9669b111924ecb6058b5084c8b5e8a5f641e1a78777822695019a911e775059",
+    "test-check-scope.py": "843dc48652e522b681a72922e50f33d45ed30414b738fef001d724b6a7ab1d15",
     "tlc-config.json": "cef7b24458a17299872ef7da84233ec954bf19e4653a9173fa3aefed93b9773e",
     "package-lock.json": "1e6424ee53efce1575262cb1b8f6d1f878bbecabe6d442df98dcc512879c21f2",
     "models/ScopeState.qnt": "4ba5cf6e24b37b5f04dc59b85e14641cff2761ef6d7cc822507aa5bbfee29a38",
@@ -18,6 +35,10 @@
     "models/NegScopeReview.qnt": "ec34d1ac2805e826a3913ac700e72913d748b70f911576fd3cc4b98ed8d388c1",
     "models/NegScopeVersion.qnt": "ce5436c281d7e712385078a78931d48d4942d6445443aebee871545db865a905",
     "models/NegScopeFence.qnt": "5a92ca45beb36d6dea77cacdf8a95e2dc289498b394dd0abc7d93dec37521d27",
+    "models/NegScopeRepo.qnt": "918fda45e33d6d2aa7b40583aefd391670c0d83fee69b3c70e81b8247648d57b",
+    "models/NegScopeInstallation.qnt": "b96cb91afa4dbf1268eff7ea5abaaa27a4c96f2ed49bd4cdd462a4f3ebf6b311",
+    "models/NegScopeRemote.qnt": "a1232c53bf8d54f19df6a4d1594740e75699d60b0bbb41f95a3371f3af22ea42",
+    "models/NegScopeCheckpoint.qnt": "5ee59bf12120d4ec043a9bd039a6587dbaa6e063a86ca69a3fcad19a78c376a6",
     "models/NegScopePublication.qnt": "26228d7d102b7a1e258f91943a843ec0cfe99203617a49faf45620129a3cab50",
     "models/NegScopeIntersection.qnt": "bcc44ff4480cfbafd1937872db34260458d8a1705f918462e333ef819876f56a",
     "models/NegScopeUnknown.qnt": "6ebc3d3d56300edf1b7f590fb29166dcc66899da29aa65b657ef418c69cda08c",
@@ -37,10 +58,10 @@
       "verifyExit": 0,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "37281 states generated, 8204 distinct states found",
-      "depth": 15,
-      "tlcSeed": "-882853056879346905",
-      "seconds": 4.1,
+      "states": "327197 states generated, 66384 distinct states found",
+      "depth": 17,
+      "tlcSeed": "-2158110373718352731",
+      "seconds": 5.5,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -49,10 +70,28 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62525",
+        "--server-endpoint=localhost:52510",
         "--tlc-config=tlc-config.json",
         "--verbosity=3",
         "--temporal=progress"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/ScopeState.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52510",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3",
+            "--temporal=progress"
+          ],
+          "exit": 0
+        }
       ]
     },
     {
@@ -68,8 +107,8 @@
       "dataBounds": "one held path, one malformed neighbor",
       "states": "54 states generated, 20 distinct states found",
       "depth": 7,
-      "tlcSeed": "925880232886797302",
-      "seconds": 3.51,
+      "tlcSeed": "-3743370654035591927",
+      "seconds": 3.5,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -78,10 +117,28 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62541",
+        "--server-endpoint=localhost:52538",
         "--tlc-config=tlc-config.json",
         "--verbosity=3",
         "--temporal=progress"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/ScopeHandoff.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52538",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3",
+            "--temporal=progress"
+          ],
+          "exit": 0
+        }
       ]
     },
     {
@@ -95,10 +152,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "18 states generated, 18 distinct states found",
+      "states": "19 states generated, 19 distinct states found",
       "depth": 3,
-      "tlcSeed": "-1707192635339898083",
-      "seconds": 3.83,
+      "tlcSeed": "-3729293794233024765",
+      "seconds": 3.89,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -107,9 +164,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62571",
+        "--server-endpoint=localhost:52555",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeReview.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52555",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -123,10 +197,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "328 states generated, 179 distinct states found",
+      "states": "383 states generated, 217 distinct states found",
       "depth": 5,
-      "tlcSeed": "5614344205328894710",
-      "seconds": 3.83,
+      "tlcSeed": "-2472418352504027279",
+      "seconds": 4.0,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -135,9 +209,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62589",
+        "--server-endpoint=localhost:52573",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeVersion.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52573",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -151,10 +242,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "366 states generated, 205 distinct states found",
+      "states": "428 states generated, 243 distinct states found",
       "depth": 5,
-      "tlcSeed": "-8454300379291629104",
-      "seconds": 3.81,
+      "tlcSeed": "8157311924871538518",
+      "seconds": 3.97,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -163,9 +254,206 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62611",
+        "--server-endpoint=localhost:52602",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeFence.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52602",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
+      ]
+    },
+    {
+      "case": "NegScopeRepo",
+      "property": "safe",
+      "temporal": null,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "typecheckExit": 0,
+      "verifyExit": 1,
+      "transitionBound": null,
+      "dataBounds": "one configuration path, one hidden path",
+      "states": "466 states generated, 268 distinct states found",
+      "depth": 5,
+      "tlcSeed": "9038047585835390431",
+      "seconds": 4.03,
+      "command": [
+        "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+        "verify",
+        "models/NegScopeRepo.qnt",
+        "--backend=tlc",
+        "--max-steps=0",
+        "--invariant=safe",
+        "--apalache-version=0.62.1",
+        "--server-endpoint=localhost:52623",
+        "--tlc-config=tlc-config.json",
+        "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeRepo.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52623",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
+      ]
+    },
+    {
+      "case": "NegScopeInstallation",
+      "property": "safe",
+      "temporal": null,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "typecheckExit": 0,
+      "verifyExit": 1,
+      "transitionBound": null,
+      "dataBounds": "one configuration path, one hidden path",
+      "states": "630 states generated, 323 distinct states found",
+      "depth": 5,
+      "tlcSeed": "5145914099403442860",
+      "seconds": 3.88,
+      "command": [
+        "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+        "verify",
+        "models/NegScopeInstallation.qnt",
+        "--backend=tlc",
+        "--max-steps=0",
+        "--invariant=safe",
+        "--apalache-version=0.62.1",
+        "--server-endpoint=localhost:52642",
+        "--tlc-config=tlc-config.json",
+        "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeInstallation.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52642",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
+      ]
+    },
+    {
+      "case": "NegScopeRemote",
+      "property": "safe",
+      "temporal": null,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "typecheckExit": 0,
+      "verifyExit": 1,
+      "transitionBound": null,
+      "dataBounds": "one configuration path, one hidden path",
+      "states": "939 states generated, 423 distinct states found",
+      "depth": 6,
+      "tlcSeed": "5651164247669019693",
+      "seconds": 3.95,
+      "command": [
+        "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+        "verify",
+        "models/NegScopeRemote.qnt",
+        "--backend=tlc",
+        "--max-steps=0",
+        "--invariant=safe",
+        "--apalache-version=0.62.1",
+        "--server-endpoint=localhost:52666",
+        "--tlc-config=tlc-config.json",
+        "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeRemote.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52666",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
+      ]
+    },
+    {
+      "case": "NegScopeCheckpoint",
+      "property": "safe",
+      "temporal": null,
+      "expected": "VIOLATION",
+      "observed": "VIOLATION",
+      "valid": true,
+      "typecheckExit": 0,
+      "verifyExit": 1,
+      "transitionBound": null,
+      "dataBounds": "one configuration path, one hidden path",
+      "states": "995 states generated, 446 distinct states found",
+      "depth": 6,
+      "tlcSeed": "8158561959814322592",
+      "seconds": 3.96,
+      "command": [
+        "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+        "verify",
+        "models/NegScopeCheckpoint.qnt",
+        "--backend=tlc",
+        "--max-steps=0",
+        "--invariant=safe",
+        "--apalache-version=0.62.1",
+        "--server-endpoint=localhost:52689",
+        "--tlc-config=tlc-config.json",
+        "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeCheckpoint.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52689",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -179,10 +467,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "18 states generated, 18 distinct states found",
+      "states": "19 states generated, 19 distinct states found",
       "depth": 3,
-      "tlcSeed": "-4324036870655477792",
-      "seconds": 3.83,
+      "tlcSeed": "9025123334277179834",
+      "seconds": 3.92,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -191,9 +479,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62635",
+        "--server-endpoint=localhost:52709",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopePublication.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52709",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -207,10 +512,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "493 states generated, 245 distinct states found",
+      "states": "615 states generated, 312 distinct states found",
       "depth": 5,
-      "tlcSeed": "5741625992877902460",
-      "seconds": 3.87,
+      "tlcSeed": "-832380838147522994",
+      "seconds": 3.89,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -219,9 +524,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62655",
+        "--server-endpoint=localhost:52736",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeIntersection.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52736",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -235,10 +557,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "170 states generated, 100 distinct states found",
+      "states": "172 states generated, 111 distinct states found",
       "depth": 5,
-      "tlcSeed": "-7152191411143419690",
-      "seconds": 3.83,
+      "tlcSeed": "4723976245096572547",
+      "seconds": 3.94,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -247,9 +569,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62675",
+        "--server-endpoint=localhost:52753",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeUnknown.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52753",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -263,10 +602,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "171 states generated, 103 distinct states found",
+      "states": "175 states generated, 101 distinct states found",
       "depth": 5,
-      "tlcSeed": "-6013519697830960121",
-      "seconds": 3.86,
+      "tlcSeed": "-3278500674131210709",
+      "seconds": 3.92,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -275,9 +614,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62700",
+        "--server-endpoint=localhost:52787",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeOrigin.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52787",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -293,8 +649,8 @@
       "dataBounds": "one held path, one malformed neighbor",
       "states": "11 states generated, 8 distinct states found",
       "depth": 4,
-      "tlcSeed": "-3998183407349963277",
-      "seconds": 3.49,
+      "tlcSeed": "418353593352854209",
+      "seconds": 3.48,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -303,9 +659,26 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62726",
+        "--server-endpoint=localhost:52810",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeAck.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52810",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     },
     {
@@ -321,8 +694,8 @@
       "dataBounds": "one held path, one malformed neighbor",
       "states": "7 states generated, 4 distinct states found",
       "depth": 3,
-      "tlcSeed": "1841670512630178569",
-      "seconds": 3.62,
+      "tlcSeed": "-8596891439257330395",
+      "seconds": 3.49,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -331,10 +704,29 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:62745",
+        "--server-endpoint=localhost:52831",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
+      ],
+      "attempts": [
+        {
+          "command": [
+            "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
+            "verify",
+            "models/NegScopeNeighbor.qnt",
+            "--backend=tlc",
+            "--max-steps=0",
+            "--invariant=safe",
+            "--apalache-version=0.62.1",
+            "--server-endpoint=localhost:52831",
+            "--tlc-config=tlc-config.json",
+            "--verbosity=3"
+          ],
+          "exit": 1
+        }
       ]
     }
-  ]
+  ],
+  "errors": [],
+  "java": "openjdk version \"23.0.2\" 2025-01-21"
 }
