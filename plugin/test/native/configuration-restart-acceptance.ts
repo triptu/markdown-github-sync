@@ -3,8 +3,10 @@ import type GitVaultSync from "../../src/main";
 import { entryFromText, hashBlob } from "../../src/git-sync/codec";
 import { GitHubRepository } from "../../src/git-sync/github";
 import { hostLifetimeId } from "../../src/git-sync/ownership";
+import type { SessionStatus, SyncSession } from "../../src/git-sync/session";
 
 declare const EXPECTED_PRODUCTION_SHA: string;
+declare const RESUME_FAILED_PRESTATE: boolean;
 
 const owner = "triptu";
 const repository = "vault-sync-test";
@@ -16,9 +18,12 @@ const predecessorSha = "2b38871ad3c8cfa91bd3c0c12cfa70271e61ae9ad3578d2aba84ff9c
 const predecessorNamespace = `.git-sync-native-v2-${predecessorSha.slice(0, 12)}-configuration`;
 const predecessorConfigurationPath = ".obsidian/plugins/vault-sync-acceptance-settings/data.json";
 const namespace = `.git-sync-native-v2-${EXPECTED_PRODUCTION_SHA.slice(0, 12)}-configuration-restart`;
-const statePath = `${namespace}-state.json`;
-const progressPath = `${namespace}-progress.json`;
-const resultPath = `${namespace}-result.json`;
+const activeNamespace = RESUME_FAILED_PRESTATE ? `${namespace}-resume-prestate` : namespace;
+const statePath = `${activeNamespace}-state.json`;
+const progressPath = `${activeNamespace}-progress.json`;
+const resultPath = `${activeNamespace}-result.json`;
+const originalResultPath = `${namespace}-result.json`;
+const failureArchivePath = `${namespace}-failed-prestate-result.json`;
 const oid = /^[0-9a-f]{40}$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -67,6 +72,22 @@ const localExclusion = (path: string): string | null => {
 const predecessorText = (revision: number): string =>
   `${JSON.stringify({ acceptanceFixture: predecessorRun, revision, inert: true })}\n`;
 const predecessorNote = `Native configuration acceptance ${predecessorRun}: remote note.\n`;
+
+function cleanPrecondition(status: SessionStatus, listing: Awaited<ReturnType<SyncSession["listConfiguration"]>>): boolean {
+  if (status.kind !== "enrolled" || listing.kind !== "configuration" || listing.rules !== "config/1" ||
+      status.pause !== null || status.conflicts.length !== 0 || status.blocked.length !== 0 ||
+      status.carried.length !== 0 || status.nativeErrors.length !== 0 ||
+      status.unreadable === null || status.unreadable.length !== 0 || status.pending === null ||
+      listing.deferred.length !== 0 || listing.guarded.length !== 0) return false;
+  const pending = status.pending;
+  const unpublished = listing.unpublished;
+  if (pending.length === 0) return status.phase === "idle" && unpublished.length === 0;
+  if (status.phase !== "local-changes" || pending.length !== unpublished.length) return false;
+  const paths = new Set(unpublished.map(item => item.path));
+  return paths.size === unpublished.length &&
+    unpublished.every(item => item.path.startsWith(".obsidian/") && hidden(item.path)) &&
+    pending.every(item => item.change === "added" && paths.has(item.path));
+}
 
 function parseState(value: unknown): State {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid restart acceptance state");
@@ -266,12 +287,28 @@ export default class NativeConfigurationRestartAcceptance extends Plugin {
       throw new Error("Predecessor fixture head or revision-3 bytes changed");
     const status = await plugin.session?.inspect();
     const listing = await plugin.session?.listConfiguration();
-    if (status?.kind !== "enrolled" || status.phase !== "idle" || status.pause !== null ||
-        listing?.kind !== "configuration" || listing.rules !== "config/1" ||
-        listing.deferred.length !== 0 || listing.guarded.length !== 0)
-      throw new Error("Predecessor production session is not idle with cleared review");
+    if (!status || !listing || !cleanPrecondition(status, listing))
+      throw new Error("Predecessor production session has unresolved changes or review");
     return { originalAutomatic: Reflect.get(prior, "originalAutomatic") === true, evidence: { runId: predecessorRun, fixtureHead,
       resultSha256: await this.digestText(rawResult), stateSha256: await this.digestText(rawState) } };
+  }
+
+  private async archiveFailedPrestate(): Promise<void> {
+    const files = this.app.vault.adapter;
+    if (!await files.exists(originalResultPath) ||
+        await files.exists(`${namespace}-state.json`) || await files.exists(`${namespace}-progress.json`))
+      throw new Error("Exact pre-state failure result is required for resume");
+    const rawResult = await files.read(originalResultPath);
+    const result: unknown = JSON.parse(rawResult);
+    if (typeof result !== "object" || result === null || Array.isArray(result) ||
+        JSON.stringify(Object.keys(result).sort()) !== JSON.stringify(["completed", "error", "productionSha256"]) ||
+        Reflect.get(result, "completed") !== false ||
+        Reflect.get(result, "error") !== "Predecessor production session is not idle with cleared review" ||
+        Reflect.get(result, "productionSha256") !== EXPECTED_PRODUCTION_SHA)
+      throw new Error("Only the exact predecessor pre-state failure can resume");
+    if (!await files.exists(failureArchivePath)) await files.write(failureArchivePath, rawResult);
+    if (await files.read(failureArchivePath) !== rawResult)
+      throw new Error("Archived pre-state failure differs from original result");
   }
 
   private async execute(): Promise<void> {
@@ -280,6 +317,7 @@ export default class NativeConfigurationRestartAcceptance extends Plugin {
     if (await files.exists(resultPath)) return;
     let state: State | null = null;
     try {
+      if (RESUME_FAILED_PRESTATE) await this.archiveFailedPrestate();
       if (await files.exists(statePath)) state = parseState(JSON.parse(await files.read(statePath)));
       const actualSha = await this.sha256(".obsidian/plugins/github-vault-sync/main.js");
       if (actualSha !== EXPECTED_PRODUCTION_SHA) throw new Error("Installed production bundle hash changed");
@@ -294,9 +332,7 @@ export default class NativeConfigurationRestartAcceptance extends Plugin {
         const predecessor = await this.verifyPredecessor(remote, plugin);
         const status = await plugin.session.inspect();
         const listing = await plugin.session.listConfiguration();
-        if (status.kind !== "enrolled" || status.pause !== null || status.phase !== "idle" ||
-            listing.kind !== "configuration" || listing.rules !== "config/1" ||
-            listing.deferred.length || listing.guarded.length)
+        if (!cleanPrecondition(status, listing))
           throw new Error("Initial config/1 session is not clean");
         const head = await remote.head();
         if (await files.exists(configurationPath) || Object.hasOwn(head.files, configurationPath))
