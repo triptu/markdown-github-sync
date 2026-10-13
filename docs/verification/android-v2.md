@@ -31,3 +31,9 @@ Each run passed five setup assertions and eight post-restart assertions. Exact r
 Evidence: `android-v2-crash-{displace,install}-{boundary,result}.json` and `android-v2-crash-independent.json`. These tests inject a pause after the actual completed native rename and kill the whole app; they do not simulate a torn filesystem rename, power loss, or an unsaved editor race. The original normal-operation run used no interruption inside an operation; these follow-up cases extend that coverage. Open review findings remain blockers.
 
 Future harness runs namespace their evidence by the production bundle hash, so a previous artifact's success cannot silently skip a new artifact's acceptance.
+
+## Current integration build rerun
+
+The same normal-operation harness was rerun after native scope/index fixes at `4da2def`, production SHA-256 `00e4fd325a596fc01f964e66c90e1744ebba74498d59f4a8cd189fbbf9929fb2`. Eight initial automatic-pair checks, seven post-force-stop restart checks, and 25 controlled conflict/binary/deletion/recovery-export checks passed. The parent separately compared four exact files on Android and GitHub, verified both sides of the deletion, the installed hash, no extra apply commit, and restored automatic syncing. The helper was disabled and the lab app stopped afterward.
+
+Raw evidence is `android-v2-current-{auto-stage,auto-result,result,independent}.json`. This rerun exercised legacy visible-file mode through the new factory/native code. It does not yet cover the new configuration review UI or policy migration on Android. The process-kill boundaries above still apply only to the older recorded artifact and must be rerun on the release bundle. Independent composed workflow and Quint reviews remain pending.
