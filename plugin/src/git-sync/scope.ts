@@ -38,7 +38,7 @@ export class UnsupportedNestedGitignoreError extends ScopeError {
   }
 }
 
-const BUILTIN_VERSION = "scope-policy/2";
+const BUILTIN_VERSION = "scope-policy/3";
 const MAX_GITIGNORE_BYTES = 64 * 1024;
 const COMPETING_SYNC_PLUGINS = new Set([
   "obsidian-git", "obsidian-livesync", "remotely-save", "remotely-sync", "cloud-vault-sync",
@@ -49,6 +49,26 @@ const SECRET_NAMES = new Set([
   "secrets.json", "credentials", "credentials.json", "auth-token", "auth-token.json",
   "id_rsa", "id_ed25519",
 ]);
+
+/** Canonical filesystem identity used for built-in protection and tree collisions. */
+export function canonicalFilesystemPath(path: string): string {
+  return path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+}
+
+const canonicalSet = (values: Iterable<string>): Set<string> =>
+  new Set(Array.from(values, canonicalFilesystemPath));
+const CANONICAL_COMPETING_SYNC_PLUGINS = canonicalSet(COMPETING_SYNC_PLUGINS);
+const CANONICAL_OS_METADATA = canonicalSet(OS_METADATA);
+const CANONICAL_SECRET_NAMES = canonicalSet(SECRET_NAMES);
+const RESERVED_CONFIG_DIRS = new Set([".git", ".git-vault-sync", ".gitignore", ".trash", ".ds_store", ".env"]);
+
+export function assertValidConfigDir(configDir: string): void {
+  if (!isValidPath(configDir) || configDir.includes("/") || !configDir.startsWith("."))
+    throw new ScopeError("Invalid configuration directory");
+  const canonical = canonicalFilesystemPath(configDir);
+  if (!isValidPath(canonical) || canonical.includes("/") || RESERVED_CONFIG_DIRS.has(canonical) ||
+    canonical.startsWith(".git-vault-sync-export-")) throw new ScopeError("Invalid configuration directory");
+}
 
 function isNestedGitignore(path: string): boolean {
   return path !== ".gitignore" && path.endsWith("/.gitignore");
@@ -63,17 +83,18 @@ export function assertNoNestedGitignore(paths: Iterable<string>): void {
 }
 
 function denied(path: string, configDir: string): boolean {
-  const segments = path.split("/");
+  const segments = path.split("/").map(canonicalFilesystemPath);
+  const canonicalConfigDir = canonicalFilesystemPath(configDir);
   if (segments.some((part) => part === ".git" || part === ".git-vault-sync" ||
-    part.startsWith(".git-vault-sync-export-") || part === ".trash" || OS_METADATA.has(part))) return true;
+    part.startsWith(".git-vault-sync-export-") || part === ".trash" || CANONICAL_OS_METADATA.has(part))) return true;
   // .obsidian remains a reserved vault location even if a device uses a
   // different configured directory and pauses configuration sync.
-  if (segments[0] !== configDir && segments[0] !== ".obsidian") return false;
+  if (segments[0] !== canonicalConfigDir && segments[0] !== ".obsidian") return false;
   if (segments.length === 1) return true;
   const [, first, second] = segments;
   if (first === "workspace" || first === "workspace.json" || first === "workspace-mobile.json" || first === "cache") return true;
-  if (first === "plugins" && (second === "github-vault-sync" || COMPETING_SYNC_PLUGINS.has(second))) return true;
-  if (segments.slice(1).some((part) => SECRET_NAMES.has(part) || part === ".env" ||
+  if (first === "plugins" && (second === "github-vault-sync" || CANONICAL_COMPETING_SYNC_PLUGINS.has(second))) return true;
+  if (segments.slice(1).some((part) => CANONICAL_SECRET_NAMES.has(part) || part === ".env" ||
     part.startsWith(".env.") || /\.(?:pem|p12|pfx|key)$/.test(part))) return true;
   // `plugins/<id>/data.json` is eligible when already tracked, but a new local
   // file there still requires exact-version consent, regardless of plugin id.
@@ -82,10 +103,7 @@ function denied(path: string, configDir: string): boolean {
 
 async function validateRules(rules: ScopeRules, text: string | null): Promise<Readonly<ScopeRules>> {
   if (rules.rules !== "visible-only" && rules.rules !== "config/1") throw new ScopeError("Unknown scope rule version");
-  if (!isValidPath(rules.configDir) || rules.configDir.includes("/") ||
-    !rules.configDir.startsWith(".") ||
-    [".git", ".git-vault-sync", ".gitignore", ".trash", ".DS_Store", ".env"].includes(rules.configDir) ||
-    rules.configDir.startsWith(".git-vault-sync-export-")) throw new ScopeError("Invalid configuration directory");
+  assertValidConfigDir(rules.configDir);
   if (rules.rules === "visible-only") {
     if (rules.gitignore !== null || text !== null) throw new ScopeError("Legacy visible-only scope cannot use .gitignore");
   } else {
@@ -95,6 +113,10 @@ async function validateRules(rules: ScopeRules, text: string | null): Promise<Re
       const bytes = new TextEncoder().encode(text);
       if (bytes.length > MAX_GITIGNORE_BYTES) throw new ScopeError(".gitignore exceeds 64 KiB");
       if (await hashBlob(bytes) !== rules.gitignore) throw new ScopeError(".gitignore bytes do not match the object ID");
+      // ignore@7 strips a BOM from every pattern, unlike Git. Git also stops
+      // matching at NUL. Accept neither ambiguity until the parser agrees.
+      if (text.includes("\0") || text.indexOf("\ufeff", text.startsWith("\ufeff") ? 1 : 0) !== -1)
+        throw new ScopeError("Unsupported .gitignore encoding");
     }
   }
   return Object.freeze({ rules: rules.rules, configDir: rules.configDir, gitignore: rules.gitignore });

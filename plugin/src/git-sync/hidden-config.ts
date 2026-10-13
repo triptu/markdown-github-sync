@@ -1,7 +1,7 @@
 import type { DataAdapter } from "obsidian";
 import type { FileMode, Snapshot, UnreadableFile } from "./contracts";
 import { dictionary, entryFromBytes, isValidPath } from "./codec";
-import { assertNoNestedGitignore, type Scope } from "./scope";
+import { assertNoNestedGitignore, assertValidConfigDir, type Scope } from "./scope";
 
 type ReadFiles = Pick<DataAdapter, "exists" | "list" | "stat" | "readBinary">;
 const FILE_LIMIT = 8 * 1024 * 1024;
@@ -14,8 +14,7 @@ export class HiddenConfigPort {
     private configDir: string,
     private assertActive: () => void,
   ) {
-    if (!isValidPath(configDir) || configDir.includes("/") || !configDir.startsWith("."))
-      throw new Error("Invalid configuration directory");
+    assertValidConfigDir(configDir);
   }
 
   /** Names only: ignored bytes are never read, but unsupported nested ignore files must be detected. */

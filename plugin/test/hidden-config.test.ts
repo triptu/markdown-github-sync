@@ -47,6 +47,27 @@ test("configuration scan reads allowed hidden files without reading ignored or p
   });
 });
 
+test("configuration scan never reads canonical aliases of protected plugin bytes", async () => {
+  await fixture(async ({ files, reads, put }) => {
+    const protectedPath = ".obsidian/plugins/GITHUB-VAULT-SYNC/data.json";
+    await put(protectedPath, "synthetic-device-binding");
+    await put(".obsidian/plugins/custom/data.json", "ordinary config");
+    const result = await new HiddenConfigPort(files, ".obsidian", () => {}).scan(await policy());
+    assert.equal(result.files[protectedPath], undefined);
+    assert.equal(entryText(result.files[".obsidian/plugins/custom/data.json"]), "ordinary config");
+    assert.deepEqual(reads, [".obsidian/plugins/custom/data.json"]);
+  });
+});
+
+test("configuration port refuses canonical aliases of reserved directory names", async () => {
+  await fixture(async ({ files, reads }) => {
+    for (const name of [".GIT", ".Git-Vault-Sync", ".GIT-VAULT-SYNC-EXPORT-copy", ".ENV", ".ds_store"]) {
+      assert.throws(() => new HiddenConfigPort(files, name, () => {}), /Invalid configuration directory/);
+    }
+    assert.deepEqual(reads, []);
+  });
+});
+
 test("oversized configuration is reported without reading it or blocking unrelated files", async () => {
   await fixture(async ({ files, reads, put }) => {
     await put(".obsidian/plugins/big/main.js", new Uint8Array(8 * 1024 * 1024 + 1));

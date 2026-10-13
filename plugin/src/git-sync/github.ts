@@ -1,5 +1,5 @@
 import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, Repository, RepositoryIdentity, Snapshot } from "./contracts";
-import { assertNoNestedGitignore, compileScope, scopeForTree } from "./scope";
+import { assertNoNestedGitignore, canonicalFilesystemPath, compileScope, scopeForTree } from "./scope";
 import type { Scope, ScopeRules } from "./scope";
 
 export interface GitHubRequest {
@@ -86,18 +86,29 @@ function pathParts(path: string): string[] {
   return parts;
 }
 function visible(path: string): boolean { return !pathParts(path).some(p => p.startsWith(".")); }
-function canonical(path: string): string { return path.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC"); }
-function validatePaths(paths: Iterable<string>): void {
+function validatePaths(namespace: Iterable<string>, included: Iterable<string>): void {
   const spellings = new Map<string, string>();
-  for (const path of paths) {
+  const collisions = new Set<string>();
+  const relevant = new Set<string>();
+  for (const path of included) {
+    const parts = pathParts(path);
+    for (let i = 1; i <= parts.length; i++) relevant.add(parts.slice(0, i).join("/"));
+  }
+  for (const path of namespace) {
     const parts = pathParts(path);
     for (let i = 1; i <= parts.length; i++) {
       const prefix = parts.slice(0, i).join("/");
-      const key = canonical(prefix);
+      const key = canonicalFilesystemPath(prefix);
       const existing = spellings.get(key);
-      if (existing !== undefined && existing !== prefix) throw new GitHubError("Case or Unicode path collision");
-      spellings.set(key, prefix);
+      if (existing === undefined) spellings.set(key, prefix);
+      else if (existing !== prefix) collisions.add(key);
     }
+  }
+  for (const prefix of relevant) {
+    const key = canonicalFilesystemPath(prefix);
+    const spelling = spellings.get(key);
+    if (collisions.has(key) || spelling !== undefined && spelling !== prefix)
+      throw new GitHubError("Case or Unicode path collision");
   }
 }
 export function encodeGitData(bytes: Uint8Array): string {
@@ -391,7 +402,7 @@ export class GitHubRepository implements Repository {
   private async snapshot(value: Commit, items: TreeItem[]): Promise<CommitSnapshot> {
     const scope = await this.scopeForItems(value.treeOid, items);
     const included = items.filter(i => i.type !== "tree" && scope.includes(i.path));
-    validatePaths(items.filter(i => scope.includes(i.path)).map(i => i.path));
+    validatePaths(items.map(i => i.path), included.map(i => i.path));
     let total = 0;
     for (const item of included) {
       if (item.type !== "blob" || item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Symlink or submodule unsupported in content scope");
@@ -451,13 +462,13 @@ export class GitHubRepository implements Repository {
         throw new GitHubError("Change excluded by candidate .gitignore");
       assertNoNestedGitignore(Array.from(new Set([...items.map(item => item.path), ...checked.keys()])));
     }
-    validatePaths(Object.keys(files));
     const expected = terminals(items);
     for (const [path, next] of checked) {
       if (next === null) expected.delete(path);
       else expected.set(path, `${next.mode}:blob:${next.oid}`);
     }
     const finalPaths = Array.from(expected.keys());
+    validatePaths([...items.filter(item => item.type === "tree").map(item => item.path), ...finalPaths], Object.keys(files));
     for (const path of finalPaths) for (let slash = path.indexOf("/"); slash >= 0; slash = path.indexOf("/", slash + 1)) {
       if (expected.has(path.slice(0, slash))) throw new GitHubError("File/directory path collision");
     }

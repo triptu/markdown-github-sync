@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { GitHubError, GitHubRepository, encodeGitData, gitBlobOid } from "../src/git-sync/github";
+import { ScopeError } from "../src/git-sync/scope";
 import type { GitHubRequest, GitHubResponse, GitHubTransport } from "../src/git-sync/github";
 import type { Changes, Entry, Snapshot } from "../src/git-sync/contracts";
 
@@ -689,6 +690,85 @@ test("a new local ignore rule rejects changes it excludes before uploading or de
     assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
     assert.equal(api.files.get(parent.treeOid)!.get(".obsidian/plugins/vikalp/data.json")!.oid, file("old").oid);
   }
+});
+
+test("ambiguous candidate ignore text is rejected before any secret blob POST", async () => {
+  const path = ".obsidian/plugins/custom/data.json";
+  for (const pattern of [`${path}\n\ufeff!${path}\n`, `${path}\0garbage\n`]) {
+    const api = new FakeGitHub({ ".gitignore": file(""), [path]: file("tracked baseline"), "note.md": file("safe") });
+    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    await assert.rejects(repo.prepare(parent, { ".gitignore": file(pattern), [path]: file("synthetic private change") }, "unsafe policy", L), ScopeError);
+    assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+    assert.equal(api.head, parent.oid);
+  }
+});
+
+test("an ambiguous committed ignore policy blocks capture before hidden blob reads", async () => {
+  const path = ".obsidian/plugins/custom/data.json", secret = file("synthetic private bytes");
+  for (const pattern of [`${path}\n\ufeff!${path}\n`, `${path}\0garbage\n`]) {
+    const api = new FakeGitHub({ ".gitignore": file(pattern), [path]: secret, "note.md": file("safe") });
+    const repo = client(api, undefined, INSTALLATION, "config/1");
+    await assert.rejects(repo.head(), ScopeError);
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+    assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+  }
+});
+
+test("included paths and ancestors cannot alias ignored paths in a verified tree", async () => {
+  const cases = [
+    [".obsidian/plugins/custom/Data.json", ".obsidian/plugins/custom/data.json"],
+    [".obsidian/Plugins/custom/private.json", ".obsidian/plugins/custom/main.js"],
+    [".obsidian/plugins/custom/e\u0301.json", ".obsidian/plugins/custom/é.json"],
+  ] as const;
+  for (const [excluded, included] of cases) {
+    const secret = file("synthetic excluded bytes");
+    const api = new FakeGitHub({ ".gitignore": file(`${excluded}\n`), [excluded]: secret, [included]: file("included") });
+    const repo = client(api, undefined, INSTALLATION, "config/1");
+    await assert.rejects(repo.head(), /collision/);
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0,
+      `excluded bytes were read for ${excluded}`);
+  }
+});
+
+test("proposed full namespace rejects an included alias before any blob POST", async () => {
+  const cases = [
+    [".obsidian/plugins/custom/Data.json", ".obsidian/plugins/custom/data.json"],
+    [".obsidian/Plugins/custom/private.json", ".obsidian/plugins/custom/main.js"],
+    [".obsidian/plugins/custom/e\u0301.json", ".obsidian/plugins/custom/é.json"],
+  ] as const;
+  for (const [excluded, added] of cases) {
+    const secret = file("synthetic excluded bytes");
+    const api = new FakeGitHub({ ".gitignore": file(`${excluded}\n`), [excluded]: secret, "note.md": file("safe") });
+    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    await assert.rejects(repo.prepare(parent, { [added]: file("new included bytes") }, "alias", L), /collision/);
+    assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+    assert.equal(api.files.get(parent.treeOid)!.get(excluded)!.oid, secret.oid);
+  }
+});
+
+test("an excluded-only alias namespace remains readable without downloading excluded bytes", async () => {
+  const first = ".obsidian/plugins/custom/Data.json", second = ".obsidian/plugins/custom/data.json";
+  const api = new FakeGitHub({ ".gitignore": file(`${first}\n${second}\n`), [first]: file("first private"), [second]: file("second private"), "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1"), snapshot = await repo.head();
+  assert.deepEqual(Object.keys(snapshot.files).sort(), [".gitignore", "note.md"]);
+  const candidate = await repo.prepare(snapshot, { "note.md": file("changed") }, "visible edit", L);
+  assert.equal(candidate.files["note.md"].oid, file("changed").oid);
+  assert.equal(api.files.get(candidate.treeOid)!.get(first)!.oid, file("first private").oid);
+  assert.equal(api.files.get(candidate.treeOid)!.get(second)!.oid, file("second private").oid);
+  for (const secret of [file("first private"), file("second private")])
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+});
+
+test("a canonical self-plugin alias is excluded even when no second spelling exists", async () => {
+  const protectedPath = ".obsidian/plugins/GITHUB-VAULT-SYNC/data.json", secret = file("synthetic device binding");
+  const api = new FakeGitHub({ [protectedPath]: secret, "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1");
+  const snapshot = await repo.head();
+  assert.equal(snapshot.files[protectedPath], undefined);
+  assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
+  await assert.rejects(repo.prepare(snapshot, { [protectedPath]: file("changed") }, "protected", L), /outside parent commit scope/);
+  assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
 });
 
 test("denied and ignored tracked paths cannot be edited, including competing sync plugins", async () => {
