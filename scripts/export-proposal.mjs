@@ -22,6 +22,10 @@ const html = source
   .replace(
     '<script src="assets/proposal.js"></script>',
     () => `<script>${script}</script>`,
+  )
+  .replace(
+    /href="((?:verification\/)?[^"/]+\.md)"/g,
+    (_, path) => `href="https://github.com/triptu/cloud-vault-sync/blob/main/docs/${path}"`,
   );
 await mkdir(new URL("dist/", root), { recursive: true });
 await writeFile(new URL("dist/github-sync-proposal.html", root), html);
