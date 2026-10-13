@@ -142,6 +142,10 @@ export class GitObsidianVault implements LocalVault {
       return this.finish(intent, { kind: "changed" });
     }
     const before = await this.read(intent.path);
+    if (before === null || await hashBlob(before) !== intent.expected) {
+      await this.preserve(intent.path, intent, "interrupted");
+      return this.finish(intent, { kind: "changed" });
+    }
     const from = before && exactText(before);
     const to = exactText(decodeBase64(intent.nextEntry.data));
     if (from === null || to === null) throw new Error("Text transaction has non-UTF-8 bytes.");

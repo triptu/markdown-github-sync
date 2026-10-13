@@ -43,6 +43,7 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
   let beforeProcess: (() => void) | undefined;
   let beforeRename: ((from: string, to: string) => void) | undefined;
   let afterRename: ((from: string, to: string) => void) | undefined;
+  let afterRead: ((path: string) => void) | undefined;
   const strings = new Map<string, string>();
   const folders = new Set<string>();
   const put = (path: string, data: Uint8Array) => {
@@ -84,7 +85,7 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
         files.get(f.path)!.data.slice().buffer,
       adapter: {
         exists: journalFiles.exists, mkdir: journalFiles.mkdir, list: journalFiles.list, rename,
-        readBinary: async (path: string) => files.get(path)!.data.slice().buffer,
+        readBinary: async (path: string) => { const data = files.get(path)!.data.slice().buffer; afterRead?.(path); return data; },
         writeBinary: async (path: string, data: ArrayBuffer) => { put(path, new Uint8Array(data)); },
         remove: async (path: string) => { files.delete(path); },
       },
@@ -115,6 +116,7 @@ async function harness(modes = new Map<string, "100644" | "100755">()) {
     vault, open,
     put,
     files,
+    setReadHook: (fn?: (path: string) => void) => { afterRead = fn; },
     setRenameHook: (fn?: (from: string, to: string) => void) => { afterRename = fn; },
     setBeforeRenameHook: (fn?: (from: string, to: string) => void) => { beforeRename = fn; },
     setHook: (fn: () => void) => {
@@ -135,6 +137,17 @@ test("atomic process catches an edit between preflight and actual write", async 
     "changed",
   );
   assert.equal(text(h.files.get("a.md")!.data), "new edit");
+});
+test("a newer edit between the hash read and text read is never adopted as the reviewed preimage", async () => {
+  const h = await harness();
+  const before = await entryFromBytes(bytes("base")), next = await entryFromBytes(bytes("remote"));
+  h.put("a.md", bytes("base"));
+  let reads = 0;
+  h.setReadHook(path => {
+    if (path === "a.md" && ++reads === 2) h.put("a.md", bytes("newer edit"));
+  });
+  assert.equal((await h.vault.apply("a.md", before, next)).kind, "changed");
+  assert.equal(text(h.files.get("a.md")!.data), "newer edit");
 });
 test("UTF8 BOM CRLF bytes preserved by atomic note replacement", async () => {
   const h = await harness();
