@@ -1,0 +1,30 @@
+{
+  "completed": false,
+  "runId": "254fe269-7e5d-4fea-8e85-c1a830544bf7",
+  "productionSha256": "2a1f0ecb9679e8bf4e7cd5c635f69d1f773e29af3a4e9cb6c7e9abf0c82bb93f",
+  "sourceBoundary": "Bundled current GitObsidianVault and NativeTransactionJournal with an isolated synthetic journal; installed production bundle hash checked separately",
+  "checks": [
+    {
+      "name": "installed production bundle is exact requested SHA",
+      "pass": true
+    },
+    {
+      "name": "production sync plugin disabled during isolated local race",
+      "pass": true
+    },
+    {
+      "name": "synthetic names unused",
+      "pass": true
+    },
+    {
+      "name": "original is actual indexed TFile",
+      "pass": true
+    }
+  ],
+  "error": "Obsidian did not open a real Markdown FileView on the held TFile",
+  "injection": {
+    "originalPathAtSecondRename": ".git-vault-sync/254fe269-7e5d-4fea-8e85-c1a830544bf7/hold/e4d19fef-1e83-4561-8081-ac1f194ecd31",
+    "viewType": "empty",
+    "boundPath": null
+  }
+}
