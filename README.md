@@ -2,15 +2,15 @@
 
 An Obsidian plugin that syncs notes through ordinary commits in a private GitHub repository. Runs inside Obsidian on desktop and Android, without a companion Git app or a hosted sync server.
 
-**0.2.0-beta.1 — tested on Android emulator; ready for a separate test vault.** The current bundle passed automatic sync across restart, conflict resolution, held binary/deletion checks, and recovery export against a private synthetic GitHub repository. Independent core and native persistence reviews passed within their stated scope. See the [native acceptance record](docs/verification/android-conflict.md). Your existing Git-backed vault should remain the recovery baseline during adoption; this beta does not yet provide automatic application of incoming deletions or existing binary replacements.
+**Current development build: final acceptance in progress.** The last published release is `0.2.0-beta.1`; this checkout contains the replacement work described below. Use a separate test vault until the current release gates close. See [Android acceptance](docs/verification/android-v2.md), [configuration review](docs/verification/configuration-restart-review-r3.md), and [Quint verification](docs/verification/quint.md). Keep your original Git-backed vault as the recovery baseline.
 
 ## How it works
 
-Saved device edits remain local drafts until the plugin publishes a commit to GitHub. Each device downloads only committed versions. Independent file edits reconcile automatically when publications do not race; overlapping edits appear in a conflict inbox. Simultaneous publication can pause for reviewed recovery, as described below. Publishing compares the exact expected branch head so a competing device cannot silently replace another device's update.
+Saved device edits remain local drafts until the plugin publishes a commit to GitHub. Each device downloads only committed versions. Independent file edits reconcile automatically, including retries when devices publish concurrently. Overlapping edits that cannot be merged appear in a conflict inbox. Publishing compares the exact expected branch head so a competing device cannot silently replace another device's update.
 
 Sync runs while Obsidian is open: after saved edits, on return to the foreground, and periodically. **Sync now** is also available. Android can suspend Obsidian in the background; leave it open until the status shows content synced before switching devices.
 
-The plugin journals recovery data locally before applying changes. Markdown replacement uses Obsidian's atomic text operation. Existing binary replacements and incoming deletions are held because the native API does not expose an atomic compare-and-replace/delete operation. These holds require review; they are not silently applied.
+The plugin journals recovery data locally before applying changes. Markdown replacement uses Obsidian's atomic text operation. Attachment replacements and deletions use recoverable staged file operations. Ordinary nonconflicting changes apply automatically. Conflicts, bulk deletions, unexpected bytes, and open views that would be retargeted stop the affected operation for review.
 
 ## Build and install in a test vault
 
@@ -36,15 +36,15 @@ Install and enroll each device separately. Do not copy device journal files or a
 
 The conflict inbox shows the common version, local draft and GitHub version. Available decisions include retaining either version, keeping both, or editing merged Markdown. Decisions are reviewed before publishing.
 
-An uncertain publication, including some competing-device publication races, pauses sync rather than replaying a possibly accepted commit. The status view offers a reviewed recovery flow that archives the candidate and local draft before fresh enrollment. Sequential independent-file edits converge automatically; simultaneous publishing may require this recovery step.
+Each installation has a GitHub receipt ledger. A lost network response is settled by checking that ledger; a cancelled attempt is reconciled against the latest branch and retried. Persistent network or stale-ledger reads remain visibly unsettled and send no replacement publication. History rewrites, repository changes, and unresolved legacy operations require reviewed recovery.
 
-The recovery view exports captured files into a separate hidden folder. Historical restore accepts a vault-relative path and a full GitHub commit SHA, previews the result, and restores it as a local draft that can then be committed normally.
+The recovery view exports captured files into a separate hidden folder. Historical restore lets you browse file history or enter a full commit SHA, preview the bytes, and restore them as a saved local draft for normal publication.
 
 Local journal records and immutable objects live under `.git-vault-sync/`. They are excluded from sync. Cleanup retains the latest eight journal checkpoints and every object they reference, including pinned recovery and active operations. The browsable recovery index keeps the latest 20 unpinned records; pinned recovery stays until explicitly discarded. Cleanup removes obsolete checkpoints before their unreferenced objects and can resume after interruption. Run it from local recovery; it also runs periodically after successful sync. Preserve the directory when investigating interrupted or corrupt state. These limits bound historical retention, not total bytes: large pinned recovery can still consume substantial space.
 
 ## Boundaries
 
-- Hidden path components, including `.obsidian`, `.git` and `.trash`, are excluded. The remote copies of excluded paths are preserved.
+- Fresh vault setup defaults to configuration scope. Existing visible-only enrollments require reviewed migration. Eligible `.obsidian` settings, themes and plugin files are included; incoming configuration waits for exact-version approval, and new local configuration files require publication consent. Credentials, device journals, workspace files and other excluded paths stay local. A committed root `.gitignore` controls the supported ignore policy; remote excluded files are preserved.
 - Maximum file size: 8 MiB. Maximum decoded vault snapshot: 128 MiB. Git LFS pointers, symlinks, submodules and unsafe/colliding paths are rejected when in scope.
 - GitHub receives readable file content; this is not end-to-end encrypted sync. Enrollment and sync refuse public or unknown repository visibility. Use a narrowly scoped token; a repository owner can still change visibility outside the plugin.
 - The plugin manages GitHub objects directly; it does not maintain a local `.git` checkout. Terminal Git can continue in your separate original checkout.
@@ -54,7 +54,7 @@ Local journal records and immutable objects live under `.git-vault-sync/`. They 
 
 [Quint](formal/README.md) is the sole maintained specification language. The [verification report](docs/verification/quint.md) documents finite safety checks, deliberately broken negative controls, and temporal checks for eventual progress under explicit fairness and quiescence assumptions. The handwritten TLA+ baseline is preserved in Git history at `e780b4c`; TLA generated by the Quint toolchain is compiler output. These separate, bounded models do not prove their composition, arbitrary vault sizes, the TypeScript implementation, or native disk behavior.
 
-[GitHub client evidence](docs/github-client.md), [engine API](docs/engine-api.md), and [Android evidence](docs/verification/android-native.md) document separate layers of testing. The final check passed 239 plugin tests, four retained legacy server tests, typechecking and the build. Native acceptance used Obsidian 1.14.4 on Android 15. Physical Android hardware, fine-grained PAT authorization and hardware power-loss durability remain untested.
+[GitHub client evidence](docs/github-client.md), [engine API](docs/engine-api.md), and [Android evidence](docs/verification/android-v2.md) cover separate layers. The current integration check passes 437 plugin tests, typechecking and build; this does not replace final-bundle device acceptance. Native testing uses Obsidian 1.14.4 on an Android 15 emulator. Physical Android hardware, fine-grained PAT authorization and hardware power-loss durability remain separate, unverified boundaries.
 
 [Interactive design proposal](docs/github-sync-proposal.html) explains the intended architecture. Run `node scripts/export-proposal.mjs` for a portable standalone copy.
 
