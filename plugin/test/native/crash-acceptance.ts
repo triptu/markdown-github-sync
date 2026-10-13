@@ -9,7 +9,7 @@ declare const CRASH_POINT: "displace" | "install";
 const owner = "triptu";
 const repository = "vault-sync-test";
 const branch = "native-android-1791894436601";
-const prefix = `.git-sync-native-v2-crash-${CRASH_POINT}`;
+const prefix = `.git-sync-native-v2-${EXPECTED_PRODUCTION_SHA.slice(0, 12)}-crash-${CRASH_POINT}`;
 const before = new Uint8Array([0, 255, 1, 0, 2, 0, 3]);
 const after = new Uint8Array([0, 255, 4, 0, 5, 0, 6]);
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((value, i) => value === b[i]);

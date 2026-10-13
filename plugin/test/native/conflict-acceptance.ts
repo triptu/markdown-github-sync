@@ -9,12 +9,13 @@ const repository = "vault-sync-test";
 const branch = "native-android-1791894436601";
 declare const EXPECTED_PRODUCTION_SHA: string;
 const expectedProductionSha = EXPECTED_PRODUCTION_SHA;
-const progressPath = ".git-sync-native-v2-conflict-progress.json";
-const resultPath = ".git-sync-native-v2-conflict-result.json";
-const autoStagePath = ".git-sync-native-v2-conflict-auto-stage.json";
-const autoResultPath = ".git-sync-native-v2-conflict-auto-result.json";
-const holdConflict = ".git-sync-native-v2-conflict-hold-conflict";
-const holdBlocked = ".git-sync-native-v2-conflict-hold-blocked";
+const evidencePrefix = `.git-sync-native-v2-${expectedProductionSha.slice(0, 12)}-conflict`;
+const progressPath = `${evidencePrefix}-progress.json`;
+const resultPath = `${evidencePrefix}-result.json`;
+const autoStagePath = `${evidencePrefix}-auto-stage.json`;
+const autoResultPath = `${evidencePrefix}-auto-result.json`;
+const holdConflict = `${evidencePrefix}-hold-conflict`;
+const holdBlocked = `${evidencePrefix}-hold-blocked`;
 
 type Check = { name: string; pass: boolean };
 const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -308,7 +309,7 @@ export default class NativeConflictAcceptance extends Plugin {
         try {
           await plugin.saveConfiguration({ ...plugin.settings, automatic: originalAutomatic });
         } catch (error) {
-          await files.write(".git-sync-native-v2-conflict-restore-error.json", JSON.stringify({ error: error instanceof Error ? error.message : "Unknown restore failure" }));
+          await files.write(`${evidencePrefix}-restore-error.json`, JSON.stringify({ error: error instanceof Error ? error.message : "Unknown restore failure" }));
         }
       }
     }

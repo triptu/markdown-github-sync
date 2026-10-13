@@ -1,0 +1,41 @@
+{
+  "completed": true,
+  "point": "install",
+  "checks": [
+    {
+      "name": "installed production artifact matches",
+      "pass": true
+    },
+    {
+      "name": "exact synthetic target",
+      "pass": true
+    },
+    {
+      "name": "automatic stayed paused across process restart",
+      "pass": true
+    },
+    {
+      "name": "completed native rename survived process restart",
+      "pass": true
+    },
+    {
+      "name": "recovery converges without user decision",
+      "pass": true
+    },
+    {
+      "name": "replacement bytes exact after recovery",
+      "pass": true
+    },
+    {
+      "name": "recovery did not publish another commit",
+      "pass": true
+    },
+    {
+      "name": "preimage retained in durable recovery",
+      "pass": true
+    }
+  ],
+  "path": "Native Crash Acceptance 83cde07d-93af-47d6-a9dd-770b8d076d80.bin",
+  "commit": "96cb8fcbd5ffadef4eb14f9196969dceffc40e8d",
+  "productionSha256": "0ef19cb3cc466f2480054f13744e7c49a1677b215dc7afee657aa83ece1812ed"
+}

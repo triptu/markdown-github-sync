@@ -18,3 +18,16 @@ Raw evidence: `android-v2-auto-stage.json`, `android-v2-auto-result.json`, `andr
 This is actual native Obsidian plus live GitHub, but the helper drives production plugin APIs rather than tapping the conflict UI. The restart occurred after convergence, not during an interrupted file operation. It does not establish power-loss durability, arbitrary editor-buffer behavior, physical-phone behavior, or the new configuration feature.
 
 Independent review [engine-native-review-r2.md](engine-native-review-r2.md) found five remaining oversized-file/quarantine recovery defects, including a wrong remote deletion when unreadable bytes were mistaken for absence. They are release blockers despite these passing normal-operation checks. This document is not full replacement approval. Run final artifact acceptance again after fixes and configuration integration.
+
+## Process-kill follow-up
+
+The same production bundle then passed two separate full-process Android force-stop cases, driven by `plugin/test/native/crash-acceptance.ts` as committed in `efb40a0`:
+
+1. After `adapter.rename(original, hold)` completed, before control returned to production recovery: original bytes were in the hidden hold and the visible path was absent. The parent killed the app, reopened it, and the production session installed the intended replacement.
+2. After `adapter.rename(stage, original)` completed, before control returned to production completion: the replacement was visible but the durable operation was unfinished. The parent killed/reopened the app and the session settled the operation.
+
+Each run passed five setup assertions and eight post-restart assertions. Exact replacement bytes, idle checkpoint, no unresolved conflicts/pending work, no extra remote commit, and durable recovery preimage were checked. The parent independently compared both replacement files on Android and GitHub and verified automatic sync was restored. The crash helper was disabled after completion; the app was left stopped.
+
+Evidence: `android-v2-crash-{displace,install}-{boundary,result}.json` and `android-v2-crash-independent.json`. These tests inject a pause after the actual completed native rename and kill the whole app; they do not simulate a torn filesystem rename, power loss, or an unsaved editor race. The original normal-operation run used no interruption inside an operation; these follow-up cases extend that coverage. Open review findings remain blockers.
+
+Future harness runs namespace their evidence by the production bundle hash, so a previous artifact's success cannot silently skip a new artifact's acceptance.
