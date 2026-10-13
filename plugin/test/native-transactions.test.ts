@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile, access } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NativeTransactionJournal } from "../src/git-sync/native-transactions";
-import { encodeBase64, entryFromBytes } from "../src/git-sync/codec";
+import { entryFromBytes } from "../src/git-sync/codec";
 import type { JournalFiles } from "../src/git-sync/store";
 const installation = "12345678-1234-1234-1234-123456789abc";
 async function filesystem() {
@@ -19,7 +19,7 @@ async function filesystem() {
     rename: async (from, to) => {
       if (await files.exists(to)) throw new Error("no-clobber");
       await rename(absolute(from), absolute(to));
-      if (loseAck && to.includes("native-records")) { loseAck = false; throw new Error("lost acknowledgment"); }
+      if (loseAck && to.includes("/native/records/")) { loseAck = false; throw new Error("lost acknowledgment"); }
     },
     list: async path => {
       const rows = await readdir(absolute(path), { withFileTypes: true });
@@ -52,23 +52,29 @@ test("real filesystem recovery evidence survives restart with exact bytes", asyn
   try {
     const journal = await NativeTransactionJournal.open(fs.files, installation);
     const original = new Uint8Array([0, 255, 128, 13]);
-    const record = await journal.storeEvidence(original, "image.png", "hidden/hold", "displaced", null, null);
+    const record = await journal.retainBytes(original, "image.png", "hidden/hold", "displaced", null, null);
     const reopened = await NativeTransactionJournal.open(fs.files, installation);
-    assert.deepEqual(await reopened.readEvidence(reopened.recoveries()[0]), original);
-    await fs.files.write(record.evidencePath, "AAAA");
-    await assert.rejects(reopened.readEvidence(record), /evidence is corrupt/);
+    const first = reopened.recoveries()[0];
+    if (first.kind === "oversize") throw new Error("Expected byte evidence");
+    assert.equal(first.kind, "displaced");
+    assert.deepEqual(await reopened.readEvidence(first), original);
+    await reopened.acknowledge([record.id]);
+    assert.deepEqual(reopened.issues(), []);
   } finally { await fs.close(); }
 });
-test("unrecorded recovery bytes are adopted after restart", async () => {
+test("duplicate native record sequence is rejected on open", async () => {
   const fs = await filesystem();
   try {
     const journal = await NativeTransactionJournal.open(fs.files, installation);
-    const path = `${journal.root}/recovery/12345678-1234-1234-1234-123456789abc`;
-    const bytes = new Uint8Array([0, 255, 128]);
-    await fs.files.write(path, encodeBase64(bytes));
-    const reopened = await NativeTransactionJournal.open(fs.files, installation);
-    await reopened.scanOrphanEvidence();
-    assert.equal(reopened.recoveries()[0].kind, "orphan");
-    assert.deepEqual(await reopened.readEvidence(reopened.recoveries()[0]), bytes);
+    const before = await entryFromBytes(new Uint8Array([1]));
+    const after = await entryFromBytes(new Uint8Array([2]));
+    await journal.begin("n.md", before, after, "text-process");
+    await journal.finish("n.md");
+    const records = (await fs.files.list(`${journal.root}/native/records`)).files;
+    const first = records.find(path => /000000000001-[a-f0-9]{64}\.json$/.test(path));
+    assert.ok(first);
+    const duplicate = first.replace(/-[a-f0-9]{64}\.json$/, `-${"f".repeat(64)}.json`);
+    await fs.files.write(duplicate, "{}");
+    await assert.rejects(NativeTransactionJournal.open(fs.files, installation), /Multiple journal writers/);
   } finally { await fs.close(); }
 });

@@ -2,4 +2,7 @@
 export class TFile {
   constructor(public path: string, public stat: {size:number; mtime:number}) {}
 }
+export class FileView {
+  constructor(public file: TFile | null) {}
+}
 export class App {}

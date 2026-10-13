@@ -33,7 +33,7 @@ export class FileJournalStore implements DurableStore {
   constructor(
     private files: JournalFiles,
     installationId: string,
-    namespace?: "modes",
+    namespace?: "modes" | "native",
   ) {
     if (!/^[a-f0-9-]{36}$/.test(installationId))
       throw new Error("Invalid installation identity");
