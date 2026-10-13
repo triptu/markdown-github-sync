@@ -249,27 +249,3 @@ test("cleanup after every failed append keeps the last committed state and remov
     assert.equal([...files.values.keys()].some(path => path.endsWith(".tmp")), false, `boundary ${at}`);
   }
 });
-
-test("repeated recovery references share verification within an operation, never across operations", async () => {
-  const files = new Files();
-  const store = new FileJournalStore(files, identity);
-  const data = btoa("preserved bytes");
-  const state = { blobs: { abc: data }, recovery: Array.from({ length: 100 }, () => ({ oid: "abc", data })) };
-  await store.save(state);
-  let objectReads = 0;
-  const read = files.read.bind(files);
-  files.read = async path => {
-    if (path.includes("/objects/")) objectReads++;
-    return read(path);
-  };
-  assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), state);
-  assert.equal(objectReads, 1);
-  objectReads = 0;
-  await store.save(state);
-  assert.equal(objectReads, 1);
-  const path = [...files.values.keys()].find(path => path.includes("/objects/") && path.endsWith(".json"));
-  assert.ok(path);
-  files.values.set(path, "corruption after prior verification");
-  await assert.rejects(store.load(), /checksum failed/);
-  await assert.rejects(store.save(state), /Recovery object is corrupt/);
-});
