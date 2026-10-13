@@ -23,6 +23,10 @@ export class GitHubError extends Error {
 }
 const FILE_LIMIT = 8 * 1024 * 1024;
 const SNAPSHOT_LIMIT = 128 * 1024 * 1024;
+// Account for retained strings at two bytes/code unit, plus metadata allowances.
+// This bounds cache payload accounting, not engine-dependent total heap usage.
+const CACHE_LIMIT = 128 * 1024 * 1024;
+const CACHE_OBJECT_LIMIT = 4096;
 const ENCODED_LIMIT = 4 * Math.ceil(FILE_LIMIT / 3);
 const encoder = new TextEncoder();
 function record(value: unknown): Record<string, unknown> {
@@ -108,6 +112,10 @@ async function entry(value: unknown): Promise<{ entry: Entry; bytes: Uint8Array 
 }
 interface TreeItem { path: string; mode: string; type: "tree" | "blob" | "commit"; sha: string; size?: number }
 interface Commit { oid: string; treeOid: string; parents: string[] }
+type CachedObject =
+  | { kind: "blob"; data: string; size: number }
+  | { kind: "commit"; value: Commit }
+  | { kind: "tree"; items: TreeItem[] };
 function commit(value: unknown): Commit {
   const item = record(value);
   return { oid: oid(item.sha), treeOid: oid(record(item.tree).sha), parents: list(item.parents).map(p => oid(record(p).sha)) };
@@ -160,11 +168,41 @@ async function verifyTree(items: TreeItem[], root: string): Promise<void> {
 export class GitHubRepository implements Repository {
   private readonly base: string;
   private readonly now: () => number;
+  private readonly cache = new Map<string, { object: CachedObject; cost: number }>();
+  private cacheCost = 0;
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
     this.base = `https://api.github.com/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.name)}`;
     this.now = options.now ?? Date.now;
+  }
+  private cached(kind: CachedObject["kind"], hash: string): CachedObject | undefined {
+    const key = `${kind}:${hash}`, found = this.cache.get(key);
+    if (!found) return undefined;
+    this.cache.delete(key);
+    this.cache.set(key, found);
+    return found.object;
+  }
+  private remember(hash: string, object: CachedObject): void {
+    const key = `${object.kind}:${hash}`;
+    let cost = 256 + 2 * key.length;
+    switch (object.kind) {
+      case "blob": cost += 2 * object.data.length; break;
+      case "commit": cost += 2 * (object.value.oid.length + object.value.treeOid.length) + object.value.parents.length * (80 + 16); break;
+      case "tree": cost += object.items.reduce((sum, item) => sum + 256 + 2 * (item.path.length + item.mode.length + item.type.length + item.sha.length), 0); break;
+    }
+    const existing = this.cache.get(key);
+    if (existing) { this.cache.delete(key); this.cacheCost -= existing.cost; }
+    if (cost > CACHE_LIMIT) return;
+    while (this.cacheCost + cost > CACHE_LIMIT || this.cache.size >= CACHE_OBJECT_LIMIT) {
+      const oldest = this.cache.keys().next();
+      if (oldest.done) break;
+      const evicted = this.cache.get(oldest.value);
+      if (evicted) this.cacheCost -= evicted.cost;
+      this.cache.delete(oldest.value);
+    }
+    this.cache.set(key, { object, cost });
+    this.cacheCost += cost;
   }
   private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<GitHubResponse> {
     let token: string;
@@ -213,13 +251,20 @@ export class GitHubRepository implements Repository {
     return oid(object.sha);
   }
   async head(): Promise<CommitSnapshot> { return this.readCommit(await this.headOid()); }
-  private async getCommit(hash: string): Promise<Commit> {
-    const value = commit(await this.rest(`/git/commits/${oid(hash)}`));
+  private async getCommit(hash: string, refresh = false): Promise<Commit> {
+    oid(hash);
+    const cached = refresh ? undefined : this.cached("commit", hash);
+    if (cached?.kind === "commit") return cached.value;
+    const value = commit(await this.rest(`/git/commits/${hash}`));
     if (value.oid !== hash) throw new GitHubError("Commit identity mismatch");
+    this.remember(hash, { kind: "commit", value });
     return value;
   }
   private async tree(hash: string): Promise<TreeItem[]> {
-    const value = record(await this.rest(`/git/trees/${oid(hash)}?recursive=1`));
+    oid(hash);
+    const cached = this.cached("tree", hash);
+    if (cached?.kind === "tree") return cached.items;
+    const value = record(await this.rest(`/git/trees/${hash}?recursive=1`));
     if (value.truncated === true) throw new GitHubError("Unsupported repository: recursive Git tree truncated; enrollment blocked");
     if (value.truncated !== false || oid(value.sha) !== hash) throw new GitHubError("Malformed or mismatched Git tree");
     const raw = list(value.tree);
@@ -237,7 +282,24 @@ export class GitHubRepository implements Repository {
     });
     validatePaths(items.filter(i => visible(i.path)).map(i => i.path));
     await verifyTree(items, hash);
+    this.remember(hash, { kind: "tree", items });
     return items;
+  }
+  private async blob(hash: string, length: number): Promise<string> {
+    const cached = this.cached("blob", hash);
+    if (cached?.kind === "blob") {
+      if (cached.size !== length) throw new GitHubError("Blob identity or size mismatch");
+      return cached.data;
+    }
+    const blob = record(await this.rest(`/git/blobs/${hash}`));
+    if (oid(blob.sha) !== hash || blob.encoding !== "base64" || size(blob.size) !== length) throw new GitHubError("Blob identity or size mismatch");
+    const bytes = decode(string(blob.content), true);
+    if (bytes.length !== length) throw new GitHubError("Blob decoded size mismatch");
+    checkLfs(bytes);
+    if (await gitBlobOid(bytes) !== hash) throw new GitHubError("Blob hash mismatch");
+    const data = encodeGitData(bytes);
+    this.remember(hash, { kind: "blob", size: length, data });
+    return data;
   }
   private async snapshot(value: Commit, items: TreeItem[]): Promise<CommitSnapshot> {
     const included = items.filter(i => i.type === "blob" && visible(i.path));
@@ -249,12 +311,8 @@ export class GitHubRepository implements Repository {
     }
     const files: Snapshot = Object.create(null);
     for (const item of included) {
-      const blob = record(await this.rest(`/git/blobs/${item.sha}`));
-      if (oid(blob.sha) !== item.sha || blob.encoding !== "base64" || size(blob.size) !== item.size) throw new GitHubError("Blob identity or size mismatch");
-      const bytes = decode(string(blob.content), true);
-      if (bytes.length !== item.size) throw new GitHubError("Blob decoded size mismatch");
-      const verified = await entry({ oid: item.sha, mode: item.mode, data: encodeGitData(bytes) });
-      files[item.path] = verified.entry;
+      if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
+      files[item.path] = { oid: item.sha, mode: item.mode, data: await this.blob(item.sha, size(item.size)) };
     }
     return { oid: value.oid, treeOid: value.treeOid, files };
   }
@@ -308,6 +366,7 @@ export class GitHubRepository implements Repository {
       } else {
         const blob = record(await this.rest("/git/blobs", "POST", { content: next.data, encoding: "base64" }));
         if (oid(blob.sha) !== next.oid) throw new GitHubError("Uploaded blob hash mismatch");
+        this.remember(next.oid, { kind: "blob", data: next.data, size: decode(next.data).length });
         edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
       }
     }
@@ -319,7 +378,7 @@ export class GitHubRepository implements Repository {
     if (!sameMap(expected, terminals(candidateItems))) throw new GitHubError("Prepared tree does not preserve requested and excluded paths");
     const created = commit(await this.rest("/git/commits", "POST", { message, tree: treeOid, parents: [value.oid] }));
     if (created.treeOid !== treeOid || created.parents.length !== 1 || created.parents[0] !== value.oid) throw new GitHubError("Created commit parent or tree mismatch");
-    const reread = await this.getCommit(created.oid);
+    const reread = await this.getCommit(created.oid, true);
     if (reread.treeOid !== treeOid || reread.parents.length !== 1 || reread.parents[0] !== value.oid) throw new GitHubError("Prepared commit identity mismatch");
     return { oid: created.oid, treeOid, files };
   }

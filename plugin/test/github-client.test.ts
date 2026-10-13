@@ -70,7 +70,7 @@ class FakeGitHub implements GitHubTransport {
     if (path.startsWith("/git/trees/") && request.method === "GET") return response(this.trees.get(path.split("/").pop() ?? "") ?? null);
     if (path.startsWith("/git/blobs/") && request.method === "GET") {
       const entry = this.blobs.get(path.split("/").pop() ?? "");
-      return response(entry ? { sha: entry.oid, encoding: "base64", size: Buffer.from(entry.data, "base64").length, content: entry.data.replace(/.{1,12}/g, "$&\n") } : null);
+      return response(entry ? { sha: entry.oid, encoding: "base64", size: Buffer.from(entry.data, "base64").length, content: entry.data.replace(/.{1,60}/g, "$&\n") } : null);
     }
     if (path.startsWith("/compare/")) {
       const [a, b] = path.slice(9).split("...");
@@ -126,6 +126,141 @@ test("identity includes stable repository node id; snapshots exclude every dot c
   const head = await repo.head(); assert.deepEqual(Object.keys(head.files), ["note.md"]);
   assert.equal(head.files["note.md"].data, file("base\r\n").data);
   assert.equal(api.requests.filter(r => r.url.includes("/git/blobs/")).length, 1);
+});
+function objectGets(api: FakeGitHub): { commits: number; trees: number; blobs: number; refs: number } {
+  const gets = api.requests.filter(r => r.method === "GET");
+  return {
+    commits: gets.filter(r => r.url.includes("/git/commits/")).length,
+    trees: gets.filter(r => r.url.includes("/git/trees/")).length,
+    blobs: gets.filter(r => r.url.includes("/git/blobs/")).length,
+    refs: gets.filter(r => r.url.includes("/git/ref/")).length
+  };
+}
+test("577-file polling reuses verified objects and preparation reuses the parent", async () => {
+  const initial = Object.fromEntries(Array.from({ length: 577 }, (_, i) => [`notes/${i}.md`, file(`note ${i}`)]));
+  const api = new FakeGitHub(initial), repo = client(api), parent = await repo.head();
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 577, refs: 1 });
+  api.requests = [];
+  for (let i = 0; i < 3; i++) assert.deepEqual(await repo.head(), parent);
+  assert.deepEqual(objectGets(api), { commits: 0, trees: 0, blobs: 0, refs: 3 });
+  api.requests = [];
+  const candidate = await repo.prepare(parent, { "notes/42.md": file("changed") }, "one file");
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 0, refs: 0 });
+  assert.equal(api.requests.filter(r => r.method === "POST" && r.url.endsWith("/git/blobs")).length, 1);
+  api.requests = [];
+  assert.deepEqual(await repo.readCommit(candidate.oid), candidate);
+  assert.equal(api.requests.length, 0, "verified uploaded blob and candidate tree/commit should be reusable");
+  api.head = api.addCommit({ ...initial, "notes/42.md": file("remote changed") });
+  api.requests = [];
+  const delta = await repo.head();
+  assert.equal(delta.files["notes/42.md"].data, file("remote changed").data);
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 });
+});
+test("one-file deltas fetch only the new blob, even across an unrelated head and force rewind", async () => {
+  const initial = { "a.md": file("a"), "b.md": file("b"), "run.sh": file("run") };
+  const api = new FakeGitHub(initial), repo = client(api), parent = await repo.head();
+  api.head = api.addCommit({ ...initial, "a.md": file("changed"), "run.sh": file("run", "100755") });
+  api.requests = [];
+  const next = await repo.head();
+  assert.equal(next.files["a.md"].data, file("changed").data);
+  assert.equal(next.files["run.sh"].mode, "100755");
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 1, refs: 1 });
+  api.head = parent.oid;
+  api.requests = [];
+  assert.deepEqual(await repo.head(), parent);
+  assert.deepEqual(objectGets(api), { commits: 0, trees: 0, blobs: 0, refs: 1 });
+  const other = client(api);
+  api.requests = [];
+  assert.deepEqual(await other.head(), parent);
+  assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 3, refs: 1 }, "instances must not share cache state");
+});
+test("caller mutation of snapshots, entries and prepared results cannot poison cached objects", async () => {
+  const api = new FakeGitHub(), repo = client(api), parent = await repo.head();
+  const expected = structuredClone(parent);
+  const second = await repo.head();
+  assert.notEqual(second.files, parent.files);
+  assert.notEqual(second.files["note.md"], parent.files["note.md"]);
+  parent.files["note.md"].data = file("forged").data;
+  parent.files["note.md"].oid = file("forged").oid;
+  parent.files["note.md"].mode = "100755";
+  parent.files["injected.md"] = file("injected");
+  await assert.rejects(repo.prepare(parent, {}, "forged parent"), /Parent snapshot mismatch/);
+  parent.oid = "a".repeat(40); parent.treeOid = "b".repeat(40);
+  const fresh = await repo.head();
+  assert.equal(fresh.oid, expected.oid); assert.equal(fresh.treeOid, expected.treeOid);
+  assert.deepEqual({ ...fresh.files }, expected.files);
+  const change = file("new"), candidate = await repo.prepare(fresh, { "new.md": change }, "valid parent");
+  change.data = file("tampered input").data;
+  candidate.files["note.md"].data = file("tampered return").data;
+  candidate.files["new.md"].data = file("tampered new return").data;
+  const reread = await repo.readCommit(candidate.oid);
+  assert.equal(reread.files["note.md"].data, file("base\r\n").data);
+  assert.equal(reread.files["new.md"].data, file("new").data);
+});
+test("rejected blob/tree hashes and commit identities are never cached", async () => {
+  for (const kind of ["blob", "tree", "commit"]) {
+    const api = new FakeGitHub(), repo = client(api);
+    const stored = api.commits.get(api.head); assert.ok(stored);
+    api.intercept = r => {
+      if (kind === "blob" && r.url.includes("/git/blobs/")) return response({ sha: file("base\r\n").oid, encoding: "base64", size: 6, content: file("evil\r\n").data });
+      if (kind === "tree" && r.url.includes("/git/trees/")) {
+        const original = api.trees.get(stored.tree.sha); assert.ok(original);
+        return response({ ...original, tree: original.tree.map(i => i.path === "note.md" ? { ...i, sha: "a".repeat(40) } : i) });
+      }
+      if (kind === "commit" && r.url.includes("/git/commits/")) return response({ ...stored, sha: "a".repeat(40) });
+      return undefined;
+    };
+    await assert.rejects(repo.head(), kind === "commit" ? /Commit identity mismatch/ : /hash mismatch/);
+    api.intercept = undefined;
+    const valid = await repo.head(); assert.equal(valid.files["note.md"].data, file("base\r\n").data);
+    const counts = objectGets(api);
+    assert.equal(kind === "blob" ? counts.blobs : kind === "tree" ? counts.trees : counts.commits, 2);
+    api.requests = [];
+    await repo.head(); assert.equal(api.requests.length, 1);
+  }
+});
+test("cached blobs still reject conflicting tree-declared sizes and ref failures", async () => {
+  const api = new FakeGitHub(), repo = client(api); await repo.head();
+  api.head = api.addCommit({ "renamed.md": file("base\r\n") });
+  const stored = api.commits.get(api.head); assert.ok(stored);
+  const items = api.trees.get(stored.tree.sha); assert.ok(items);
+  items.tree[0].size = 7; // Sizes are absent from the cryptographic Git tree body.
+  api.requests = [];
+  await assert.rejects(repo.head(), /Blob identity or size mismatch/);
+  assert.equal(objectGets(api).blobs, 0);
+  api.intercept = r => r.url.includes("/git/ref/") ? response({}, 401) : undefined;
+  await assert.rejects(repo.head(), error => error instanceof GitHubError && error.status === 401);
+});
+test("combined cache evicts least recently used blobs under the retained base64 byte budget", async () => {
+  const api = new FakeGitHub({}), repo = client(api);
+  const commits = Array.from({ length: 6 }, (_, i) => api.addCommit({ "large.bin": file(Buffer.alloc(8 * 1024 * 1024, i)) }));
+  // Five blobs fit; six need over 128 MiB at two bytes per base64 code unit.
+  for (const hash of commits.slice(0, 5)) await repo.readCommit(hash);
+  await repo.readCommit(commits[0]); // Keep the first blob more recent than the second.
+  await repo.readCommit(commits[5]);
+  api.requests = [];
+  await repo.readCommit(commits[0]); assert.equal(objectGets(api).blobs, 0);
+  await repo.readCommit(commits[1]); assert.equal(objectGets(api).blobs, 1, "evicted blob must be fetched and verified again");
+});
+test("combined cache bounds tiny object count and refreshes LRU order on hits", async () => {
+  const api = new FakeGitHub({}), repo = client(api);
+  const commits = Array.from({ length: 4096 }, () => api.addCommit({}));
+  for (const hash of commits.slice(0, -1)) await repo.readCommit(hash); // 4095 commits + one shared empty tree.
+  await repo.readCommit(commits[0]);
+  await repo.readCommit(commits[4095]);
+  api.requests = [];
+  await repo.readCommit(commits[0]); assert.equal(api.requests.length, 0);
+  await repo.readCommit(commits[1]); assert.equal(objectGets(api).commits, 1);
+});
+test("preparation independently rereads a candidate even when its claimed ID is cached", async () => {
+  const api = new FakeGitHub(), repo = client(api), parent = await repo.head();
+  api.intercept = r => r.method === "POST" && r.url.endsWith("/git/commits")
+    ? response({ sha: parent.oid, tree: { sha: parent.treeOid }, parents: [{ sha: parent.oid }] }, 201)
+    : undefined;
+  api.requests = [];
+  await assert.rejects(repo.prepare(parent, {}, "forged create acknowledgment"), /Prepared commit identity mismatch/);
+  assert.equal(objectGets(api).commits, 1);
+  assert.equal(api.head, parent.oid);
 });
 test("prepare preserves excluded paths, binaries, modes and parent without advancing ref", async () => {
   const api = new FakeGitHub(); const repo = client(api), parent = await repo.head();
