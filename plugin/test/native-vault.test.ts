@@ -55,10 +55,14 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
   let journalWrite: ((path: string) => void) | undefined;
   let listHook: ((path: string) => Promise<void>) | undefined;
   let queuedRename: ((from: string, to: string) => Promise<void>) | undefined;
+  let indexTick: () => Promise<void> = async () => {};
   const views: Array<{ view: InstanceType<typeof loaded.FileView> }> = [];
   const strings = new Map<string, string>();
   const folders = new Set<string>();
   const absentFromIndex = new Set<string>();
+  const indexGhosts = new Map<string, InstanceType<typeof loaded.TFile>>();
+  const lookupOverrides = new Map<string, InstanceType<typeof loaded.TFile> | null>();
+  let active = true;
   let holdReads = 0;
   let processCalls = 0;
   const adapterReads: string[] = [];
@@ -116,11 +120,14 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     workspace: { iterateAllLeaves: (visit: (leaf: { view: InstanceType<typeof loaded.FileView> }) => void) => views.forEach(visit) },
     vault: {
       configDir: ".obsidian",
-      getFiles: () => [...files.values()].filter(x => !absentFromIndex.has(x.file.path)).map(x => x.file),
+      getFiles: () => [...files.values()].filter(x => !absentFromIndex.has(x.file.path)).map(x => x.file)
+        .concat([...indexGhosts.values()]),
       getAbstractFileByPath: (p: string) => {
         if (p.startsWith(".") || p.split("/").some(part => part.startsWith(".")))
           throw new Error(`Hidden TFile lookup: ${p}`);
-        return files.get(p)?.file ?? null;
+        if (lookupOverrides.has(p)) return lookupOverrides.get(p) ?? null;
+        if (indexGhosts.has(p)) return indexGhosts.get(p) ?? null;
+        return absentFromIndex.has(p) ? null : files.get(p)?.file ?? null;
       },
       readBinary: async (f: { path: string }) =>
         files.get(f.path)!.data.slice().buffer,
@@ -169,7 +176,7 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
       get: path => modes.get(path) ?? "100644",
       set: (path, mode) => { modes.set(path, mode); },
       remove: path => { modes.delete(path); },
-    }, () => {}, journal, hostLifetime, policy);
+    }, () => { if (!active) throw new Error("Native owner retired"); }, journal, hostLifetime, policy, () => indexTick());
     return { vault, journal };
   };
   const { vault } = await open();
@@ -182,6 +189,12 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     adapterReads,
     journalFiles,
     excludeFromIndex: (path: string) => { absentFromIndex.add(path); },
+    includeInIndex: (path: string) => { absentFromIndex.delete(path); },
+    addIndexGhost: (path: string) => { indexGhosts.set(path, new loaded.TFile(path, { size: 0, mtime: 1 })); },
+    clearIndexGhost: (path: string) => { indexGhosts.delete(path); },
+    setWrongLookup: (path: string) => { lookupOverrides.set(path, new loaded.TFile(path, { size: 0, mtime: 1 })); },
+    clearLookupOverride: (path: string) => { lookupOverrides.delete(path); },
+    retireOwner: () => { active = false; },
     setConfigDir: (configDir: string) => { app.vault.configDir = configDir; },
     put,
     files,
@@ -191,6 +204,7 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     setListHook: (fn?: (path: string) => Promise<void>) => { listHook = fn; },
     setQueuedRenameHook: (fn?: (from: string, to: string) => Promise<void>) => { queuedRename = fn; },
     setRenameHook: (fn?: (from: string, to: string) => void) => { afterRename = fn; },
+    setIndexTickHook: (fn: () => Promise<void>) => { indexTick = fn; },
     setBeforeRenameHook: (fn?: (from: string, to: string) => void) => { beforeRename = fn; },
     setHook: (fn: () => void) => {
       beforeProcess = fn;
@@ -268,6 +282,156 @@ test("creates preserve exact attachment bytes and skip hidden files", async () =
     "applied",
   );
   assert.deepEqual(h.files.get("a.bin")!.data, new Uint8Array([0, 255, 128]));
+});
+
+test("new visible file remains a durable native intent while host index omits it", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.excludeFromIndex(to);
+  });
+  let ticks = 0;
+  h.setIndexTickHook(async () => { ticks++; });
+  await assert.rejects(h.vault.apply("seed.md", null, next), /host index/);
+  assert.equal(ticks, 100);
+  assert.deepEqual(h.files.get("seed.md")?.data, bytes("seed\n"));
+  assert.equal((await h.vault.pendingIntents())[0]?.attempted, true);
+});
+
+test("visible create waits for the same TFile in lookup and getFiles before retiring intent", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.excludeFromIndex(to);
+  });
+  let ticks = 0;
+  h.setIndexTickHook(async () => {
+    if (++ticks === 2) h.includeInIndex("seed.md");
+  });
+  assert.equal((await h.vault.apply("seed.md", null, next)).kind, "applied");
+  assert.equal(ticks, 2);
+  assert.equal((await h.vault.pendingIntents()).length, 0);
+  assert.deepEqual((await h.vault.capture())["seed.md"], next);
+});
+
+test("matching path with a different host lookup object does not acknowledge create", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.setWrongLookup(to);
+  });
+  let ticks = 0;
+  h.setIndexTickHook(async () => {
+    ticks++;
+    h.clearLookupOverride("seed.md");
+  });
+  assert.equal((await h.vault.apply("seed.md", null, next)).kind, "applied");
+  assert.equal(ticks, 1);
+  assert.equal((await h.vault.pendingIntents()).length, 0);
+});
+
+test("visible deletion waits for stale host index entry to disappear", async () => {
+  const h = await harness();
+  h.put("delete.bin", new Uint8Array([0, 255, 1]));
+  const expected = (await h.vault.capture())["delete.bin"];
+  h.setRenameHook((from) => {
+    if (from === "delete.bin") h.addIndexGhost(from);
+  });
+  let ticks = 0;
+  h.setIndexTickHook(async () => {
+    if (++ticks === 2) h.clearIndexGhost("delete.bin");
+  });
+  assert.equal((await h.vault.apply("delete.bin", expected, null)).kind, "applied");
+  assert.equal(ticks, 2);
+  assert.equal(h.files.has("delete.bin"), false);
+  assert.equal((await h.vault.pendingIntents()).length, 0);
+});
+
+test("replay also waits for host index before retiring an installed create", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.excludeFromIndex(to);
+  });
+  await assert.rejects(h.vault.apply("seed.md", null, next), /host index/);
+  assert.equal((await h.vault.pendingIntents()).length, 1);
+  let ticks = 0;
+  h.setIndexTickHook(async () => {
+    ticks++;
+    h.includeInIndex("seed.md");
+  });
+  const { vault } = await h.open();
+  await replayPending(vault);
+  assert.equal(ticks, 1);
+  assert.equal((await vault.pendingIntents()).length, 0);
+  assert.deepEqual((await vault.capture())["seed.md"], next);
+});
+
+test("new visible edit during index wait keeps the native intent and edited bytes", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.excludeFromIndex(to);
+  });
+  h.setIndexTickHook(async () => {
+    h.put("seed.md", bytes("new edit\n"));
+    h.includeInIndex("seed.md");
+  });
+  await assert.rejects(h.vault.apply("seed.md", null, next), /Native file changed while waiting/);
+  assert.equal(text(h.files.get("seed.md")!.data), "new edit\n");
+  assert.equal((await h.vault.pendingIntents()).length, 1);
+});
+
+test("owner retirement during index wait leaves the attempted intent", async () => {
+  const h = await harness();
+  const next = await entryFromBytes(bytes("seed\n"));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "seed.md") h.excludeFromIndex(to);
+  });
+  h.setIndexTickHook(async () => { h.retireOwner(); });
+  await assert.rejects(h.vault.apply("seed.md", null, next), /owner retired/);
+  const { journal } = await h.open();
+  assert.equal(journal.pending().length, 1);
+});
+
+test("hold view opened during index wait blocks retirement", async () => {
+  const h = await harness();
+  h.put("image.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["image.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "image.bin") h.excludeFromIndex(to);
+  });
+  h.setIndexTickHook(async () => {
+    const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+    assert.ok(hold);
+    h.openView(hold);
+    h.includeInIndex("image.bin");
+  });
+  const result = await h.vault.apply("image.bin", expected, next);
+  assert.equal(result.kind, "blocked");
+  assert.equal((await h.vault.pendingIntents()).length, 1);
+});
+
+test("hold edit during index wait cannot retire displaced bytes", async () => {
+  const h = await harness();
+  h.put("image.bin", new Uint8Array([0]));
+  const expected = (await h.vault.capture())["image.bin"];
+  const next = await entryFromBytes(new Uint8Array([1]));
+  h.setRenameHook((from, to) => {
+    if (from.includes("/stage/") && to === "image.bin") h.excludeFromIndex(to);
+  });
+  h.setIndexTickHook(async () => {
+    const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+    assert.ok(hold);
+    h.put(hold, new Uint8Array([9]));
+    h.includeInIndex("image.bin");
+  });
+  await assert.rejects(h.vault.apply("image.bin", expected, next), /Native held file changed while waiting/);
+  assert.equal((await h.vault.pendingIntents()).length, 1);
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([9]));
 });
 
 test("logical executable mode survives equal bytes and creates", async () => {

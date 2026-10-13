@@ -12,6 +12,8 @@ export interface UnreadableNativeFile { path: string; size: number; mtime: numbe
 
 const maxFileBytes = 8 * 1024 * 1024;
 const maxVaultBytes = 128 * 1024 * 1024;
+const indexWaitIntervalMs = 50;
+const indexWaitTicks = 100;
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 class OversizeReadError extends Error {
   constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
@@ -45,6 +47,7 @@ export class GitObsidianVault implements LocalVault {
     private transactions?: NativeTransactionJournal,
     private hostLifetime: string | null = null,
     private nativePolicy: NativePathPolicy = NativePathPolicy.legacy,
+    private indexTick: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, indexWaitIntervalMs)),
   ) {
     if (transactions && !transactions.matchesPolicy(nativePolicy))
       throw new Error("Native transaction journal policy does not match the vault.");
@@ -143,10 +146,46 @@ export class GitObsidianVault implements LocalVault {
       ? { kind: "blocked", reason: `Close the open view for ${intent.path} before native recovery can finish. Its original file is retained in a hidden hold.` }
       : null;
   }
+  private hostIndexAgrees(path: string, next: string | null): boolean {
+    const abstract = this.app.vault.getAbstractFileByPath(path);
+    const indexed = this.app.vault.getFiles().filter(file => file.path === path);
+    return next === null
+      ? abstract === null && indexed.length === 0
+      : abstract instanceof TFile && abstract.path === path &&
+        indexed.length === 1 && indexed[0] === abstract;
+  }
+  /** Adapter rename can finish on disk before Obsidian indexes the visible path. */
+  private async waitForVisibleRename(intent: FileIntent): Promise<void> {
+    for (let tick = 0; tick <= indexWaitTicks; tick++) {
+      this.assertActive();
+      if (this.hostIndexAgrees(intent.path, intent.next)) {
+        const live = await this.oid(intent.path);
+        this.assertActive();
+        if (live !== intent.next)
+          throw new Error(`Native file changed while waiting for host index: ${intent.path}`);
+        if (intent.hold) {
+          const held = await this.hiddenOid(intent.hold);
+          this.assertActive();
+          if (held !== intent.expected)
+            throw new Error(`Native held file changed while waiting for host index: ${intent.path}`);
+        }
+        if (this.hostIndexAgrees(intent.path, intent.next)) return;
+      }
+      if (tick === indexWaitTicks) break;
+      await this.indexTick();
+    }
+    this.assertActive();
+    throw new Error(`Visible native file did not settle in host index: ${intent.path}`);
+  }
   private async finish(intent: FileIntent, result: ApplyResult): Promise<ApplyResult> {
     if (result.kind === "blocked") return result;
     const heldView = this.heldViewBlock(intent);
     if (heldView) return heldView;
+    if (result.kind === "applied" && intent.method === "rename" && visible(intent.path)) {
+      await this.waitForVisibleRename(intent);
+      const newlyHeldView = this.heldViewBlock(intent);
+      if (newlyHeldView) return newlyHeldView;
+    }
     await this.transactions?.finish(intent.path);
     return result;
   }
