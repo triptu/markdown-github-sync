@@ -2850,7 +2850,7 @@ test("configuration scope review preserves an unrelated durable pause", async ()
   assert.deepEqual((await parseState(await a.store.load())).pause, state.pause);
 });
 
-test("same-host postapply flush is guarded across reload while notes sync; exact consent and host restart release it", async () => {
+test("postapply flush stays guarded across plugin and host restarts while notes sync", async () => {
   const { repository, device: a } = await deferredConfiguration("old configuration");
   const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, deviceName: "A", scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
   a.session = session("host-1");
@@ -2884,8 +2884,130 @@ test("same-host postapply flush is guarded across reload while notes sync; exact
   assert.equal((await a.session.sync()).kind, "up-to-date");
   assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "old configuration");
   a.session = session("host-2");
+  const beforeRestartSync = await a.session.listConfiguration();
+  assert.ok(beforeRestartSync.kind === "configuration" && beforeRestartSync.guarded.some((item) => item.path === configurationPath));
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "old configuration");
+  const rebound = await parseState(await a.store.load());
+  assert.equal(rebound.configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+});
+
+test("a quit-time stale flush is visible before the first new-host sync and cannot publish without consent", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const apply = await a.session.previewApplyConfiguration();
+  assert.equal(apply.kind, "preview");
+  if (apply.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: apply.token })).kind, "applied");
+  await a.vault.write(configurationPath, "old configuration");
+  a.session = session("host-2");
+  const before = await a.session.listConfiguration();
+  assert.ok(before.kind === "configuration");
+  if (before.kind !== "configuration") return;
+  assert.deepEqual(before.guarded.map((item) => [item.path, item.unreadable]), [[configurationPath, false]]);
+  const preview = await a.session.previewGuardedConfigurationPublication(configurationPath);
+  assert.equal(preview.kind, "preview");
+  if (preview.kind === "preview") assert.equal(entryText(preview.entry!), "old configuration");
+  const head = repository.branchHead;
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(repository.branchHead, head);
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+});
+
+test("new-host retirement requires applied bytes; a later genuine edit publishes", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const apply = await a.session.previewApplyConfiguration();
+  assert.equal(apply.kind, "preview");
+  if (apply.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: apply.token })).kind, "applied");
+  a.session = session("host-2");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath], undefined);
+  await a.vault.write(configurationPath, "genuine edit after restart");
   assert.equal((await a.session.sync()).kind, "synced");
-  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "another stale flush");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "genuine edit after restart");
+});
+
+for (const { label, changedAfterConsent, headChanged } of [
+  { label: "publishes its exact version", changedAfterConsent: false, headChanged: false },
+  { label: "does not authorize a different version", changedAfterConsent: true, headChanged: false },
+  { label: "expires when the remote head changes", changedAfterConsent: false, headChanged: true },
+]) {
+  test(`new-host consent ${label}`, async () => {
+    const { repository, device: a } = await deferredConfiguration("old configuration");
+    const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+    a.session = session("host-1");
+    const apply = await a.session.previewApplyConfiguration();
+    assert.equal(apply.kind, "preview");
+    if (apply.kind !== "preview") return;
+    assert.equal((await a.session.applyConfiguration({ token: apply.token })).kind, "applied");
+    await a.vault.write(configurationPath, "reviewed flush");
+    const preview = await a.session.previewGuardedConfigurationPublication(configurationPath);
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") return;
+    assert.equal((await a.session.consentGuardedConfigurationPublication({ path: configurationPath, token: preview.token })).kind, "recorded");
+    if (changedAfterConsent) await a.vault.write(configurationPath, "different flush");
+    if (headChanged) await repository.push({ "remote-note.md": await entryFromText("remote note") });
+    a.session = session("host-2");
+    const outcome = await a.session.sync();
+    assert.ok(outcome.kind === "up-to-date" || outcome.kind === "synced", JSON.stringify(outcome));
+    assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), changedAfterConsent || headChanged ? "remote configuration" : "reviewed flush");
+    const saved = await parseState(await a.store.load());
+    assert.equal(saved.configurationGuards[configurationPath]?.hostLifetimeId, changedAfterConsent || headChanged ? "host-2" : undefined);
+  });
+}
+
+test("new-host deletion stays held until exact deletion consent", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const apply = await a.session.previewApplyConfiguration();
+  assert.equal(apply.kind, "preview");
+  if (apply.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: apply.token })).kind, "applied");
+  a.vault.files.delete(configurationPath);
+  a.session = session("host-2");
+  const listing = await a.session.listConfiguration();
+  assert.ok(listing.kind === "configuration");
+  if (listing.kind !== "configuration") return;
+  assert.deepEqual(listing.guarded.map((item) => [item.path, item.local]), [[configurationPath, null]]);
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  const preview = await a.session.previewGuardedConfigurationPublication(configurationPath);
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.equal(preview.version, null);
+  assert.equal((await a.session.consentGuardedConfigurationPublication({ path: configurationPath, token: preview.token })).kind, "recorded");
+  assert.equal((await a.session.sync()).kind, "synced");
+  assert.equal(repository.fullHeadFiles()[configurationPath], undefined);
+});
+
+test("unknown new-host configuration remains guarded until readable", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const apply = await a.session.previewApplyConfiguration();
+  assert.equal(apply.kind, "preview");
+  if (apply.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: apply.token })).kind, "applied");
+  await a.vault.write(configurationPath, "oversize flush");
+  a.vault.unreadable.add(configurationPath);
+  a.session = session("host-2");
+  const listing = await a.session.listConfiguration();
+  assert.ok(listing.kind === "configuration");
+  if (listing.kind !== "configuration") return;
+  assert.deepEqual(listing.guarded.map((item) => [item.path, item.unreadable]), [[configurationPath, true]]);
+  assert.equal((await a.session.previewGuardedConfigurationPublication(configurationPath)).kind, "unreadable");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  assert.equal((await parseState(await a.store.load())).configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  a.vault.unreadable.clear();
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
 });
 
 test("crash after native configuration write restores postapply guard before resuming sync", async () => {
@@ -2906,6 +3028,27 @@ test("crash after native configuration write restores postapply guard before res
   assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
   const saved = await parseState(await a.store.load());
   assert.ok(saved.configurationGuards[configurationPath]);
+});
+
+test("a restored old-host guard holds a stale flush after crash recovery on a new host", async () => {
+  const { repository, device: a } = await deferredConfiguration("old configuration");
+  const session = (host: string) => new SyncSession({ repository: repository.device("A"), vault: a.vault, store: a.store, scopeRules: "config/1", hostLifetimeId: host, now: NOW, delay: async () => {} });
+  a.session = session("host-1");
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  failSaveMatching(a.store, (state) => state.operation?.kind === "configuration" && state.operation.steps.some((step) => step.status === "applied"), "after");
+  await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
+  const crashed = await parseState(await a.store.load());
+  assert.equal(crashed.operation?.kind, "configuration");
+  assert.equal(crashed.configurationGuards[configurationPath]?.hostLifetimeId, "host-1");
+  await a.vault.write(configurationPath, "old configuration");
+  a.session = session("host-2");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(entryText(repository.fullHeadFiles()[configurationPath]!), "remote configuration");
+  const recovered = await parseState(await a.store.load());
+  assert.equal(recovered.configurationGuards[configurationPath]?.hostLifetimeId, "host-2");
+  assert.equal(recovered.operation, null);
 });
 
 test("a previously poisoned legacy migration record loads only under its reviewed scope pause", async () => {

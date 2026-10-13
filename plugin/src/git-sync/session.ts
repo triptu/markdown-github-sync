@@ -326,7 +326,6 @@ export class SyncSession {
           if (!sameEntry(state.hiddenConsent[path], entry)) unpublished.push({ path, version: toRef(entry) });
         }
         for (const [path, guard] of Object.entries(state.configurationGuards)) {
-          if (!this.#guardActive(guard.hostLifetimeId)) continue;
           if (!scope.includes(path)) continue;
           const unreadable = this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path);
           const entry = local[path] ?? null;
@@ -389,7 +388,8 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const guard = loaded.state.configurationGuards[input.path];
-      if (!guard || !this.#guardActive(guard.hostLifetimeId)) return { kind: "missing" };
+      if (!guard) return { kind: "missing" };
+      if (preview.entry) this.#record(loaded.state, "sync", dictionary([[input.path, preview.entry]]));
       guard.consent = { version: preview.version, head: preview.head, scope: preview.scopeDigest };
       await this.#save(loaded.state);
       return { kind: "recorded" };
@@ -404,7 +404,7 @@ export class SyncSession {
     if (state.pause) return { kind: "paused", pause: state.pause };
     if (state.operation) return { kind: "busy" };
     const guard = state.configurationGuards[path];
-    if (!guard || !this.#guardActive(guard.hostLifetimeId)) return { kind: "missing" };
+    if (!guard) return { kind: "missing" };
     const head = await this.#readHead("config/1");
     const scope = await this.#scopeFor(head.oid, "config/1");
     if (!scope.includes(path)) return { kind: "missing" };
@@ -792,7 +792,7 @@ export class SyncSession {
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
       if (result.kind === "applied") {
         const guard = state.configurationGuards[preview.path];
-        if (guard && this.#guardActive(guard.hostLifetimeId)) {
+        if (guard) {
           guard.consent = { version: toRef(preview.historical), head: state.base.commit, scope: state.scope.digest };
         }
         state.operation = null;
@@ -1006,20 +1006,32 @@ export class SyncSession {
     }
     let guardsChanged = false;
     for (const [path, guard] of Object.entries(state.configurationGuards)) {
-      if (!this.#guardActive(guard.hostLifetimeId)) {
-        delete state.configurationGuards[path];
-        guardsChanged = true;
-        continue;
-      }
       if (guard.consent && state.base.commit !== guard.consent.head && sameRef(state.base.files[path], guard.consent.version)) {
         guard.applied = guard.consent.version;
         guard.consent = null;
         guardsChanged = true;
       }
-      if (!transaction.includes(path)) continue;
+      if (!transaction.includes(path)) {
+        if (guard.hostLifetimeId !== this.#hostLifetimeId) {
+          guard.hostLifetimeId = this.#hostLifetimeId;
+          guardsChanged = true;
+        }
+        continue;
+      }
       const observed = this.#observeLocal(state, local, path);
+      const authorized = observed.kind === "known" && guard.consent && sameRef(guard.consent.version, observed.entry) && guard.consent.head === head.oid && guard.consent.scope === headScope.digest;
+      // A new host proves nothing about what was flushed at shutdown. Compare
+      // its first observed version before retiring the old host's guard.
+      if (guard.hostLifetimeId !== this.#hostLifetimeId) {
+        if (observed.kind === "known" && (sameEntry(observed.entry, guard.applied) || authorized)) {
+          delete state.configurationGuards[path];
+          guardsChanged = true;
+          continue;
+        }
+        guard.hostLifetimeId = this.#hostLifetimeId;
+        guardsChanged = true;
+      }
       if (observed.kind === "unknown" || sameEntry(observed.entry, guard.applied)) continue;
-      const authorized = guard.consent && sameRef(guard.consent.version, observed.entry) && guard.consent.head === head.oid && guard.consent.scope === headScope.digest;
       if (!authorized) this.#guarded.push(path);
     }
     // A deferred live path and every unconsented hidden addition are held out
@@ -1281,7 +1293,7 @@ export class SyncSession {
     // Historical restore carries its own exact review. Keep that durable
     // authorization across the next sync, including a plugin reload.
     const guard = state.configurationGuards[step.path];
-    if (installed && guard && this.#guardActive(guard.hostLifetimeId) && step.next) {
+    if (installed && guard && step.next) {
       guard.consent = { version: step.next, head: state.base.commit, scope: state.scope.digest };
     }
     state.operation = null;
@@ -1755,10 +1767,6 @@ export class SyncSession {
     const applied = operation.steps.filter((step) => step.status === "applied").map((step) => step.path);
     const changed = operation.steps.filter((step) => step.status === "changed").map((step) => step.path);
     return changed.length > 0 ? { kind: "review-needed", applied, changed } : { kind: "applied", paths: applied };
-  }
-
-  #guardActive(hostLifetimeId: string | null): boolean {
-    return hostLifetimeId === null || this.#hostLifetimeId === null || hostLifetimeId === this.#hostLifetimeId;
   }
 
   #setConfigurationGuard(state: StoredState, operation: ConfigurationOperation, step: StoredStep): void {
