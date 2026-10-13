@@ -228,7 +228,7 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
     let kind: VersionConflictKind | null = null;
     let result: Entry | null = null;
 
-    if (untouched.has(path) && !holds[path]) {
+    if (untouched.has(path)) {
       if (r) target[path] = r;
       continue;
     }

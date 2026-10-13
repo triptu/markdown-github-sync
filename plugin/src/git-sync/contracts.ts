@@ -1,3 +1,5 @@
+import type { Scope } from "./scope";
+
 export type FileMode = "100644" | "100755";
 export interface Entry {
   oid: string;
@@ -32,6 +34,10 @@ export interface Repository {
   identity(): Promise<RepositoryIdentity>;
   head(): Promise<CommitSnapshot>;
   readCommit(oid: string): Promise<CommitSnapshot>;
+  /** Immutable policy for the complete tree at this commit; needed only in config/1 mode. */
+  scopeFor?(commit: string): Promise<Scope>;
+  /** Verified root ignore text at this commit; needed only in config/1 mode. */
+  readRootGitignore?(commit: string): Promise<string | null>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   /** `refs/vault-sync/devices/<installationId>`, written only by this installation. */
   ledgerRef(): string;
@@ -61,6 +67,8 @@ export interface NativeBytesIssue {
   id: string;
   /** Syncable vault path the bytes belong to. */
   path: string;
+  /** Native source whose old oversize evidence this exact version supersedes. */
+  sourcePath?: string;
   /**
    * `interrupted`: a write could have happened and the live path holds bytes
    * that are neither `expected` nor `next` (left as found). `displaced`: the
@@ -123,13 +131,13 @@ export interface UnreadableFile {
 /** Only `apply`, `recover` and `acknowledgeRecovery` mutate the vault or its native journal. */
 export interface LocalVault {
   /** Strictly read-only: never replays intents, persists evidence or reclaims hidden files. */
-  capture(): Promise<Snapshot>;
+  capture(scope?: Scope): Promise<Snapshot>;
   /**
    * Strictly read-only capture that reports unreadable visible files instead
    * of throwing; preferred over `capture` when present. An unreadable path is
    * never treated as deleted: the engine leaves it untouched on both sides.
    */
-  scan?(): Promise<{ files: Snapshot; unreadable: UnreadableFile[] }>;
+  scan?(scope?: Scope): Promise<{ files: Snapshot; unreadable: UnreadableFile[] }>;
   /** A pending intent at `path` whose (expected, next) differ from the call returns `blocked` without mutation. */
   apply(
     path: string,

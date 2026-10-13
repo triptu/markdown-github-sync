@@ -17,6 +17,7 @@ import type {
   Snapshot,
 } from "../src/git-sync/contracts";
 import { digestText, entryFromBytes, entryFromText, entryText, isExcludedPath, sameEntry } from "../src/git-sync/codec";
+import { assertNoNestedGitignore, compileScope, type Scope, type ScopeRules } from "../src/git-sync/scope";
 
 export class Crash extends Error {
   override name = "Crash";
@@ -73,6 +74,7 @@ export class MemoryRepository {
   delayed: Array<{ label: string; deliver: () => boolean }> = [];
   calls: string[] = [];
   private sequence = 0;
+  scopeRules: ScopeRules["rules"] = "visible-only";
 
   private constructor(root: CommitObject) {
     this.commits.set(root.oid, root);
@@ -93,10 +95,29 @@ export class MemoryRepository {
     return { oid, tree, parent: parents[0] ?? null, parents, files: { ...files } };
   }
 
-  private view(commit: CommitObject): CommitSnapshot {
+  private async view(commit: CommitObject): Promise<CommitSnapshot> {
+    const scope = await this.scopeFor(commit.oid);
     const files: Snapshot = {};
-    for (const [path, entry] of Object.entries(commit.files)) if (!isExcludedPath(path)) files[path] = { ...entry };
+    for (const [path, entry] of Object.entries(commit.files)) if (scope.includes(path)) files[path] = { ...entry };
     return { oid: commit.oid, treeOid: commit.tree, files };
+  }
+
+  async scopeFor(commit: string): Promise<Scope> {
+    const files = this.commits.get(commit)?.files;
+    if (!files) throw new Error(`no commit ${commit}`);
+    if (this.scopeRules === "config/1") assertNoNestedGitignore(Object.keys(files));
+    const entry = this.scopeRules === "config/1" ? files[".gitignore"] : undefined;
+    const text = entry ? entryText(entry) : null;
+    if (entry && text === null) throw new Error("Invalid root .gitignore");
+    return compileScope({ rules: this.scopeRules, configDir: ".obsidian", gitignore: entry?.oid ?? null }, text);
+  }
+
+  async readRootGitignore(commit: string): Promise<string | null> {
+    const entry = this.commits.get(commit)?.files[".gitignore"];
+    if (!entry) return null;
+    const text = entryText(entry);
+    if (text === null) throw new Error("Invalid root .gitignore");
+    return text;
   }
 
   /** A per-installation port sharing this repository; patches on the shared object still apply. */
@@ -106,6 +127,8 @@ export class MemoryRepository {
       identity: () => this.identity(),
       head: () => this.head(),
       readCommit: (oid) => this.readCommit(oid),
+      scopeFor: (oid) => this.scopeFor(oid),
+      readRootGitignore: (oid) => this.readRootGitignore(oid),
       isAncestor: (a, b) => this.isAncestor(a, b),
       ledgerRef: () => ledger,
       prepare: (parent, changes, message, input) => this.prepare(parent, changes, message, input),
@@ -168,7 +191,9 @@ export class MemoryRepository {
   }
 
   headFiles(): Snapshot {
-    return this.view(this.commits.get(this.branchHead)!).files;
+    const files: Snapshot = {};
+    for (const [path, entry] of Object.entries(this.commits.get(this.branchHead)!.files)) if (!isExcludedPath(path)) files[path] = { ...entry };
+    return files;
   }
 
   fullHeadFiles(): Snapshot {
@@ -216,12 +241,18 @@ export class MemoryRepository {
       if (entry) files[path] = entry;
       else delete files[path];
     }
+    if (this.scopeRules === "config/1") {
+      const parentScope = await this.scopeFor(parent.oid);
+      const ignore = files[".gitignore"];
+      const nextScope = await compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: ignore?.oid ?? null }, ignore ? entryText(ignore) : null);
+      for (const path of Object.keys(changes)) if (!parentScope.includes(path) || !nextScope.includes(path)) throw new Error(`Candidate excludes changed path ${path}`);
+    }
     const commit = await MemoryRepository.object(files, [parent.oid], ++this.sequence);
     this.commits.set(commit.oid, commit);
     const receipt = await MemoryRepository.object(files, ledger.anchor ? [ledger.anchor, commit.oid] : [commit.oid], ++this.sequence, `receipt ${ledger.operation}`);
     this.commits.set(receipt.oid, { ...receipt, ledger: "receipt" });
     if (this.prepareFault === "after") throw new Crash("prepare response lost");
-    return { ...this.view(commit), receipt: receipt.oid };
+    return { ...(await this.view(commit)), receipt: receipt.oid };
   }
 
   async createSeal(input: { anchor: string | null; parent: string; operation: string }): Promise<string> {
@@ -310,12 +341,12 @@ export class MemoryVault implements LocalVault {
     for (const [path, entry] of Object.entries(initial)) this.files.set(path, entry);
   }
 
-  async capture(): Promise<Snapshot> {
-    return Object.fromEntries([...this.files].map(([path, entry]) => [path, { ...entry }]));
+  async capture(scope?: Scope): Promise<Snapshot> {
+    return Object.fromEntries([...this.files].filter(([path]) => !scope || scope.includes(path)).map(([path, entry]) => [path, { ...entry }]));
   }
 
-  async scan(): Promise<{ files: Snapshot; unreadable: Array<{ path: string; size: number; mtime: number | null; reason: "oversize" }> }> {
-    const files = await this.capture();
+  async scan(scope?: Scope): Promise<{ files: Snapshot; unreadable: Array<{ path: string; size: number; mtime: number | null; reason: "oversize" }> }> {
+    const files = await this.capture(scope);
     const unreadable = [...this.unreadable].filter((path) => path in files).map((path) => ({ path, size: 9 * 1024 * 1024, mtime: 1, reason: "oversize" as const }));
     for (const item of unreadable) delete files[item.path];
     return { files, unreadable };

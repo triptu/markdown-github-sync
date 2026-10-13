@@ -1,6 +1,7 @@
 // Byte, identity and path rules shared by the engine. Browser-compatible: only
 // Web Crypto, TextEncoder/TextDecoder and atob/btoa are used.
 import type { Entry, FileMode, Snapshot } from "./contracts";
+import type { Scope } from "./scope";
 
 /** The identity of file content without its bytes. */
 export type Ref = Pick<Entry, "oid" | "mode">;
@@ -155,14 +156,14 @@ export async function verifyEntry(path: string, entry: unknown): Promise<Entry> 
   return entry;
 }
 
-/** Validates every path is in V1 scope and every entry's bytes match its oid. */
-export async function verifySnapshot(snapshot: unknown, label: string): Promise<Snapshot> {
+/** Validates structure and bytes, then membership in an explicit policy (legacy by default). */
+export async function verifySnapshot(snapshot: unknown, label: string, scope?: Pick<Scope, "includes">): Promise<Snapshot> {
   if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
     throw new IntegrityError(`${label}: snapshot is not an object`);
   }
   const verified: Snapshot = dictionary();
   for (const [path, entry] of Object.entries(snapshot)) {
-    if (!isSyncablePath(path)) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
+    if (!isValidPath(path) || !(scope ? scope.includes(path) : isSyncablePath(path))) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
     verified[path] = await verifyEntry(`${label}: ${path}`, entry);
   }
   return verified;

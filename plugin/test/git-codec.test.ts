@@ -18,6 +18,7 @@ import {
   own,
   verifySnapshot,
 } from "../src/git-sync/codec";
+import { compileScope } from "../src/git-sync/scope";
 
 test("blob hashes match git hash-object", async () => {
   assert.equal(await hashBlob(new Uint8Array()), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
@@ -68,6 +69,15 @@ test("snapshot verification rejects tampered bytes and out-of-scope paths", asyn
   await assert.rejects(verifySnapshot({ "a.md": { ...entry, data: encodeBase64(new TextEncoder().encode("fake")) } }, "test"), IntegrityError);
   await assert.rejects(verifySnapshot({ ".obsidian/x.json": entry }, "test"), IntegrityError);
   await assert.rejects(verifySnapshot({ "a.md": { ...entry, mode: "120000" } }, "test"), IntegrityError);
+});
+
+test("explicit configuration scope admits eligible hidden files but still rejects protected paths", async () => {
+  const scope = await compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: null }, null);
+  const entry = await entryFromText("exact bytes");
+  await verifySnapshot({ ".obsidian/appearance.json": entry, ".gitignore": entry }, "config", scope);
+  await assert.rejects(verifySnapshot({ ".obsidian/plugins/github-vault-sync/data.json": entry }, "protected", scope), IntegrityError);
+  await assert.rejects(verifySnapshot({ ".git/config": entry }, "protected", scope), IntegrityError);
+  await assert.rejects(verifySnapshot({ ".obsidian/appearance.json": { ...entry, data: "YmFk" } }, "tampered", scope), IntegrityError);
 });
 
  test("large attachment base64 decoding does not overflow the regex stack", () => {

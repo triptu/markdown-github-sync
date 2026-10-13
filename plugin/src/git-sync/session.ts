@@ -12,6 +12,8 @@ import {
   entryFromBytes,
   isOid,
   isSyncablePath,
+  isValidPath,
+  entryText,
   sameEntry,
   sameManifest,
   toManifest,
@@ -23,6 +25,8 @@ import type { Manifest, Ref } from "./codec";
 import { nativeChoices, reconcile } from "./reconcile";
 import type { Choice, Conflict, NativeHold } from "./reconcile";
 import { CorruptStateError, STATE_FORMAT, parseState, referencedBlobs } from "./state";
+import { compileScope, freezeTransactionScope, ScopeError } from "./scope";
+import type { Scope, ScopeRules, TransactionScope } from "./scope";
 import type {
   ApplyOperation,
   LedgerPublication,
@@ -34,6 +38,7 @@ import type {
   RecoveryReason,
   RecoveryRecord,
   RestoreOperation,
+  ConfigurationOperation,
   StoredConflict,
   StoredState,
   StoredStep,
@@ -49,12 +54,17 @@ export interface SessionPorts {
   /** Backoff between cancelled publication rounds; injectable for tests. */
   delay?: (ms: number) => Promise<void>;
   random?: () => number;
+  /** Config sync is opt-in. Existing /3 enrollments remain visible-only until reviewed re-enrollment. */
+  scopeRules?: ScopeRules["rules"];
 }
 
 /** Unpinned recovery records (bytes known to be in GitHub history) kept for convenience. */
 const RETAINED_RECOVERY = 20;
 
 type Unavailable = { kind: "unenrolled" } | { kind: "corrupt"; detail: string };
+
+/** A scanner omission is not evidence that a file is absent. */
+type LocalObservation = { kind: "unknown" } | { kind: "known"; entry: Entry | null };
 
 export type BlockedStep = { path: string; reason: string };
 
@@ -150,6 +160,18 @@ export type RestoreOutcome =
   | { kind: "restored" }
   | { kind: "blocked"; reason: string };
 
+export interface ConfigurationListing {
+  kind: "configuration";
+  rules: ScopeRules["rules"];
+  deferred: Array<{ path: string; expected: Ref | null; next: Ref | null; blockedReason: string | null }>;
+  unpublished: Array<{ path: string; version: Ref }>;
+}
+export type ConfigurationPreview =
+  | Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "disabled" }
+  | { kind: "preview"; token: string; items: ConfigurationListing["deferred"]; blocked: BlockedStep[] };
+export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] };
+export type HiddenPublicationPreview = Unavailable | { kind: "disabled" } | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref };
+
 export interface PublicationRecoveryPreview {
   kind: "preview";
   token: string;
@@ -242,6 +264,7 @@ export class SyncSession {
   readonly #now: () => Date;
   readonly #delay: (ms: number) => Promise<void>;
   readonly #random: () => number;
+  readonly #requestedRules: ScopeRules["rules"];
   #queue: Promise<unknown> = Promise.resolve();
   readonly #previewSession = crypto.randomUUID();
   #holdPass = false;
@@ -256,6 +279,7 @@ export class SyncSession {
     this.#now = ports.now ?? (() => new Date());
     this.#delay = ports.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#random = ports.random ?? Math.random;
+    this.#requestedRules = ports.scopeRules ?? "visible-only";
   }
 
   // ---- Public API --------------------------------------------------------
@@ -268,6 +292,148 @@ export class SyncSession {
   /** State plus a scan of local changes relative to the checkpoint. No network access. */
   inspect(): Promise<SessionStatus> {
     return this.#exclusive(() => this.#status(true));
+  }
+
+  /** Read-only inventory of consent-needed additions and pending live configuration. */
+  listConfiguration(): Promise<ConfigurationListing | Unavailable> {
+    return this.#exclusive(async () => {
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const state = loaded.state;
+      const unpublished: ConfigurationListing["unpublished"] = [];
+      if (state.scope.rules === "config/1") {
+        const head = await this.#readHead("config/1");
+        const scope = await this.#scopeFor(head.oid, "config/1");
+        const local = await this.#capture(state, "configuration inventory", false, scope);
+        for (const [path, entry] of Object.entries(local)) {
+          if (scope.classify(path) !== "config-inert" && scope.classify(path) !== "config-live") continue;
+          if (path === ".gitignore" || head.files[path] || state.base.files[path]) continue;
+          if (!sameEntry(state.hiddenConsent[path], entry)) unpublished.push({ path, version: toRef(entry) });
+        }
+      }
+      return { kind: "configuration", rules: state.scope.rules,
+        deferred: Object.entries(state.deferred).map(([path, item]) => ({ path, expected: item.expected, next: item.next, blockedReason: item.blockedReason })),
+        unpublished: unpublished.sort((a, b) => a.path.localeCompare(b.path)) };
+    });
+  }
+
+  previewConfigurationScope(): Promise<Unavailable | { kind: "already-enabled" } | { kind: "busy" } | { kind: "preview"; token: string; note: string }> {
+    return this.#exclusive(async () => {
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const state = loaded.state;
+      if (state.scope.rules === "config/1") return { kind: "already-enabled" };
+      if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
+      const head = await this.#readHead("config/1");
+      const scope = await this.#scopeFor(head.oid, "config/1");
+      const token = await digestText(JSON.stringify(["scope-enable/1", this.#previewSession, state.base.commit, head.oid, scope.digest]));
+      return { kind: "preview", token, note: "Fresh enrollment review is required before configuration scope becomes active" };
+    });
+  }
+
+  enableConfigurationScope(input: { token: string }): Promise<Unavailable | { kind: "stale" } | { kind: "busy" } | { kind: "already-enabled" } | { kind: "reenroll" }> {
+    return this.#exclusive(async () => {
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const state = loaded.state;
+      if (state.scope.rules === "config/1") return { kind: "already-enabled" };
+      if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
+      const head = await this.#readHead("config/1");
+      const scope = await this.#scopeFor(head.oid, "config/1");
+      const token = await digestText(JSON.stringify(["scope-enable/1", this.#previewSession, state.base.commit, head.oid, scope.digest]));
+      if (token !== input.token) return { kind: "stale" };
+      state.pause = { reason: "scope-enrollment", detail: "Review fresh enrollment before configuration sync starts" };
+      await this.#save(state);
+      return { kind: "reenroll" };
+    });
+  }
+
+  previewHiddenPublication(path: string): Promise<HiddenPublicationPreview> {
+    return this.#exclusive(async () => this.#hiddenPublicationPreview(path));
+  }
+
+  consentHiddenPublication(input: { path: string; token: string }): Promise<HiddenPublicationPreview | { kind: "recorded" } | { kind: "stale" }> {
+    return this.#exclusive(async () => {
+      const preview = await this.#hiddenPublicationPreview(input.path);
+      if (preview.kind !== "preview") return preview;
+      if (preview.token !== input.token) return { kind: "stale" };
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      loaded.state.hiddenConsent[input.path] = preview.version;
+      await this.#save(loaded.state);
+      return { kind: "recorded" };
+    });
+  }
+
+  async #hiddenPublicationPreview(path: string): Promise<HiddenPublicationPreview> {
+    const loaded = await this.#load();
+    if (loaded.kind !== "enrolled") return loaded;
+    const state = loaded.state;
+    if (state.scope.rules !== "config/1") return { kind: "disabled" };
+    if (!isValidPath(path)) return { kind: "invalid-path" };
+    const head = await this.#readHead("config/1");
+    const scope = await this.#scopeFor(head.oid, "config/1");
+    if (!scope.includes(path) || scope.classify(path) === "content" || path === ".gitignore") return { kind: "invalid-path" };
+    if (head.files[path] || state.base.files[path]) return { kind: "tracked" };
+    const local = await this.#capture(state, "hidden publication preview", false, scope);
+    const entry = local[path];
+    if (!entry || this.#unreadable.some((item) => item.path === path)) return { kind: "missing" };
+    const version = toRef(entry);
+    const token = await digestText(JSON.stringify(["hidden-consent/1", this.#previewSession, state.base.commit, head.oid, scope.digest, path, version]));
+    return { kind: "preview", token, path, version };
+  }
+
+  previewApplyConfiguration(): Promise<ConfigurationPreview> {
+    return this.#exclusive(async () => this.#configurationPreview());
+  }
+
+  async #configurationPreview(): Promise<ConfigurationPreview> {
+    const loaded = await this.#load();
+    if (loaded.kind !== "enrolled") return loaded;
+    const state = loaded.state;
+    if (state.scope.rules !== "config/1") return { kind: "disabled" };
+    if (state.pause) return { kind: "paused", pause: state.pause };
+    if (state.operation) return { kind: "busy" };
+    const head = await this.#readHead("config/1");
+    const scope = await this.#scopeFor(head.oid, "config/1");
+    const local = await this.#capture(state, "configuration preview", false, scope);
+    const items = Object.entries(state.deferred).sort(([a], [b]) => a.localeCompare(b)).map(([path, item]) => ({
+      path, expected: item.expected, next: item.next, blockedReason: item.blockedReason,
+    }));
+    const blocked: BlockedStep[] = [];
+    for (const item of items) {
+      if (item.blockedReason) blocked.push({ path: item.path, reason: item.blockedReason });
+      else if (item.path.endsWith("/community-plugins.json") && local[item.path] && enabledCompetingReason(local[item.path]!)) blocked.push({ path: item.path, reason: enabledCompetingReason(local[item.path]!)! });
+      else if (!sameEntry(local[item.path], item.expected)) blocked.push({ path: item.path, reason: "Local configuration changed since it was deferred; sync to review the conflict" });
+      else if (this.#unreadable.some((entry) => entry.path === item.path)) blocked.push({ path: item.path, reason: "Local configuration cannot be read" });
+    }
+    const token = await digestText(JSON.stringify(["apply-config/1", this.#previewSession, state.base.commit, head.oid, scope.digest, items, sortedManifest(local)]));
+    return { kind: "preview", token, items, blocked };
+  }
+
+  applyConfiguration(input: { token: string }): Promise<ConfigurationOutcome> {
+    return this.#exclusive(async () => {
+      const preview = await this.#configurationPreview();
+      if (preview.kind !== "preview") return preview;
+      if (preview.token !== input.token) return { kind: "stale" };
+      if (preview.blocked.length) return { kind: "blocked", steps: preview.blocked };
+      if (preview.items.length === 0) return { kind: "applied", paths: [] };
+      const loaded = await this.#load();
+      if (loaded.kind !== "enrolled") return loaded;
+      const state = loaded.state;
+      const expected: Snapshot = dictionary();
+      const incoming: Snapshot = dictionary();
+      const steps: StoredStep[] = preview.items.map((item) => {
+        if (item.expected) expected[item.path] = materialize(state, dictionary([[item.path, item.expected]]))[item.path]!;
+        if (item.next) incoming[item.path] = materialize(state, dictionary([[item.path, item.next]]))[item.path]!;
+        return { path: item.path, expected: item.expected, next: item.next, status: "pending", decision: null, reason: null };
+      });
+      const operation: ConfigurationOperation = { kind: "configuration", id: this.#nextId(state, "configuration"), baseCommit: state.base.commit,
+        steps, recoveryId: this.#record(state, "sync", expected), incomingRecoveryId: this.#record(state, "incoming", incoming) };
+      state.operation = operation;
+      await this.#save(state); // Approval and exact steps precede every native write.
+      return this.#applyConfigurationSteps(state, operation);
+    });
   }
 
   /**
@@ -318,6 +484,10 @@ export class SyncSession {
         repository: survey.preview.repository,
         ledger: { ref: this.#repository.ledgerRef(), anchor },
         base: commitState(survey.head),
+        scope: { ...survey.scope.rules, digest: survey.scope.digest },
+        deferred: dictionary(Object.entries(prior?.deferred ?? {})),
+        hiddenConsent: dictionary(),
+        reentry: [],
         carry: survey.carry,
         operation: null,
         pause: null,
@@ -637,14 +807,15 @@ export class SyncSession {
     if (!sameIdentity(identity, state.repository)) {
       return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before reviewing publication recovery" } };
     }
-    const head = await this.#readHead();
+    const head = await this.#readHead(state.scope.rules);
     if (legacy && (head.oid === operation.candidate.commit || await this.#repository.isAncestor(operation.candidate.commit, head.oid))) {
       return { kind: "reachable", candidate: operation.candidate.commit };
     }
     // Releasing before the branch leaves the parent would let the old request land later as remote content.
     if (legacy && (head.oid === operation.parent || operation.fence)) return { kind: "unfenced" };
     const candidate = await this.#repository.readCommit(operation.candidate.commit);
-    const candidateFiles = await verifySnapshot(candidate.files, "recovery candidate");
+    const candidateScope = await this.#scopeFor(candidate.oid, state.scope.rules);
+    const candidateFiles = await verifySnapshot(filterSnapshot(candidate.files, candidateScope), "recovery candidate", candidateScope);
     if (candidate.oid !== operation.candidate.commit || candidate.treeOid !== operation.candidate.tree || !sameManifest(candidateFiles, operation.target)) {
       throw new IntegrityError("Recovery candidate differs from the durable operation");
     }
@@ -656,7 +827,12 @@ export class SyncSession {
   // ---- Synchronization ---------------------------------------------------
 
   async #transact(state: StoredState): Promise<SyncOutcome | Cancelled> {
-    const head = await this.#readHead();
+    let head: CommitSnapshot;
+    try { head = await this.#readHead(state.scope.rules); }
+    catch (error) {
+      if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
+      throw error;
+    }
     if (head.oid !== state.base.commit && !(await this.#repository.isAncestor(state.base.commit, head.oid))) {
       // One confirmation (re-enrollment) for a genuine rewrite. Accepted work is never replayed.
       return this.#pause(state, "history-rewritten", `Checkpoint ${state.base.commit} is not an ancestor of head ${head.oid}`);
@@ -667,16 +843,69 @@ export class SyncSession {
     const hadPrototypeBaseline = Object.hasOwn(state.base.files, "__proto__");
     const base = await this.#effectiveBase(state, local, head);
     if (base.kind === "paused") return base.outcome;
+    let headScope: Scope;
+    let parentScope: Scope;
+    try {
+      headScope = await this.#scopeFor(head.oid, state.scope.rules);
+      parentScope = await this.#scopeFor(state.base.commit, state.scope.rules);
+    } catch (error) {
+      if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
+      throw error;
+    }
+    let transaction: TransactionScope = parentScope;
+    if (state.scope.rules === "config/1") {
+      if (this.#unreadable.some((item) => item.path === ".gitignore")) return this.#pause(state, "scope-unreadable", "Local .gitignore cannot be read");
+      const localIgnore = local[".gitignore"] ? entryText(local[".gitignore"]!) : null;
+      if (local[".gitignore"] && localIgnore === null) return this.#pause(state, "scope-unreadable", "Local .gitignore is not valid UTF-8");
+      try { transaction = await freezeTransactionScope(parentScope, headScope, localIgnore); }
+      catch (error) {
+        if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
+        throw error;
+      }
+    }
+    const planBase = filterSnapshot(base.files, transaction);
+    for (const path of state.reentry) delete planBase[path];
+    const planLocal = filterSnapshot(local, transaction);
+    const planRemote = filterSnapshot(head.files, transaction);
+    const excluded = [...new Set([...Object.keys(base.files), ...Object.keys(local), ...Object.keys(head.files)])].filter((path) => !transaction.includes(path));
+    if (parentScope.digest !== headScope.digest) {
+      const newlyIncluded = [...new Set([...Object.keys(state.carry), ...Object.keys(head.files)])]
+        .filter((path) => !parentScope.includes(path) && headScope.includes(path));
+      state.reentry = [...new Set([...state.reentry, ...newlyIncluded])].sort();
+    }
+    const parked: Snapshot = dictionary(excluded.flatMap((path) => base.files[path] ? [[path, base.files[path]!]] as const : []));
+    this.#record(state, "sync", parked);
+    for (const path of excluded) {
+      delete state.deferred[path];
+      delete state.hiddenConsent[path];
+    }
+    for (const [path, deferred] of Object.entries(state.deferred)) {
+      const next = head.files[path] ?? null;
+      if (sameEntry(next, deferred.next)) continue;
+      if (next) this.#record(state, "incoming", dictionary([[path, next]]));
+      deferred.next = next && toRef(next);
+      deferred.commit = head.oid;
+      deferred.blockedReason = configurationBlockReason(path, next);
+    }
+    // A deferred live path and every unconsented hidden addition are held out
+    // of all automatic reconciliation, including remote deletion counting.
+    const unconsented: string[] = [];
+    for (const [path, entry] of Object.entries(planLocal)) {
+      if (headScope.classify(path) === "content" || path === ".gitignore" || planRemote[path] || planBase[path]) continue;
+      if (sameEntry(state.hiddenConsent[path], entry)) continue;
+      unconsented.push(path);
+      if (state.hiddenConsent[path]) delete state.hiddenConsent[path];
+    }
     const guardScope = await digestText(JSON.stringify(["guard/1", head.oid, sortedManifest(local)]));
     const holds = nativeHolds(state);
-    const untouched = this.#untouched(state);
-    const unresolved = await reconcile({ base: base.files, local, remote: head.files, decisions: dictionary(), guardScope, holds, untouched });
+    const untouched = [...new Set([...this.#untouched(state), ...excluded, ...Object.keys(state.deferred), ...unconsented])];
+    const unresolved = await reconcile({ base: planBase, local: planLocal, remote: planRemote, decisions: dictionary(), guardScope, holds, untouched });
     const conflicts = unresolved.kind === "needs-decision" ? unresolved.conflicts : unresolved.held;
     // Decisions survive only while their exact conflict (versions, or guard scope) still exists.
     const validIds = new Set(conflicts.map((item) => item.id));
     for (const id of Object.keys(state.decisions)) if (!validIds.has(id)) delete state.decisions[id];
     const plan = Object.keys(state.decisions).length > 0
-      ? await reconcile({ base: base.files, local, remote: head.files, decisions: choices(state), guardScope, holds, untouched })
+      ? await reconcile({ base: planBase, local: planLocal, remote: planRemote, decisions: choices(state), guardScope, holds, untouched })
       : unresolved;
     const reviewed = [...conflicts];
     const later = plan.kind === "needs-decision" ? plan.conflicts : plan.held;
@@ -690,7 +919,7 @@ export class SyncSession {
         if (!isNativeConflict(item)) continue;
         // The decision is durable (resolve saved it), so the vault may now release its apply block.
         decidedOversize.push(...item.oversize.map((evidence) => evidence.id));
-        if (sameEntry(local[item.path], plan.target[item.path])) {
+        if (item.oversize.length === 0 && sameEntry(local[item.path], plan.target[item.path])) {
           delete state.holds[item.path];
           released = true;
         }
@@ -702,17 +931,36 @@ export class SyncSession {
       await this.#save(state);
       return { kind: "needs-decision", conflicts: plan.conflicts, merged: plan.merged, published: false, carried: [] };
     }
+    if (state.scope.rules === "config/1") {
+      for (const step of [...plan.incoming]) {
+        if (!step.path.startsWith(`${headScope.rules.configDir}/`)) continue;
+        this.#defer(state, step.path, step.expected, step.next, head.oid);
+        plan.incoming.splice(plan.incoming.indexOf(step), 1);
+      }
+    }
     for (const id of decidedOversize) if (!state.unacknowledged.includes(id)) state.unacknowledged.push(id);
     if (decidedOversize.length > 0) {
       await this.#save(state);
       await this.#acknowledge(state);
+      if (decidedOversize.some((id) => state.unacknowledged.includes(id))) {
+        const steps = plan.resolved.flatMap((item) => isNativeConflict(item) && item.oversize.some((evidence) => state.unacknowledged.includes(evidence.id))
+          ? [{ path: item.path, reason: "Native recovery acknowledgement did not complete; retry synchronization" }] : []);
+        return { kind: "blocked", commit: head.oid, steps };
+      }
+      for (const item of plan.resolved) {
+        if (isNativeConflict(item) && item.oversize.length > 0 && sameEntry(local[item.path], plan.target[item.path])) {
+          delete state.holds[item.path];
+          released = true;
+        }
+      }
     }
 
     const outgoing = Object.keys(plan.outgoing).length;
     const held = plan.held;
     if (outgoing === 0 && plan.incoming.length === 0) {
       // Untouched paths keep their origin so their unknown local bytes are compared later.
-      const kept = await this.#untouchedCarry(state, untouched, [local, head.files], head.files);
+      const kept = await this.#untouchedCarry(state, untouched, [local, head.files, base.files], head.files);
+      for (const path of Object.keys(state.deferred)) delete kept[path];
       const settled =
         !released &&
         head.oid === state.base.commit &&
@@ -722,8 +970,11 @@ export class SyncSession {
         !state.review &&
         Object.keys(state.decisions).length === 0;
       if (!settled) {
+        const scopeChanged = state.scope.digest !== headScope.digest;
         state.base = commitState(head);
+        state.scope = { ...headScope.rules, digest: headScope.digest };
         state.carry = kept;
+        if (!scopeChanged) state.reentry = [];
         if (held.length === 0) {
           state.review = null;
           state.decisions = dictionary();
@@ -740,7 +991,7 @@ export class SyncSession {
     // Drafts (local differs from the effective base) and every preimage the
     // application could overwrite are recorded before anything leaves or changes.
     const drafts: Snapshot = dictionary();
-    for (const [path, entry] of Object.entries(local)) if (!sameEntry(entry, base.files[path])) drafts[path] = entry;
+    for (const [path, entry] of Object.entries(planLocal)) if (!sameEntry(entry, planBase[path])) drafts[path] = entry;
     for (const step of plan.incoming) if (step.expected) drafts[step.path] = step.expected;
     const recoveryId = this.#record(state, "sync", drafts);
     const incomingFiles: Snapshot = dictionary();
@@ -773,7 +1024,7 @@ export class SyncSession {
     const id = `${this.#nextId(state, "publish")}-${crypto.randomUUID()}`;
     const anchor = state.ledger.anchor;
     const candidate = await this.#repository.prepare(head, plan.outgoing, this.#message(outgoing), { anchor, operation: id });
-    if (!isOid(candidate.oid) || !isOid(candidate.treeOid) || candidate.oid === head.oid || !sameManifest(candidate.files, plan.target)) {
+    if (!isOid(candidate.oid) || !isOid(candidate.treeOid) || candidate.oid === head.oid || !sameManifest(filterSnapshot(candidate.files, transaction), plan.target)) {
       throw new IntegrityError("Prepared commit does not contain exactly the planned files");
     }
     if (!isOid(candidate.receipt) || [candidate.oid, head.oid, anchor].includes(candidate.receipt)) {
@@ -787,7 +1038,7 @@ export class SyncSession {
       receipt: candidate.receipt,
       anchor,
       publication: { phase: "dispatched" },
-      target: toManifest(plan.target),
+      target: toManifest(candidate.files),
       steps,
       recoveryId,
       incomingRecoveryId,
@@ -802,7 +1053,7 @@ export class SyncSession {
     const settled = ack === "acknowledged" ? await this.#accept(state, operation) : await this.#settle(state, operation);
     if (settled.kind === "held") return settled.outcome;
     if (settled.kind === "cancelled") return settled;
-    return this.#withHolds(state, await this.#finish(state, settled.operation, local, plan.target, true));
+    return this.#withHolds(state, await this.#finish(state, settled.operation, local, candidate.files, true));
   }
 
   /**
@@ -841,6 +1092,12 @@ export class SyncSession {
     let operation = state.operation;
     if (!operation) return { kind: "continue", published: false, carried: [] };
     if (operation.kind === "restore") return this.#resumeRestore(state, operation);
+    if (operation.kind === "configuration") {
+      const outcome = await this.#applyConfigurationSteps(state, operation);
+      return outcome.kind === "blocked"
+        ? { kind: "held", outcome: { kind: "blocked", commit: state.base.commit, steps: outcome.steps } }
+        : { kind: "continue", published: false, carried: [] };
+    }
     let published = false;
     if (operation.kind === "publish") {
       const settled = await this.#settle(state, operation);
@@ -857,8 +1114,14 @@ export class SyncSession {
     await this.#verifyRestoreOperation(state, operation);
     const local = await this.#capture(state, "restore resumption capture");
     const step = operation.step;
-    const current = local[step.path] ?? null;
-    if (state.holds[step.path] || this.#quarantined(state).has(step.path) ||
+    const observed = this.#observeLocal(state, local, step.path);
+    if (observed.kind === "unknown" || state.holds[step.path]) {
+      state.operation = null;
+      await this.#save(state);
+      return { kind: "continue", published: false, carried: [] };
+    }
+    const current = observed.entry;
+    if (
         (!sameEntry(current, step.expected) && !sameEntry(current, step.next))) {
       state.operation = null;
       await this.#save(state);
@@ -895,7 +1158,8 @@ export class SyncSession {
 
   async #resumeApply(state: StoredState, operation: ApplyOperation): Promise<Applied> {
     const target = await this.#repository.readCommit(operation.target.commit);
-    const files = await verifySnapshot(target.files, "target commit");
+    const targetScope = await this.#scopeFor(target.oid, state.scope.rules);
+    const files = await verifySnapshot(filterSnapshot(target.files, targetScope), "target commit", targetScope);
     if (target.oid !== operation.target.commit || target.treeOid !== operation.target.tree || !sameManifest(files, operation.target.files)) {
       throw new IntegrityError(`Commit ${operation.target.commit} does not match the recorded operation`);
     }
@@ -919,11 +1183,18 @@ export class SyncSession {
     const preimages: Snapshot = dictionary();
     const incoming: Snapshot = dictionary();
     const steps: StoredStep[] = [];
-    for (const path of [...new Set([...Object.keys(local), ...Object.keys(target.files)])].sort()) {
-      const current = local[path] ?? null;
+    for (const path of [...new Set([...Object.keys(base.files), ...Object.keys(local), ...Object.keys(target.files), ...this.#untouched(state)])].sort()) {
+      const observed = this.#observeLocal(state, local, path);
       const next = target.files[path] ?? null;
-      if (sameEntry(current, next)) continue;
       const expected = base.files[path] ?? null;
+      if (observed.kind === "unknown") {
+        if (expected) preimages[path] = expected;
+        if (next) incoming[path] = next;
+        steps.push({ path, expected: expected && toRef(expected), next: next && toRef(next), status: "changed", decision: null, reason: null });
+        continue;
+      }
+      const current = observed.entry;
+      if (sameEntry(current, next)) continue;
       if (expected) preimages[path] = expected;
       if (next) incoming[path] = next;
       steps.push({ path, expected: expected && toRef(expected), next: next && toRef(next), status: sameEntry(current, expected) ? "pending" : "changed", decision: null, reason: null });
@@ -1039,7 +1310,7 @@ export class SyncSession {
       operation.fence = null;
       await this.#save(state);
     }
-    const head = await this.#readHead();
+    const head = await this.#readHead(state.scope.rules);
     const candidate = operation.candidate.commit;
     let published = head.oid === candidate;
     if (!published) {
@@ -1182,7 +1453,15 @@ export class SyncSession {
   async #applySteps(state: StoredState, operation: ApplyOperation, local: Snapshot, files: Snapshot): Promise<Applied> {
     for (const step of operation.steps) {
       if (step.status !== "pending" && step.status !== "blocked") continue;
-      const current = local[step.path] ?? null;
+      const observed = this.#observeLocal(state, local, step.path);
+      if (observed.kind === "unknown") {
+        // Omission from a scan is unknown bytes, never proven absence. Preserve
+        // the step's original precondition for a later exact comparison.
+        markStep(step, "changed");
+        await this.#save(state);
+        continue;
+      }
+      const current = observed.entry;
       if (sameEntry(current, step.next)) {
         markStep(step, "applied");
         continue;
@@ -1251,6 +1530,11 @@ export class SyncSession {
     // Untouched paths (unknown local bytes) keep their origin across the advance.
     const untouched = this.#untouched(state).filter((path) => !stepsByPath.has(path));
     Object.assign(carry, await this.#untouchedCarry(state, untouched, [local, files], operation.target.files));
+    const priorScope = await this.#scopeFor(state.base.commit, state.scope.rules);
+    for (const [path, origin] of Object.entries(state.carry)) {
+      if (!priorScope.includes(path) && !Object.hasOwn(carry, path)) carry[path] = origin;
+    }
+    for (const path of Object.keys(state.deferred)) delete carry[path];
     for (const [path, entry] of Object.entries(carry)) if (entry) origins[path] = entry;
     // The carry map is not yet in state. Pin its origins before #save prunes
     // blobs, so both this completion and a restart retain the same evidence.
@@ -1264,12 +1548,61 @@ export class SyncSession {
     }
 
     state.base = { commit: operation.target.commit, tree: operation.target.tree, files: operation.target.files };
+    const appliedScope = await this.#scopeFor(operation.target.commit, state.scope.rules);
+    const scopeChanged = appliedScope.digest !== state.scope.digest;
+    state.scope = { ...appliedScope.rules, digest: appliedScope.digest };
     state.carry = carry;
+    if (!scopeChanged) state.reentry = [];
     state.operation = null;
     state.review = null;
     state.decisions = dictionary();
     await this.#save(state);
     return { kind: "complete", commit: operation.target.commit, carried: Object.keys(carry).sort() };
+  }
+
+  async #applyConfigurationSteps(state: StoredState, operation: ConfigurationOperation): Promise<{ kind: "applied"; paths: string[] } | { kind: "blocked"; steps: BlockedStep[] }> {
+    const scope = await this.#scopeFor(state.base.commit, state.scope.rules);
+    const local = await this.#capture(state, "configuration application capture", true, scope);
+    for (const step of operation.steps) {
+      if (step.status !== "pending" && step.status !== "blocked") continue;
+      const observed = this.#observeLocal(state, local, step.path);
+      if (observed.kind === "unknown") {
+        markStep(step, "changed");
+        state.carry[step.path] = step.expected;
+        delete state.deferred[step.path];
+        await this.#save(state);
+        continue;
+      }
+      const current = observed.entry;
+      if (sameEntry(current, step.next)) {
+        markStep(step, "applied");
+        delete state.deferred[step.path];
+        await this.#save(state);
+        continue;
+      }
+      if (!sameEntry(current, step.expected) || state.holds[step.path]) {
+        markStep(step, "changed");
+        state.carry[step.path] = step.expected;
+        delete state.deferred[step.path];
+        await this.#save(state);
+        continue;
+      }
+      const next = step.next ? materialize(state, dictionary([[step.path, step.next]]))[step.path]! : null;
+      const result = await this.#vault.apply(step.path, current, next);
+      if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
+      else markStep(step, result.kind);
+      if (result.kind === "interrupted" || result.kind === "displaced") {
+        await this.#ingest(state, [result.issue], { requiredPath: step.path, known: [local, next ? dictionary([[step.path, next]]) : dictionary()] });
+      }
+      if (result.kind !== "blocked") delete state.deferred[step.path];
+      await this.#save(state);
+    }
+    const blocked = operation.steps.filter((step) => step.status === "blocked").map((step) => ({ path: step.path, reason: step.reason ?? "Blocked by the vault adapter" }));
+    if (blocked.length) return { kind: "blocked", steps: blocked };
+    await this.#capture(state, "post-configuration capture");
+    state.operation = null;
+    await this.#save(state);
+    return { kind: "applied", paths: operation.steps.filter((step) => step.status === "applied").map((step) => step.path) };
   }
 
   /**
@@ -1291,14 +1624,16 @@ export class SyncSession {
     const replay: string[] = [];
     const cancel: string[] = [];
     for (const intent of pending) {
-      const step = operation?.kind === "apply" ? operation.steps.find((item) => item.path === intent.path) :
+      const step = operation?.kind === "apply" || operation?.kind === "configuration" ? operation.steps.find((item) => item.path === intent.path) :
         operation?.kind === "restore" && operation.step.path === intent.path ? operation.step : undefined;
       const authorized =
         step !== undefined &&
         (step.status === "pending" || step.status === "blocked") &&
         sameRef(step.expected, intent.expected) &&
         sameRef(step.next, intent.next) &&
-        !(state.holds[step.path] && step.decision === null);
+        !(state.holds[step.path] && (step.decision === null || state.holds[step.path]!.oversize.length > 0)) &&
+        !this.#quarantined(state).has(step.path) &&
+        !this.#unreadable.some((item) => item.path === step.path);
       (authorized ? replay : cancel).push(intent.id);
     }
     const issues = await this.#vault.recover({ replay, cancel });
@@ -1313,7 +1648,7 @@ export class SyncSession {
     if (!this.#vault.pendingIntents) return [];
     const intents = await this.#vault.pendingIntents();
     for (const intent of intents) {
-      if (typeof intent?.id !== "string" || !isSyncablePath(intent.path)) throw new IntegrityError("Native pending intent is malformed");
+      if (typeof intent?.id !== "string" || !isValidPath(intent.path)) throw new IntegrityError("Native pending intent is malformed");
     }
     return intents;
   }
@@ -1335,16 +1670,40 @@ export class SyncSession {
     const errors: NativeError[] = [...(options.extraErrors ?? [])];
     const before = JSON.stringify(state.nativeErrors);
     let changed = false;
-    for (const raw of Array.isArray(issues) ? issues : [issues]) {
-      const checked = await checkIssue(raw, options.requiredPath);
+    const builtins = await compileScope({ rules: state.scope.rules, configDir: state.scope.configDir, gitignore: null }, null);
+    const checkedIssues = await Promise.all((Array.isArray(issues) ? issues : [issues]).map((raw) => checkIssue(raw, options.requiredPath, (path) => builtins.includes(path))));
+    const authoritative = options.replaceErrors === true && checkedIssues.every((item) => item.kind === "valid");
+    const currentIds = new Set(checkedIssues.flatMap((item) => item.kind === "valid" ? [item.issue.id] : []));
+    for (const checked of checkedIssues) {
       if (checked.kind === "invalid") {
         errors.push(checked.error);
         continue;
       }
       const issue = checked.issue;
+      const prior = state.holds[issue.path];
+      if (authoritative && prior && issue.sourcePath) {
+        const stale = prior.oversize.filter((item) => item.sourcePath === issue.sourcePath && !currentIds.has(item.id));
+        if (stale.length > 0 && sameRef(prior.expected, issue.expected) && sameRef(prior.next, issue.next)) {
+          const staleIds = new Set(stale.map((item) => item.id));
+          prior.ids = prior.ids.filter((id) => !staleIds.has(id));
+          prior.oversize = prior.oversize.filter((item) => !staleIds.has(item.id));
+          state.unacknowledged = state.unacknowledged.filter((id) => !staleIds.has(id));
+          known.forEach((id) => { if (staleIds.has(id)) known.delete(id); });
+          if (state.review) {
+            const retired = state.review.conflicts.filter((item) => "path" in item && item.path === issue.path);
+            for (const item of retired) delete state.decisions[item.id];
+            state.review.conflicts = state.review.conflicts.filter((item) => !("path" in item && item.path === issue.path));
+            if (state.review.conflicts.length === 0) state.review = null;
+          }
+          if (state.operation && state.operation.kind !== "restore") {
+            for (const step of state.operation.steps) if (step.path === issue.path && (step.status === "pending" || step.status === "blocked") && step.decision !== null) markStep(step, "changed");
+          }
+          changed = true;
+        }
+      }
       if (known.has(issue.id)) continue;
       known.add(issue.id);
-      const prior = state.holds[issue.path];
+      delete state.deferred[issue.path];
       const base = prior ? prior.base : await this.#origin(state, issue.path, options.known ?? []);
       if (issue.kind === "oversize") {
         const evidence: OversizeEvidence = { id: issue.id, sourcePath: issue.sourcePath, size: issue.size, mtime: issue.mtime };
@@ -1398,7 +1757,12 @@ export class SyncSession {
   /** Paths whose local bytes are unknown: unreadable in the latest capture, or quarantined. Holds are separate. */
   #untouched(state: StoredState): string[] {
     const paths = new Set([...this.#unreadable.map((item) => item.path), ...this.#quarantined(state)]);
-    return [...paths].filter((path) => !state.holds[path]).sort();
+    return [...paths].sort();
+  }
+
+  #observeLocal(state: StoredState, local: Snapshot, path: string): LocalObservation {
+    if (this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path)) return { kind: "unknown" };
+    return { kind: "known", entry: local[path] ?? null };
   }
 
   /** Carry entries keeping each untouched path's current origin wherever it differs from the new checkpoint. */
@@ -1431,7 +1795,9 @@ export class SyncSession {
     head: CommitSnapshot,
   ): Promise<{ kind: "ready"; files: Snapshot } | { kind: "paused"; outcome: SyncOutcome }> {
     const commit = state.base.commit === head.oid ? head : await this.#repository.readCommit(state.base.commit);
-    const checkpoint = await verifySnapshot(commit.files, "checkpoint commit");
+    const checkpointScope = await this.#scopeFor(commit.oid, state.scope.rules);
+    if (checkpointScope.digest !== state.scope.digest) return { kind: "paused", outcome: await this.#pause(state, "base-mismatch", "Stored scope digest differs from the checkpoint policy") };
+    const checkpoint = await verifySnapshot(filterSnapshot(commit.files, checkpointScope), "checkpoint commit", checkpointScope);
     // Old ordinary-object manifests could omit the __proto__ path. Recover its
     // baseline from the immutable checkpoint before classifying any deletion.
     if (!Object.hasOwn(state.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) {
@@ -1467,16 +1833,20 @@ export class SyncSession {
     carry: Record<string, Ref | null>;
     drafts: Snapshot;
     pending: PendingIntent[];
+    scope: Scope;
   }> {
     const repository = await this.#repository.identity();
-    const head = await this.#readHead();
+    const rules = prior?.pause?.reason === "scope-enrollment" ? "config/1" : prior?.scope.rules ?? this.#requestedRules;
+    const head = await this.#readHead(rules);
+    const scope = await this.#scopeFor(head.oid, rules);
     const pending = await this.#pendingIntents();
-    const local = await this.#capture(prior, "local capture");
+    const local = await this.#capture(prior, "local capture", true, scope);
     const unreadable = new Set(this.#unreadable.map((item) => item.path));
     const nativePending = new Set(pending.map((intent) => intent.path));
     if (prior) {
       const checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
-      const checkpoint = await verifySnapshot(checkpointCommit.files, "re-enrollment checkpoint");
+      const priorScope = await this.#scopeFor(checkpointCommit.oid, prior.scope.rules);
+      const checkpoint = await verifySnapshot(filterSnapshot(checkpointCommit.files, priorScope), "re-enrollment checkpoint", priorScope);
       if (!Object.hasOwn(prior.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) prior.base.files["__proto__"] = toRef(checkpoint["__proto__"]!);
       if (checkpointCommit.oid !== prior.base.commit || checkpointCommit.treeOid !== prior.base.tree || !sameManifest(checkpoint, prior.base.files)) {
         throw new IntegrityError("Re-enrollment checkpoint differs from its immutable commit");
@@ -1543,13 +1913,14 @@ export class SyncSession {
       carry,
       drafts,
       pending,
+      scope,
     };
   }
 
   // ---- Restore -----------------------------------------------------------
 
   async #restorePreview(state: StoredState, input: { path: string; commit: string }): Promise<RestorePreview | RestoreRefusal> {
-    if (!isSyncablePath(input.path)) return { kind: "invalid-path" };
+    if (!isValidPath(input.path) || !(await this.#scopeFor(state.base.commit, state.scope.rules)).includes(input.path)) return { kind: "invalid-path" };
     if (!isOid(input.commit)) return { kind: "not-in-history" };
     if (input.commit !== state.base.commit && !(await this.#repository.isAncestor(input.commit, state.base.commit))) {
       return { kind: "not-in-history" };
@@ -1560,7 +1931,9 @@ export class SyncSession {
     if (raw === undefined) return { kind: "missing" };
     const historical = await verifyEntry(input.path, raw);
     const local = await this.#capture(state, "local capture");
-    const current = local[input.path] ?? null;
+    const observed = this.#observeLocal(state, local, input.path);
+    if (observed.kind === "unknown") return { kind: "missing" };
+    const current = observed.entry;
     const token = await digestText(
       JSON.stringify(["restore/3", this.#previewSession, input.path, input.commit, historical.oid, historical.mode, current?.oid ?? null, current?.mode ?? null]),
     );
@@ -1583,12 +1956,14 @@ export class SyncSession {
     const { state } = loaded;
     let pending: PendingChange[] | null = null;
     if (scan) {
-      const local = await this.#capture(state, "local capture");
+      const local = await this.#capture(state, "local capture", false);
       const base = effectiveManifest(state);
       pending = [];
       for (const path of [...new Set([...Object.keys(base), ...Object.keys(local)])].sort()) {
+        const observed = this.#observeLocal(state, local, path);
+        if (observed.kind === "unknown") continue;
         const b = base[path];
-        const l = local[path];
+        const l = observed.entry;
         if (sameEntry(b, l)) continue;
         pending.push({ path, change: !b ? "added" : !l ? "deleted" : "modified" });
       }
@@ -1635,12 +2010,13 @@ export class SyncSession {
   // ---- Persistence -------------------------------------------------------
 
   /** Archives every local draft not already pinned before an API can return early. */
-  async #capture(state: StoredState | null, label: string, persist = true): Promise<Snapshot> {
-    const scanned = this.#vault.scan ? await this.#vault.scan() : { files: await this.#vault.capture(), unreadable: [] };
-    const local = await verifySnapshot(scanned.files, label);
+  async #capture(state: StoredState | null, label: string, persist = true, scope?: Scope): Promise<Snapshot> {
+    const active = scope ?? (state ? await this.#scopeFor(state.base.commit, state.scope.rules) : undefined);
+    const scanned = this.#vault.scan ? await this.#vault.scan(active) : { files: await this.#vault.capture(active), unreadable: [] };
+    const local = await verifySnapshot(scanned.files, label, active);
     if (!Array.isArray(scanned.unreadable)) throw new IntegrityError(`${label}: malformed unreadable list`);
     for (const item of scanned.unreadable) {
-      if (!isSyncablePath(item?.path) || Object.hasOwn(local, item.path) || typeof item.size !== "number" || item.reason !== "oversize") {
+      if (!isValidPath(item?.path) || (active ? !active.includes(item.path) : !isSyncablePath(item.path)) || Object.hasOwn(local, item.path) || typeof item.size !== "number" || item.reason !== "oversize") {
         throw new IntegrityError(`${label}: malformed unreadable file`);
       }
     }
@@ -1657,6 +2033,17 @@ export class SyncSession {
     this.#record(state, "sync", drafts);
     if (persist && state.counter !== counter) await this.#save(state);
     return local;
+  }
+
+  #defer(state: StoredState, path: string, expected: Entry | null, next: Entry | null, commit: string): void {
+    if (expected) this.#record(state, "sync", dictionary([[path, expected]]));
+    if (next) this.#record(state, "incoming", dictionary([[path, next]]));
+    state.deferred[path] = {
+      expected: expected && toRef(expected),
+      next: next && toRef(next),
+      commit,
+      blockedReason: configurationBlockReason(path, next),
+    };
   }
 
   #exclusive<T>(task: () => Promise<T>): Promise<T> {
@@ -1686,6 +2073,8 @@ export class SyncSession {
     const copy = structuredClone(state);
     copy.base.files = toManifest(copy.base.files);
     copy.carry = dictionary(Object.entries(copy.carry));
+    copy.deferred = dictionary(Object.entries(copy.deferred));
+    copy.hiddenConsent = dictionary(Object.entries(copy.hiddenConsent));
     copy.decisions = dictionary(Object.entries(copy.decisions));
     copy.blobs = dictionary(Object.entries(copy.blobs));
     if (copy.operation?.kind === "publish") copy.operation.target = toManifest(copy.operation.target);
@@ -1700,10 +2089,22 @@ export class SyncSession {
     return { kind: "paused", pause: state.pause };
   }
 
-  async #readHead(): Promise<CommitSnapshot> {
+  async #scopeFor(commit: string, rules: ScopeRules["rules"]): Promise<Scope> {
+    if (rules === "visible-only") return compileScope({ rules, configDir: ".obsidian", gitignore: null }, null);
+    if (!this.#repository.scopeFor || !this.#repository.readRootGitignore) throw new ScopeError("Repository does not support configuration scope");
+    const scope = await this.#repository.scopeFor(commit);
+    if (scope.rules.rules !== "config/1") throw new ScopeError("Repository scope mode does not match the session");
+    const ignoreText = await this.#repository.readRootGitignore(commit);
+    const verified = await compileScope({ ...scope.rules }, ignoreText);
+    if (verified.digest !== scope.digest) throw new ScopeError("Repository scope and root .gitignore disagree");
+    return scope;
+  }
+
+  async #readHead(rules: ScopeRules["rules"] = "visible-only"): Promise<CommitSnapshot> {
     const head = await this.#repository.head();
     if (!isOid(head.oid) || !isOid(head.treeOid)) throw new IntegrityError("Repository head has malformed object IDs");
-    return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(head.files, "remote head") };
+    const scope = await this.#scopeFor(head.oid, rules);
+    return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(filterSnapshot(head.files, scope), "remote head", scope) };
   }
 
   /** Adds an immutable recovery record, reusing an identical pinned one. Returns its id. */
@@ -1763,6 +2164,33 @@ export class SyncSession {
 }
 
 // ---- Helpers ---------------------------------------------------------------
+
+function filterSnapshot<T extends Ref>(files: Readonly<Record<string, T>>, scope: Pick<Scope, "includes">): Record<string, T> {
+  for (const path of Object.keys(files)) if (!isValidPath(path)) throw new IntegrityError(`Structurally invalid path ${JSON.stringify(path)}`);
+  return dictionary(Object.entries(files).filter(([path]) => scope.includes(path)));
+}
+
+function configurationBlockReason(path: string, next: Entry | null): string | null {
+  if (!path.endsWith("/community-plugins.json")) return null;
+  if (!next) return "Applying this file would remove the active sync plugin; review an edited version containing github-vault-sync";
+  const content = entryText(next);
+  let parsed: unknown;
+  try { parsed = content === null ? null : JSON.parse(content); } catch { parsed = null; }
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) return "community-plugins.json must be a JSON array of plugin ids";
+  if (!parsed.includes("github-vault-sync")) return "Add github-vault-sync to community-plugins.json before applying it";
+  const competing = ["obsidian-git", "obsidian-livesync", "remotely-save", "remotely-sync", "cloud-vault-sync"];
+  const enabled = competing.filter((id) => parsed.includes(id));
+  return enabled.length ? `Disable competing sync plugins before applying community-plugins.json: ${enabled.join(", ")}` : null;
+}
+
+function enabledCompetingReason(entry: Entry): string | null {
+  const content = entryText(entry);
+  let parsed: unknown;
+  try { parsed = content === null ? null : JSON.parse(content); } catch { return null; }
+  if (!Array.isArray(parsed)) return null;
+  const enabled = ["obsidian-git", "obsidian-livesync", "remotely-save", "remotely-sync", "cloud-vault-sync"].filter((id) => parsed.includes(id));
+  return enabled.length ? `Disable currently enabled competing sync plugins before applying community-plugins.json: ${enabled.join(", ")}` : null;
+}
 
 function markStep(step: StoredStep, status: StoredStep["status"], reason: string | null = null): void {
   step.status = status;
@@ -1855,10 +2283,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Checks one untrusted native issue; never throws. */
-async function checkIssue(raw: unknown, requiredPath?: string): Promise<{ kind: "valid"; issue: NativeIssue } | { kind: "invalid"; error: NativeError }> {
+async function checkIssue(raw: unknown, requiredPath?: string, allowedPath: (path: string) => boolean = isSyncablePath): Promise<{ kind: "valid"; issue: NativeIssue } | { kind: "invalid"; error: NativeError }> {
   const id = isRecord(raw) && typeof raw.id === "string" && raw.id.length > 0 && raw.id.length <= 256 ? raw.id : null;
   const candidate = isRecord(raw) ? raw.path : undefined;
-  const path = isSyncablePath(candidate) && (requiredPath === undefined || candidate === requiredPath) ? candidate : null;
+  const path = isValidPath(candidate) && allowedPath(candidate) && (requiredPath === undefined || candidate === requiredPath) ? candidate : null;
   const invalid = (detail: string) => ({ kind: "invalid" as const, error: { id, path, detail: `Native issue ${id ?? "with no readable id"}: ${detail}` } });
   if (!isRecord(raw)) return invalid("malformed issue");
   if (path === null) return invalid("unexpected path");
@@ -1868,7 +2296,8 @@ async function checkIssue(raw: unknown, requiredPath?: string): Promise<{ kind: 
     const expected = await entry(raw.expected, "expected");
     const next = await entry(raw.next, "next");
     if (raw.kind === "interrupted" || raw.kind === "displaced") {
-      return { kind: "valid", issue: { id, path, kind: raw.kind, expected, next, found: await entry(raw.found, "found") } };
+      if (raw.sourcePath !== undefined && (!isValidPath(raw.sourcePath) || typeof raw.sourcePath !== "string")) return invalid("malformed source path");
+      return { kind: "valid", issue: { id, path, kind: raw.kind, ...(typeof raw.sourcePath === "string" ? { sourcePath: raw.sourcePath } : {}), expected, next, found: await entry(raw.found, "found") } };
     }
     if (raw.kind === "oversize") {
       const { sourcePath, size, mtime } = raw;

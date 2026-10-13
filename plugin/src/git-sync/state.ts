@@ -4,10 +4,12 @@
 import type { RepositoryIdentity } from "./contracts";
 import type { ChoiceKind, NativeConflictKind, VersionConflictKind } from "./reconcile";
 import { choicesFor } from "./reconcile";
-import { dictionary as safeDictionary, decodeBase64, hashBlob, isFileMode, isOid, isSyncablePath } from "./codec";
+import { dictionary as safeDictionary, decodeBase64, hashBlob, isFileMode, isOid, isSyncablePath, isValidPath } from "./codec";
 import type { Manifest, Ref } from "./codec";
+import type { ScopeRules } from "./scope";
+import { compileScope } from "./scope";
 
-export const STATE_FORMAT = "github-vault-sync/3";
+export const STATE_FORMAT = "github-vault-sync/4";
 
 /**
  * `interrupted`/`displaced`: the vault reported native evidence for the path;
@@ -169,9 +171,19 @@ export interface RestoreOperation {
   incomingRecoveryId: string;
 }
 
-export type Operation = PublishOperation | ApplyOperation | RestoreOperation;
+/** Explicitly reviewed config writes. The operation is durable before a native apply. */
+export interface ConfigurationOperation {
+  kind: "configuration";
+  id: string;
+  baseCommit: string;
+  steps: StoredStep[];
+  recoveryId: string | null;
+  incomingRecoveryId: string | null;
+}
 
-export type PauseReason = "repository-changed" | "history-rewritten" | "base-mismatch" | "ledger-diverged" | "duplicate-installation";
+export type Operation = PublishOperation | ApplyOperation | RestoreOperation | ConfigurationOperation;
+
+export type PauseReason = "repository-changed" | "history-rewritten" | "base-mismatch" | "ledger-diverged" | "duplicate-installation" | "scope-enrollment" | "scope-unreadable";
 
 export interface Pause {
   reason: PauseReason;
@@ -205,6 +217,13 @@ export interface StoredState {
   ledger: Ledger;
   /** The coherent checkpoint: a commit fully applied to this vault. */
   base: CommitRef & { files: Manifest };
+  scope: Readonly<ScopeRules> & { digest: string };
+  /** A live configuration version awaiting reviewed application. */
+  deferred: Record<string, { expected: Ref | null; next: Ref | null; commit: string; blockedReason: string | null }>;
+  /** One-shot authorization for an exact new local hidden version. */
+  hiddenConsent: Record<string, Ref>;
+  /** Paths re-entering after an excluded checkpoint have no remembered merge base. */
+  reentry: string[];
   /**
    * Paths whose live local content descends from a version other than the
    * checkpoint's (newer edits preserved during application, enrollment
@@ -271,7 +290,11 @@ function oid(value: unknown, at: string): string {
 }
 
 function path(value: unknown, at: string): string {
-  if (!isSyncablePath(value)) fail(at, "expected an in-scope path");
+  if (!isValidPath(value)) fail(at, "expected a structurally safe path");
+  const parts = value.split("/");
+  if (parts.some((part) => part === ".git" || part === ".git-vault-sync" || part.startsWith(".git-vault-sync-export-") || part === ".trash" || part === ".DS_Store" || part === "Thumbs.db" || part === "desktop.ini")) fail(at, "protected path");
+  if (parts[0] === ".obsidian" && (parts[1] === "workspace" || parts[1] === "workspace.json" || parts[1] === "workspace-mobile.json" || parts[1] === "cache" ||
+    (parts[1] === "plugins" && ["github-vault-sync", "obsidian-git", "obsidian-livesync", "remotely-save", "remotely-sync", "cloud-vault-sync"].includes(parts[2] ?? "")))) fail(at, "protected configuration path");
   return value;
 }
 
@@ -312,11 +335,11 @@ const VERSION_KINDS: readonly VersionConflictKind[] = [
 ];
 const STEP_STATUSES: readonly StepStatus[] = ["pending", "applied", "changed", "blocked", "kept", "interrupted", "displaced"];
 const LEGACY_STEP_STATUSES = ["pending", "applied", "changed", "blocked", "kept", "revoked"] as const;
-const PAUSE_REASONS: readonly PauseReason[] = ["repository-changed", "history-rewritten", "base-mismatch", "ledger-diverged", "duplicate-installation"];
+const PAUSE_REASONS: readonly PauseReason[] = ["repository-changed", "history-rewritten", "base-mismatch", "ledger-diverged", "duplicate-installation", "scope-enrollment", "scope-unreadable"];
 const RECOVERY_REASONS: readonly RecoveryReason[] = ["sync", "enrollment", "restore", "incoming", "carried", "publication-recovery", "conflict-edit", "migration", "native"];
 const CHOICE_KINDS: readonly ChoiceKind[] = ["mine", "remote", "both", "edit", "expected", "next", "found"];
 
-type Version = "1" | "2" | "3";
+type Version = "1" | "2" | "3" | "4";
 
 function step(value: unknown, at: string): StoredStep {
   const raw = object(value, at, ["path", "expected", "next", "status", "decision", "reason"]);
@@ -378,8 +401,9 @@ function publication(value: unknown, at: string): Publication {
 
 function operation(value: unknown, at: string, version: Version): Operation {
   if (typeof value !== "object" || value === null) fail(at, "expected an object");
-  const kind = literal(field(value, "kind"), `${at}.kind`, ["publish", "apply", "restore"] as const);
-  if (version !== "3") {
+  const kind = literal(field(value, "kind"), `${at}.kind`, version === "4" ? ["publish", "apply", "restore", "configuration"] as const : ["publish", "apply", "restore"] as const);
+  if (version === "1" || version === "2") {
+    if (kind === "configuration") fail(at, "legacy state cannot contain configuration operation");
     if (kind === "restore") fail(at, "legacy state cannot contain a restore operation");
     // /1 and /2 operations carried approval and consent metadata that v3
     // retires. Their steps are re-planned from a fresh capture; publication
@@ -406,6 +430,13 @@ function operation(value: unknown, at: string, version: Version): Operation {
       target: { ...commitRef(target, `${at}.target`), files: manifest(field(target, "files"), `${at}.target.files`) },
       steps: [], recoveryId, incomingRecoveryId: null, replan: true,
     };
+  }
+  if (kind === "configuration") {
+    const raw = object(value, at, ["kind", "id", "baseCommit", "steps", "recoveryId", "incomingRecoveryId"]);
+    const parsed = steps(field(raw, "steps"), `${at}.steps`);
+    if (parsed.length === 0 || parsed.some((item) => item.decision !== null || item.status === "kept")) fail(`${at}.steps`, "configuration needs reviewed write steps");
+    return { kind, id: text(field(raw, "id"), `${at}.id`), baseCommit: oid(field(raw, "baseCommit"), `${at}.baseCommit`), steps: parsed,
+      recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text), incomingRecoveryId: nullable(field(raw, "incomingRecoveryId"), `${at}.incomingRecoveryId`, text) };
   }
   if (kind === "restore") {
     const raw = object(value, at, ["kind", "id", "sourceCommit", "baseCommit", "step", "recoveryId", "incomingRecoveryId"]);
@@ -605,6 +636,7 @@ function recovery(value: unknown, at: string): RecoveryRecord {
 /** Every blob the state promises to hold locally. */
 export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> {
   const oids = new Set<string>();
+  for (const item of Object.values(state.deferred)) for (const entry of [item.expected, item.next]) if (entry) oids.add(entry.oid);
   for (const entry of Object.values(state.carry)) if (entry) oids.add(entry.oid);
   for (const decision of Object.values(state.decisions)) if (decision.kind === "edit") oids.add(decision.entry.oid);
   for (const item of state.review?.conflicts ?? []) {
@@ -622,21 +654,22 @@ export async function parseState(value: unknown): Promise<StoredState> {
   const at = "state";
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail(at, "expected an object");
   const format = field(value, "format");
-  const version: Version | null = format === STATE_FORMAT ? "3" : format === "github-vault-sync/2" ? "2" : format === "github-vault-sync/1" ? "1" : null;
+  const version: Version | null = format === STATE_FORMAT ? "4" : format === "github-vault-sync/3" ? "3" : format === "github-vault-sync/2" ? "2" : format === "github-vault-sync/1" ? "1" : null;
   if (!version) fail(`${at}.format`, "unsupported state format");
   const raw = object(value, at, [
     "format",
     ...(version === "2" && Object.hasOwn(value, "observation") ? ["observation"] : []),
     "repository",
-    ...(version === "3" ? ["ledger"] : []),
+    ...(version === "3" || version === "4" ? ["ledger"] : []),
     "base",
+    ...(version === "4" ? ["scope", "deferred", "hiddenConsent", "reentry"] : []),
     "carry",
     "operation",
     "pause",
     "review",
     "decisions",
-    ...(version === "3" ? ["holds", "unacknowledged"] : []),
-    ...(version === "3" && Object.hasOwn(value, "nativeErrors") ? ["nativeErrors"] : []),
+    ...(version === "3" || version === "4" ? ["holds", "unacknowledged"] : []),
+    ...((version === "3" || version === "4") && Object.hasOwn(value, "nativeErrors") ? ["nativeErrors"] : []),
     "recovery",
     "blobs",
     "counter",
@@ -679,10 +712,10 @@ export async function parseState(value: unknown): Promise<StoredState> {
   const holds: Record<string, StoredHold> = safeDictionary();
   const unacknowledged: string[] = [];
   const nativeErrors: NativeError[] = [];
-  if (version === "3" && Object.hasOwn(raw, "nativeErrors")) {
+  if ((version === "3" || version === "4") && Object.hasOwn(raw, "nativeErrors")) {
     for (const [index, item] of array(field(raw, "nativeErrors"), `${at}.nativeErrors`).entries()) nativeErrors.push(nativeError(item, `${at}.nativeErrors[${index}]`));
   }
-  if (version === "3") {
+  if (version === "3" || version === "4") {
     for (const [key, entry] of dictionary(field(raw, "holds"), `${at}.holds`)) holds[path(key, `${at}.holds`)] = hold(entry, `${at}.holds[${key}]`);
     for (const [index, item] of array(field(raw, "unacknowledged"), `${at}.unacknowledged`).entries()) unacknowledged.push(text(item, `${at}.unacknowledged[${index}]`));
     if (new Set(unacknowledged).size !== unacknowledged.length) fail(`${at}.unacknowledged`, "duplicate issue id");
@@ -692,7 +725,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
   let counter = field(raw, "counter");
   if (typeof counter !== "number" || !Number.isSafeInteger(counter) || counter < 0) fail(`${at}.counter`, "expected a counter");
   const op = nullable(field(raw, "operation"), `${at}.operation`, (value, at) => operation(value, at, version));
-  const stateLedger: Ledger = version === "3" ? ledger(field(raw, "ledger"), `${at}.ledger`) : { ref: null, anchor: null };
+  const stateLedger: Ledger = version === "3" || version === "4" ? ledger(field(raw, "ledger"), `${at}.ledger`) : { ref: null, anchor: null };
   if (op) {
     if (op.kind === "publish" && op.publication.phase !== "legacy" && op.anchor !== stateLedger.anchor) {
       fail(`${at}.operation.anchor`, "publication anchor differs from the ledger anchor");
@@ -704,6 +737,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     if (op.recoveryId && !record) fail(`${at}.operation.recoveryId`, "missing recovery record");
     const operationSteps = op.kind === "restore" ? [op.step] : op.steps;
     if (op.kind === "restore" && op.baseCommit !== oid(field(base, "commit"), `${at}.base.commit`)) fail(`${at}.operation.baseCommit`, "restore checkpoint changed");
+    if (op.kind === "configuration" && op.baseCommit !== oid(field(base, "commit"), `${at}.base.commit`)) fail(`${at}.operation.baseCommit`, "configuration checkpoint changed");
     for (const item of operationSteps) {
       const saved = record?.files[item.path];
       if (item.expected && !(saved && saved.oid === item.expected.oid && saved.mode === item.expected.mode)) {
@@ -715,7 +749,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     const target = op.kind === "publish" ? op.target : op.kind === "apply" ? op.target.files : null;
     for (const item of operationSteps) {
       const saved = incomingRecord?.files[item.path];
-      const intended = target?.[item.path] ?? (op.kind === "restore" ? item.next : undefined);
+      const intended = target?.[item.path] ?? (op.kind === "restore" || op.kind === "configuration" ? item.next : undefined);
       if (item.next && !(saved && intended && saved.oid === item.next.oid && saved.mode === item.next.mode && intended.oid === saved.oid && intended.mode === saved.mode)) {
         fail(`${at}.operation.incomingRecoveryId`, `no incoming bytes recorded for ${item.path}`);
       }
@@ -736,7 +770,7 @@ export async function parseState(value: unknown): Promise<StoredState> {
     blobs[id] = data;
   }
 
-  const retireReview = version !== "3";
+  const retireReview = version === "1" || version === "2";
   if (retireReview) {
     // Approval semantics changed: older decisions never carry over. Keep every
     // local version and edited replacement they referenced as pinned recovery.
@@ -759,11 +793,41 @@ export async function parseState(value: unknown): Promise<StoredState> {
     }
   }
 
+  const visible = await compileScope({ rules: "visible-only", configDir: ".obsidian", gitignore: null }, null);
+  let scope: StoredState["scope"] = { ...visible.rules, digest: visible.digest };
+  const deferred: StoredState["deferred"] = safeDictionary();
+  const hiddenConsent: StoredState["hiddenConsent"] = safeDictionary();
+  const reentry: string[] = [];
+  if (version === "4") {
+    const rawScope = object(field(raw, "scope"), `${at}.scope`, ["rules", "configDir", "gitignore", "digest"]);
+    const rules = literal(field(rawScope, "rules"), `${at}.scope.rules`, ["visible-only", "config/1"] as const);
+    const configDir = text(field(rawScope, "configDir"), `${at}.scope.configDir`);
+    const gitignore = nullable(field(rawScope, "gitignore"), `${at}.scope.gitignore`, oid);
+    const digest = oid(field(rawScope, "digest"), `${at}.scope.digest`);
+    if (rules === "visible-only") {
+      const compiled = await compileScope({ rules, configDir, gitignore }, null).catch(() => fail(`${at}.scope`, "invalid legacy scope"));
+      if (compiled.digest !== digest) fail(`${at}.scope.digest`, "legacy scope digest mismatch");
+    } else if (!isValidPath(configDir) || !configDir.startsWith(".") || configDir.includes("/")) fail(`${at}.scope.configDir`, "invalid config directory");
+    scope = { rules, configDir, gitignore, digest };
+    for (const [key, item] of dictionary(field(raw, "deferred"), `${at}.deferred`)) {
+      const p = path(key, `${at}.deferred`);
+      const entry = object(item, `${at}.deferred[${key}]`, ["expected", "next", "commit", "blockedReason"]);
+      deferred[p] = { expected: nullable(field(entry, "expected"), `${at}.deferred.expected`, ref), next: nullable(field(entry, "next"), `${at}.deferred.next`, ref),
+        commit: oid(field(entry, "commit"), `${at}.deferred.commit`), blockedReason: nullable(field(entry, "blockedReason"), `${at}.deferred.blockedReason`, text) };
+    }
+    for (const [key, item] of dictionary(field(raw, "hiddenConsent"), `${at}.hiddenConsent`)) hiddenConsent[path(key, `${at}.hiddenConsent`)] = ref(item, `${at}.hiddenConsent[${key}]`);
+    for (const [index, item] of array(field(raw, "reentry"), `${at}.reentry`).entries()) reentry.push(path(item, `${at}.reentry[${index}]`));
+    if (new Set(reentry).size !== reentry.length) fail(`${at}.reentry`, "duplicate path");
+  }
   const state: StoredState = {
     format: STATE_FORMAT,
     repository: identity(field(raw, "repository"), `${at}.repository`),
     ledger: stateLedger,
     base: { ...commitRef(base, `${at}.base`), files: manifest(field(base, "files"), `${at}.base.files`) },
+    scope,
+    deferred,
+    hiddenConsent,
+    reentry,
     carry,
     operation: op,
     pause,
@@ -776,6 +840,20 @@ export async function parseState(value: unknown): Promise<StoredState> {
     blobs,
     counter,
   };
+  for (const key of Object.keys(state.deferred)) {
+    if (Object.hasOwn(state.carry, key) || Object.hasOwn(state.holds, key)) fail(`${at}.deferred`, `deferred path overlaps a carry or native hold: ${key}`);
+    if (state.scope.rules !== "config/1" || !key.startsWith(`${state.scope.configDir}/`)) fail(`${at}.deferred`, `deferred path is outside configuration: ${key}`);
+  }
+  const storedPaths = [
+    ...Object.keys(state.base.files), ...Object.keys(state.carry), ...Object.keys(state.holds),
+    ...Object.keys(state.deferred), ...Object.keys(state.hiddenConsent), ...state.reentry,
+    ...state.recovery.flatMap((item) => Object.keys(item.files)),
+    ...state.nativeErrors.flatMap((item) => item.path === null ? [] : [item.path]),
+    ...(state.operation ? (state.operation.kind === "restore" ? [state.operation.step.path] : state.operation.steps.map((item) => item.path)) : []),
+    ...(state.review?.conflicts.flatMap((item) => item.kind === "collision" || item.kind === "bulk-deletion" ? item.paths : [item.path]) ?? []),
+  ];
+  const builtin = await compileScope({ rules: state.scope.rules, configDir: state.scope.configDir, gitignore: null }, null);
+  if (storedPaths.some((item) => !builtin.includes(item))) fail(at, "state contains a path outside built-in scope");
   for (const id of referencedBlobs(state)) if (!Object.hasOwn(blobs, id)) fail(`${at}.blobs`, `missing referenced blob ${id}`);
   return state;
 }

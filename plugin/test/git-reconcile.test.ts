@@ -81,6 +81,25 @@ test("independent changes on both sides combine; only differences move", async (
   assert.deepEqual(Object.keys(plan.target).sort(), ["a.md", "b.md", "c.md", "img.png", "new.md"]);
 });
 
+test("unknown held local bytes cannot reuse a mine choice as deletion", async () => {
+  const base = await snapshot({ "held.bin": "base", "note.md": "old" });
+  const remote = await snapshot({ "held.bin": "remote", "note.md": "new" });
+  const hold = { id: "native-id", kind: "oversize" as const, base: base["held.bin"]!, expected: base["held.bin"]!, next: null, found: null, oversize: [{ id: "native-id", sourcePath: "hold/source", size: 9_000_000, mtime: 1 }] };
+  const initial = await reconcile({ base, local: base, remote, decisions: {}, holds: { "held.bin": hold } });
+  assert.equal(initial.kind, "ready");
+  if (initial.kind !== "ready") return;
+  assert.equal(initial.held.length, 1);
+  const choice = { [initial.held[0]!.id]: { kind: "mine" as const } };
+  const local = await snapshot({ "note.md": "old" }); // held.bin was omitted because its bytes are unknown
+  const plan = await reconcile({ base, local, remote, decisions: choice, holds: { "held.bin": hold }, untouched: ["held.bin"] });
+  assert.equal(plan.kind, "ready");
+  if (plan.kind !== "ready") return;
+  assert.equal(entryText(plan.target["held.bin"]!), "remote");
+  assert.ok(!Object.hasOwn(plan.outgoing, "held.bin"));
+  assert.ok(!plan.incoming.some((step) => step.path === "held.bin"));
+  assert.equal(entryText(plan.target["note.md"]!), "new", "other paths still progress");
+});
+
 // Changed guarantee (v3): one-sided deletions are automatic like edits; only
 // delete/edit and add/add remain decisions tied to exact versions.
 test("one-sided deletions are automatic; delete/edit and add/add need a decision tied to exact versions", async () => {

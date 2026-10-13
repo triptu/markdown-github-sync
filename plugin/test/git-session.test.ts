@@ -151,7 +151,7 @@ interface Device {
 async function device(repository: MemoryRepository, files: Record<string, string> = {}, name = "A"): Promise<Device> {
   const vault = new MemoryVault(await snapshot(files));
   const store = new MemoryStore();
-  const make = () => new SyncSession({ repository: repository.device(name), vault, store, deviceName: name, now: NOW, delay: async () => {} });
+  const make = () => new SyncSession({ repository: repository.device(name), vault, store, deviceName: name, scopeRules: repository.scopeRules, now: NOW, delay: async () => {} });
   const result: Device = { vault, store, session: make(), restart: () => (result.session = make()) };
   return result;
 }
@@ -1640,11 +1640,11 @@ test("F4: a two-file folder deletion and a pure folder move stay automatic", asy
   assert.deepEqual(Object.keys(repository.headFiles()).sort(), ["keep.md", "media/1.md", "media/2.md", "media/3.md"]);
 });
 
-// ---- Migration /1 and /2 -> /3 ---------------------------------------------
+// ---- Migration /1 and /2 -> /4 ---------------------------------------------
 
 type Raw = Record<string, unknown> & { operation: Record<string, unknown> | null; review: Record<string, unknown> | null };
 
-/** Rewrites a /3 journal into the /1 or /2 shape that older releases wrote. */
+/** Rewrites a /4 journal into the /1 or /2 shape that older releases wrote. */
 function toLegacy(state: string, format: "github-vault-sync/1" | "github-vault-sync/2", observation: "settled" | "pending" | null = "settled"): string {
   const old = JSON.parse(state) as Raw;
   old.format = format;
@@ -1652,6 +1652,10 @@ function toLegacy(state: string, format: "github-vault-sync/1" | "github-vault-s
   delete old.holds;
   delete old.unacknowledged;
   delete old.nativeErrors;
+  delete old.scope;
+  delete old.deferred;
+  delete old.hiddenConsent;
+  delete old.reentry;
   if (format === "github-vault-sync/2" && observation) old.observation = observation;
   if (old.review && format === "github-vault-sync/2") Object.assign(old.review, { scope: "review-1", local: {} });
   const op = old.operation;
@@ -2316,4 +2320,315 @@ test("an unreadable visible file is never deleted, published or overwritten, and
   const conflict = conflictsOf(await a.session.sync())[0]!;
   assert.equal(conflict.path, "big.md");
   assert.equal(entryText(conflict.base!), "base");
+});
+
+// ---- Opt-in configuration scope /4 ---------------------------------------
+
+test("/3 enrollment remains visible-only and requires a reviewed fresh enrollment for configuration", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "n", ".obsidian/appearance.json": "{}" }));
+  const a = await enrolled(repository);
+  const legacy = JSON.parse(a.store.raw!);
+  legacy.format = "github-vault-sync/3";
+  delete legacy.scope;
+  delete legacy.deferred;
+  delete legacy.hiddenConsent;
+  delete legacy.reentry;
+  a.store.raw = JSON.stringify(legacy);
+  assert.equal((await parseState(JSON.parse(a.store.raw!))).scope.rules, "visible-only");
+  repository.scopeRules = "config/1";
+  a.restart();
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  const review = await a.session.previewConfigurationScope();
+  assert.equal(review.kind, "preview");
+  if (review.kind !== "preview") return;
+  assert.equal((await a.session.enableConfigurationScope({ token: review.token })).kind, "reenroll");
+  const enrollment = await a.session.previewEnrollment();
+  assert.equal(enrollment.kind, "preview");
+  if (enrollment.kind !== "preview") return;
+  assert.equal((await a.session.enroll({ token: enrollment.token })).kind, "enrolled");
+  await a.session.sync();
+  const listing = await a.session.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind === "configuration") assert.deepEqual(listing.deferred.map((item) => item.path), [".obsidian/appearance.json"]);
+  assert.equal(a.vault.text(".obsidian/appearance.json"), null);
+});
+
+test("a local root ignore edit blocks a same-batch upload and preserves the tracked remote version", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ ".gitignore": "", "secret.md": "remote", "note.md": "n" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await a.vault.write("secret.md", "local secret");
+  await a.vault.write(".gitignore", "secret.md\n");
+  const before = repository.fullHeadFiles()["secret.md"]!;
+  const outcome = await a.session.sync();
+  assert.ok(outcome.kind === "synced" || outcome.kind === "up-to-date", JSON.stringify(outcome));
+  assert.equal(repository.fullHeadFiles()["secret.md"]?.oid, before.oid);
+  assert.equal(a.vault.text("secret.md"), "local secret");
+});
+
+test("new hidden files require exact-version consent and a changed version expires", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "n" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await a.vault.write(".obsidian/plugins/foo/data.json", "one");
+  assert.equal((await a.session.sync()).kind, "up-to-date");
+  assert.equal(repository.fullHeadFiles()[".obsidian/plugins/foo/data.json"], undefined);
+  const preview = await a.session.previewHiddenPublication(".obsidian/plugins/foo/data.json");
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  await a.vault.write(".obsidian/plugins/foo/data.json", "two");
+  assert.equal((await a.session.consentHiddenPublication({ path: preview.path, token: preview.token })).kind, "stale");
+  const fresh = await a.session.previewHiddenPublication(preview.path);
+  assert.equal(fresh.kind, "preview");
+  if (fresh.kind !== "preview") return;
+  assert.equal((await a.session.consentHiddenPublication({ path: fresh.path, token: fresh.token })).kind, "recorded");
+  const outcome = await a.session.sync();
+  assert.equal(outcome.kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[preview.path]!), "two");
+});
+
+test("incoming live configuration is deferred while notes continue, then reviewed apply survives restart", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base", ".obsidian/appearance.json": "{\"theme\":\"old\"}" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await repository.push(await snapshot({ "note.md": "remote", ".obsidian/appearance.json": "{\"theme\":\"new\"}" }));
+  const synced = await a.session.sync();
+  assert.ok(synced.kind === "synced" || synced.kind === "up-to-date", JSON.stringify(synced));
+  assert.equal(a.vault.text("note.md"), "remote");
+  assert.equal(a.vault.text(".obsidian/appearance.json"), null);
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.deepEqual(preview.items.map((item) => item.path), [".obsidian/appearance.json"]);
+  assert.deepEqual(preview.blocked, []);
+  a.vault.applyFault = { at: a.vault.applyCalls + 1, when: "after" };
+  await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
+  a.vault.applyFault = null;
+  await a.restart().sync();
+  assert.equal(a.vault.text(".obsidian/appearance.json"), "{\"theme\":\"new\"}");
+  const listing = await a.session.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind === "configuration") assert.deepEqual(listing.deferred, []);
+});
+
+test("community plugin enablement is blocked with an actionable reason", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "n" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await repository.push({ ".obsidian/community-plugins.json": await entryFromText('["obsidian-git"]') });
+  await a.session.sync();
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.match(preview.blocked[0]?.reason ?? "", /github-vault-sync/);
+  const outcome = await a.session.applyConfiguration({ token: preview.token });
+  assert.equal(outcome.kind, "blocked");
+  assert.equal(a.vault.text(".obsidian/community-plugins.json"), null);
+});
+
+test("E2-1: an unreadable held path cannot turn a prior mine decision into remote deletion", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "a.bin": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  const base = (await a.vault.capture())["a.bin"]!;
+  await repository.push({ "a.bin": await entryFromText("remote") });
+  a.vault.issues.push({ id: "big-held", path: "a.bin", kind: "oversize", sourcePath: ".git-vault-sync/A/hold/x", size: 9_000_000, mtime: 5, expected: base, next: null });
+  const first = await a.session.sync();
+  assert.equal(first.kind, "needs-decision");
+  if (first.kind !== "needs-decision") return;
+  const conflict = first.conflicts.find((item) => item.kind === "oversize-write");
+  assert.ok(conflict);
+  a.vault.unreadable.add("a.bin");
+  const beforeInspect = a.store.raw;
+  const inspected = await a.session.inspect();
+  assert.ok(inspected.kind === "enrolled" && !inspected.pending?.some((item) => item.path === "a.bin" && item.change === "deleted"));
+  assert.equal(a.store.raw, beforeInspect, "inspection does not change durable state");
+  assert.equal((await a.session.resolve({ conflictId: conflict.id, choice: { kind: "mine" } })).kind, "recorded");
+  const head = repository.branchHead;
+  await a.restart().sync();
+  assert.equal(repository.branchHead, head, "unknown local bytes must not publish a deletion");
+  assert.equal(entryText(repository.fullHeadFiles()["a.bin"]!), "remote");
+  assert.ok((await parseState(await a.store.load())).holds["a.bin"], "the hold survives until bytes are known");
+});
+
+test("E2-4: a resumed remote delete retains an unreadable local origin for later review", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  await repository.push({ "n.md": null });
+  failSaveMatching(a.store, (state) => state.operation?.kind === "apply", "after");
+  await assert.rejects(a.session.sync(), Crash);
+  await a.vault.write("n.md", "edited while unreadable");
+  a.vault.unreadable.add("n.md");
+  const inspected = await a.session.inspect();
+  assert.ok(inspected.kind === "enrolled" && !inspected.pending?.some((item) => item.path === "n.md" && item.change === "deleted"));
+  const resumed = await a.restart().sync();
+  assert.ok(resumed.kind === "synced" || resumed.kind === "up-to-date", JSON.stringify(resumed));
+  assert.equal(a.vault.text("n.md"), "edited while unreadable");
+  assert.equal(repository.fullHeadFiles()["n.md"], undefined);
+  a.vault.unreadable.clear();
+  const decision = await a.session.sync();
+  assert.equal(decision.kind, "needs-decision", JSON.stringify(decision));
+  if (decision.kind === "needs-decision") assert.ok(decision.conflicts.some((item) => item.kind === "local-edited-remote-deleted" && item.path === "n.md"));
+});
+
+test("E2-5: a resumed apply never writes a path quarantined by a new native issue", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  await repository.push({ "n.md": await entryFromText("remote") });
+  failSaveMatching(a.store, (state) => state.operation?.kind === "apply", "after");
+  await assert.rejects(a.session.sync(), Crash);
+  a.vault.issues.push({ id: "bad-recovery", path: "n.md", kind: "interrupted", expected: null, next: null,
+    found: { ...(await entryFromText("unexpected")), data: "wrong" } });
+  await a.restart().sync();
+  assert.equal(a.vault.text("n.md"), "base");
+  assert.equal(entryText(repository.fullHeadFiles()["n.md"]!), "remote");
+  const state = await parseState(await a.store.load());
+  assert.ok(state.nativeErrors.some((item) => item.path === "n.md"));
+});
+
+test("a tracked path leaving scope is never deleted and re-enters as add-add with preserved local bytes", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ ".gitignore": "", "note.md": "base", "secret.md": "base secret" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await a.vault.write("secret.md", "local draft");
+  await repository.push({ ".gitignore": await entryFromText("secret.md\n") });
+  const excluded = await a.session.sync();
+  assert.ok(excluded.kind === "synced" || excluded.kind === "up-to-date", JSON.stringify(excluded));
+  assert.equal(a.vault.text("secret.md"), "local draft");
+  assert.equal(entryText(repository.fullHeadFiles()["secret.md"]!), "base secret");
+  await repository.push({ ".gitignore": await entryFromText(""), "secret.md": await entryFromText("remote edit") });
+  await a.session.sync(); // Adopt the new policy checkpoint without interpreting excluded absence.
+  const entered = await a.session.sync();
+  assert.equal(entered.kind, "needs-decision", JSON.stringify(entered));
+  if (entered.kind === "needs-decision") {
+    const conflict = entered.conflicts.find((item) => item.kind === "add-add" && item.path === "secret.md");
+    assert.ok(conflict, JSON.stringify(entered.conflicts));
+    if (conflict.kind === "add-add") {
+      assert.equal(entryText(conflict.local!), "local draft");
+      assert.equal(entryText(conflict.remote!), "remote edit");
+    }
+  }
+  assert.equal(a.vault.text("secret.md"), "local draft");
+  assert.equal(entryText(repository.fullHeadFiles()["secret.md"]!), "remote edit");
+});
+
+test("every incoming .obsidian file waits for configuration review while a note applies", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await repository.push(await snapshot({ "note.md": "remote", ".obsidian/plugins/foo/main.js": "plugin", ".obsidian/appearance.json": "{}" }));
+  const result = await a.session.sync();
+  assert.ok(result.kind === "synced" || result.kind === "up-to-date", JSON.stringify(result));
+  assert.equal(a.vault.text("note.md"), "remote");
+  assert.equal(a.vault.text(".obsidian/plugins/foo/main.js"), null);
+  assert.equal(a.vault.text(".obsidian/appearance.json"), null);
+  const listing = await a.session.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind === "configuration") assert.deepEqual(listing.deferred.map((item) => item.path).sort(), [".obsidian/appearance.json", ".obsidian/plugins/foo/main.js"]);
+});
+
+test("a newer local edit after durable configuration approval is preserved and reviewed", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "base" }));
+  repository.scopeRules = "config/1";
+  const a = await enrolled(repository);
+  await repository.push({ ".obsidian/appearance.json": await entryFromText("remote") });
+  await a.session.sync();
+  const preview = await a.session.previewApplyConfiguration();
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.applyFault = { at: a.vault.applyCalls + 1, when: "before" };
+  await assert.rejects(a.session.applyConfiguration({ token: preview.token }), Crash);
+  a.vault.applyFault = null;
+  await a.vault.write(".obsidian/appearance.json", "new local edit");
+  const resumed = await a.restart().sync();
+  assert.equal(a.vault.text(".obsidian/appearance.json"), "new local edit");
+  assert.equal(entryText(repository.fullHeadFiles()[".obsidian/appearance.json"]!), "remote");
+  assert.ok(resumed.kind === "needs-decision" || (await a.session.sync()).kind === "needs-decision", JSON.stringify(resumed));
+});
+
+test("historical configuration restore uses the same reviewed durable authorization", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "note.md": "n", ".obsidian/appearance.json": "old" }));
+  repository.scopeRules = "config/1";
+  const historical = repository.branchHead;
+  const a = await enrolled(repository);
+  const initial = await a.session.previewApplyConfiguration();
+  assert.equal(initial.kind, "preview");
+  if (initial.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: initial.token })).kind, "applied");
+  await repository.push({ ".obsidian/appearance.json": await entryFromText("new") });
+  await a.session.sync();
+  const incoming = await a.session.previewApplyConfiguration();
+  assert.equal(incoming.kind, "preview");
+  if (incoming.kind !== "preview") return;
+  assert.equal((await a.session.applyConfiguration({ token: incoming.token })).kind, "applied");
+  const preview = await a.session.previewRestore({ path: ".obsidian/appearance.json", commit: historical });
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  assert.equal((await a.session.restore({ token: preview.token, path: preview.path, commit: preview.commit })).kind, "restored");
+  assert.equal(a.vault.text(".obsidian/appearance.json"), "old");
+  assert.equal(entryText(repository.fullHeadFiles()[".obsidian/appearance.json"]!), "new");
+  assert.equal((await a.restart().sync()).kind, "synced");
+  assert.equal(entryText(repository.fullHeadFiles()[".obsidian/appearance.json"]!), "old");
+});
+
+test("E2-3: a superseded oversize ID retires only after a verified replacement and asks for fresh consent", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  const expected = (await a.vault.capture())["n.md"]!;
+  await repository.push({ "n.md": await entryFromText("remote") });
+  const sourcePath = ".git-vault-sync/A/hold/source";
+  a.vault.issues = [{ id: "old-large", path: "n.md", kind: "oversize", sourcePath, size: 9_000_000, mtime: 1, expected, next: null }];
+  const first = await a.session.sync();
+  assert.equal(first.kind, "needs-decision");
+  if (first.kind !== "needs-decision") return;
+  const old = first.conflicts.find((item) => item.kind === "oversize-write");
+  assert.ok(old);
+  assert.equal((await a.session.resolve({ conflictId: old.id, choice: { kind: "mine" } })).kind, "recorded");
+  a.vault.issues = [{ id: "new-missing", path: "n.md", sourcePath, kind: "displaced", expected, next: null, found: null }];
+  const fresh = await a.restart().sync();
+  assert.equal(fresh.kind, "needs-decision", JSON.stringify(fresh));
+  if (fresh.kind !== "needs-decision") return;
+  const next = fresh.conflicts.find((item) => item.kind === "displaced-write");
+  assert.ok(next);
+  assert.notEqual(next.id, old.id);
+  const saved = await parseState(await a.store.load());
+  assert.deepEqual(saved.holds["n.md"]?.ids, ["new-missing"]);
+  assert.deepEqual(saved.holds["n.md"]?.oversize, []);
+  assert.equal(saved.holds["n.md"]?.base?.oid, expected.oid);
+  assert.equal(saved.decisions[old.id], undefined);
+  assert.equal(entryText(repository.fullHeadFiles()["n.md"]!), "remote");
+});
+
+test("E2-3: malformed replacement cannot retire stale oversize evidence", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  const expected = (await a.vault.capture())["n.md"]!;
+  const sourcePath = ".git-vault-sync/A/hold/source";
+  a.vault.issues = [{ id: "old-large", path: "n.md", kind: "oversize", sourcePath, size: 9_000_000, mtime: 1, expected, next: null }];
+  await a.session.sync();
+  a.vault.issues = [{ id: "bad-new", path: "n.md", sourcePath, kind: "displaced", expected, next: null,
+    found: { ...(await entryFromText("bad")), data: "wrong" } }];
+  await a.restart().sync();
+  const saved = await parseState(await a.store.load());
+  assert.deepEqual(saved.holds["n.md"]?.ids, ["old-large"]);
+  assert.ok(saved.nativeErrors.some((item) => item.path === "n.md"));
+});
+
+test("E2-3: failed acknowledgement after oversize decision blocks publication and remains visible", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "other" }));
+  const a = await enrolled(repository);
+  const expected = (await a.vault.capture())["n.md"]!;
+  await repository.push({ "n.md": await entryFromText("remote") });
+  a.vault.issues = [{ id: "large", path: "n.md", kind: "oversize", sourcePath: ".git-vault-sync/A/hold/source", size: 9_000_000, mtime: 1, expected, next: null }];
+  const first = await a.session.sync();
+  assert.equal(first.kind, "needs-decision");
+  if (first.kind !== "needs-decision") return;
+  const conflict = first.conflicts.find((item) => item.kind === "oversize-write");
+  assert.ok(conflict);
+  await a.session.resolve({ conflictId: conflict.id, choice: { kind: "mine" } });
+  a.vault.acknowledgeFault = true;
+  const head = repository.branchHead;
+  const blocked = await a.session.sync();
+  assert.equal(blocked.kind, "blocked", JSON.stringify(blocked));
+  assert.equal(repository.branchHead, head);
+  assert.ok((await parseState(await a.store.load())).holds["n.md"]);
 });
