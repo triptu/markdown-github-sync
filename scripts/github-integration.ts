@@ -1,10 +1,12 @@
 /** Authorized integration target is hard-coded; never accepts a real-vault repository argument. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { GitHubRepository, encodeGitData, gitBlobOid } from "../plugin/src/git-sync/github";
 import type { GitHubRequest, GitHubResponse, GitHubTransport } from "../plugin/src/git-sync/github";
-import type { Entry } from "../plugin/src/git-sync/contracts";
+import { SyncSession } from "../plugin/src/git-sync/session";
+import { MemoryVault, MemoryStore } from "../plugin/test/git-fakes";
+import type { Entry, Changes, CommitSnapshot, PreparedPublication } from "../plugin/src/git-sync/contracts";
 
 const owner = "triptu", name = "vault-sync-test";
 const base = `https://api.github.com/repos/${owner}/${name}`;
@@ -20,7 +22,8 @@ const transport: GitHubTransport = {
     const result = await fetch(request.url, { method: request.method, headers: request.headers, body: request.body });
     const headers: Record<string, string> = {};
     result.headers.forEach((value, key) => { headers[key] = value; });
-    return { status: result.status, headers, json: await result.json() };
+    const json: unknown = await result.json();
+    return { status: result.status, headers, json };
   }
 };
 function object(value: unknown): Record<string, unknown> {
@@ -43,6 +46,7 @@ async function run(): Promise<void> {
   const branch = `github-client-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
   const metadata = await harness("", "GET");
   assert.equal(metadata.full_name, `${owner}/${name}`);
+  assert.equal(metadata.private, true, "Lab repository must remain private");
   const defaultBranch = metadata.default_branch; assert.equal(typeof defaultBranch, "string");
   const defaultRef = await harness(`/git/ref/heads/${encodeURIComponent(String(defaultBranch))}`, "GET");
   const defaultHead = sha(object(defaultRef.object).sha);
@@ -58,8 +62,24 @@ async function run(): Promise<void> {
   ] })).sha);
   const seed = sha((await harness("/git/commits", "POST", { message: "Synthetic GitHub client fixture", tree: seedTree, parents: [defaultHead] })).sha);
   await harness("/git/refs", "POST", { ref: `refs/heads/${branch}`, sha: seed });
-  const options = { owner, name, branch, transport, token };
-  const a = new GitHubRepository(options), b = new GitHubRepository(options);
+  const options = { owner, name, branch, transport, token, installation: randomUUID() };
+  const a = new GitHubRepository(options), b = new GitHubRepository({ ...options, installation: randomUUID() });
+  const prepare = async (client: GitHubRepository, parent: CommitSnapshot, changes: Changes, message: string) => {
+    const ledger = await client.readLedger();
+    return client.prepare(parent, changes, message, { anchor: ledger.kind === "present" ? ledger.value : null, operation: randomUUID() });
+  };
+  const publish = async (client: GitHubRepository, parent: string, prepared: PreparedPublication) => {
+    const ledger = await client.readLedger();
+    const anchor = ledger.kind === "present" ? ledger.value : null;
+    let response: "acknowledged" | "unconfirmed";
+    try { response = await client.publish({ parent, candidate: prepared.oid, receipt: prepared.receipt, anchor }); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== "Synthetic response loss after server completion") throw error;
+      response = "unconfirmed";
+    }
+    const after = await client.readLedger();
+    return { response, accepted: after.kind === "present" && after.value === prepared.receipt };
+  };
   const parent = await a.head(); assert.equal(parent.oid, seed); assert.deepEqual(Object.keys(parent.files), ["fixture.md"]);
   const binary = randomBytes(4_320_889);
   const changes = {
@@ -68,34 +88,96 @@ async function run(): Promise<void> {
     "media/small.bin": await entry(Uint8Array.from([0, 255, 128, 10, 13])),
     "tools/run.sh": await entry(Buffer.from("#!/bin/sh\nprintf test\n"), "100755")
   };
-  const roundtrip = await a.prepare(parent, changes, "Synthetic note and binary roundtrip");
+  const roundtrip = await prepare(a, parent, changes, "Synthetic note and binary roundtrip");
   assert.equal((await b.head()).oid, seed, "prepare advanced branch");
-  assert.deepEqual(await a.publish(seed, roundtrip.oid), { kind: "accepted" });
-  const downloaded = await b.head(); assert.deepEqual(downloaded, roundtrip);
+  assert.equal((await publish(a, seed, roundtrip)).accepted, true);
+  const downloaded = await b.head(); assert.equal(downloaded.oid, roundtrip.oid); assert.deepEqual(downloaded.files, roundtrip.files);
   assert.equal(downloaded.files["tools/run.sh"].mode, "100755");
   const remoteTree = await harness(`/git/trees/${roundtrip.treeOid}?recursive=1`, "GET");
   const hiddenEntries = Array.isArray(remoteTree.tree) ? remoteTree.tree.map(object).filter(i => typeof i.path === "string" && i.path.startsWith(".fixture/")) : [];
   assert.equal(hiddenEntries.length, 3); assert.equal(hiddenEntries.find(i => i.path === ".fixture/keep.bin")?.sha, hidden.oid);
   assert.equal(hiddenEntries.find(i => i.path === ".fixture/link")?.mode, "120000"); assert.equal(hiddenEntries.find(i => i.path === ".fixture/module")?.mode, "160000");
-  const left = await a.prepare(downloaded, { "left.md": await entry(Buffer.from("left")) }, "Independent client left");
-  const right = await b.prepare(downloaded, { "right.md": await entry(Buffer.from("right")) }, "Independent client right");
-  const race = await Promise.all([a.publish(downloaded.oid, left.oid), b.publish(downloaded.oid, right.oid)]);
-  assert.deepEqual(race.map(r => r.kind).sort(), ["accepted", "head-moved"]);
+  const left = await prepare(a, downloaded, { "left.md": await entry(Buffer.from("left")) }, "Independent client left");
+  const right = await prepare(b, downloaded, { "right.md": await entry(Buffer.from("right")) }, "Independent client right");
+  const race = await Promise.all([publish(a, downloaded.oid, left), publish(b, downloaded.oid, right)]);
+  assert.deepEqual(race.map(r => r.accepted).sort(), [false, true]);
   const winner = await a.head(); const loser = winner.oid === left.oid ? right : left;
-  assert.deepEqual(await b.publish(downloaded.oid, loser.oid), { kind: "head-moved" });
-  const rewindCandidate = await a.prepare(winner, { "rewind.md": await entry(Buffer.from("must not publish")) }, "Exact beforeOid forced rewind test");
+  assert.equal((await publish(winner.oid === left.oid ? b : a, downloaded.oid, loser)).accepted, false);
+  const rewindCandidate = await prepare(a, winner, { "rewind.md": await entry(Buffer.from("must not publish")) }, "Exact beforeOid forced rewind test");
   await harness(`/git/refs/heads/${branch}`, "PATCH", { sha: downloaded.oid, force: true });
-  assert.deepEqual(await a.publish(winner.oid, rewindCandidate.oid), { kind: "head-moved" });
+  assert.equal((await publish(a, winner.oid, rewindCandidate)).accepted, false);
   assert.equal((await b.head()).oid, downloaded.oid, "stale candidate resurrected history after rewind");
-  const recovery = await a.prepare(downloaded, { "lost-response.md": await entry(Buffer.from("lost response accepted")), "media/small.bin": null }, "Lost response recovery and delete");
+  const recovery = await prepare(a, downloaded, { "lost-response.md": await entry(Buffer.from("lost response accepted")), "media/small.bin": null }, "Lost response recovery and delete");
   let dropped = false;
-  const lossy: GitHubTransport = { async request(request) { const result = await transport.request(request); if (request.url.endsWith("/graphql") && !dropped) { dropped = true; throw new Error("Synthetic response loss after server completion"); } return result; } };
+  const lossy: GitHubTransport = { async request(request) { const result = await transport.request(request); if (request.url.endsWith("/graphql") && request.body?.includes("updateRefs") && !dropped) { dropped = true; throw new Error("Synthetic response loss after server completion"); } return result; } };
   const lost = new GitHubRepository({ ...options, transport: lossy });
-  assert.deepEqual(await lost.publish(downloaded.oid, recovery.oid), { kind: "accepted" });
+  const lostResult = await publish(lost, downloaded.oid, recovery);
+  assert.equal(dropped, true); assert.equal(lostResult.response, "unconfirmed"); assert.equal(lostResult.accepted, true);
   assert.equal((await b.head()).oid, recovery.oid);
   assert.equal(await a.isAncestor(downloaded.oid, recovery.oid), true);
   assert.equal(await a.isAncestor(recovery.oid, downloaded.oid), false);
   assert.equal(sha(object((await harness(`/git/ref/heads/${encodeURIComponent(String(defaultBranch))}`, "GET")).object).sha), defaultHead, "default branch changed during lab test");
-  console.log(JSON.stringify({ repository: `${owner}/${name}`, branch, seed, roundtrip: roundtrip.oid, binaryBytes: binary.length, race: race.map(r => r.kind), raceCandidates: [left.oid, right.oid], winner: winner.oid, forcedRewindCandidate: rewindCandidate.oid, forcedRewind: "blocked; head unchanged", lostResponse: recovery.oid, hiddenEntriesPreserved: hiddenEntries.length, requests, defaultBranchUnchanged: defaultHead }, null, 2));
+  // Real SyncSession + production GitHub adapter. Only the local filesystem is simulated.
+  let armedRace = false, waiting = 0;
+  let releaseRace: () => void = () => {};
+  const raceGate = new Promise<void>(resolve => { releaseRace = resolve; });
+  let loseNext = false, offline = false, responseLost = false;
+  const engineTransport: GitHubTransport = { async request(request) {
+    if (offline) throw new Error("Synthetic network unavailable until restart");
+    const publication = request.url.endsWith("/graphql") && request.body?.includes("updateRefs") && request.body.includes("refs/heads/");
+    if (publication && armedRace) {
+      waiting++;
+      if (waiting === 2) { armedRace = false; releaseRace(); }
+      await raceGate;
+    }
+    const result = await transport.request(request);
+    if (publication && loseNext) { loseNext = false; offline = true; responseLost = true; throw new Error("Synthetic accepted response loss"); }
+    return result;
+  } };
+  const starting = await a.head();
+  const makeDevice = () => {
+    const repository = new GitHubRepository({ ...options, installation: randomUUID(), transport: engineTransport });
+    const vault = new MemoryVault(starting.files), store = new MemoryStore();
+    const restart = () => new SyncSession({ repository, vault, store, delay: async () => {} });
+    return { repository, vault, store, restart, session: restart() };
+  };
+  const devices = [makeDevice(), makeDevice()];
+  for (const device of devices) {
+    const preview = await device.session.previewEnrollment();
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") throw new Error("Expected enrollment preview");
+    assert.equal((await device.session.enroll({ token: preview.token })).kind, "enrolled");
+  }
+  await devices[0].vault.write("engine-left.md", "left device draft");
+  await devices[1].vault.write("engine-right.md", "right device draft");
+  armedRace = true;
+  const timeout = setTimeout(() => releaseRace(), 60_000);
+  let engineRace;
+  try { engineRace = await Promise.all(devices.map(device => device.session.sync())); }
+  finally { clearTimeout(timeout); }
+  assert.equal(waiting, 2, "Both devices must reach publication from the shared checkpoint");
+  const acceptable = new Set(["synced", "up-to-date"]);
+  for (const outcome of engineRace) assert.ok(acceptable.has(outcome.kind), JSON.stringify(outcome));
+  for (const device of devices) {
+    assert.ok(acceptable.has((await device.session.sync()).kind));
+    assert.equal(device.vault.text("engine-left.md"), "left device draft");
+    assert.equal(device.vault.text("engine-right.md"), "right device draft");
+  }
+  const engineConverged = await a.head();
+  assert.equal(engineConverged.files["engine-left.md"].oid, devices[0].vault.files.get("engine-left.md")?.oid);
+  assert.equal(engineConverged.files["engine-right.md"].oid, devices[1].vault.files.get("engine-right.md")?.oid);
+  await devices[0].vault.write("engine-lost-response.md", "durable draft after restart");
+  loseNext = true;
+  const unsettled = await devices[0].session.sync();
+  assert.equal(responseLost, true); assert.equal(unsettled.kind, "settling");
+  offline = false;
+  const acceptedHead = await a.head();
+  devices[0].session = devices[0].restart();
+  const resumed = await devices[0].session.sync();
+  assert.ok(acceptable.has(resumed.kind), JSON.stringify(resumed));
+  assert.equal((await a.head()).oid, acceptedHead.oid, "Restart duplicated the accepted commit");
+  await devices[1].session.sync();
+  assert.equal(devices[1].vault.text("engine-lost-response.md"), "durable draft after restart");
+  console.log(JSON.stringify({ repository: `${owner}/${name}`, branch, seed, roundtrip: roundtrip.oid, binaryBytes: binary.length, race: race.map(r => r.accepted ? "accepted" : "not-accepted"), raceCandidates: [left.oid, right.oid], winner: winner.oid, forcedRewindCandidate: rewindCandidate.oid, forcedRewind: "blocked; head unchanged", lostResponse: recovery.oid, hiddenEntriesPreserved: hiddenEntries.length, engineRace: engineRace.map(outcome => outcome.kind), engineConverged: engineConverged.oid, engineLostResponseRestart: resumed.kind, acceptedHead: acceptedHead.oid, scope: "Production GitHub adapter and SyncSession; in-memory vault and durable-store serialization, not native filesystem or process-kill acceptance", requests, defaultBranchUnchanged: defaultHead }, null, 2));
 }
-void run().catch((error: unknown) => { console.error(error instanceof Error && !error.message.includes(credential) ? error.message : "Integration failed; sensitive error suppressed"); process.exitCode = 1; }).finally(() => { credential = ""; });
+void run().catch((error: unknown) => { console.error(error instanceof Error && !String(error.stack).includes(credential) ? error.stack : "Integration failed; sensitive error suppressed"); process.exitCode = 1; }).finally(() => { credential = ""; });
