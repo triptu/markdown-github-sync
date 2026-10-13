@@ -43,11 +43,46 @@ test("failed parallel object writes drain before a queued save starts", async ()
     } finally { active--; }
   };
   const state = { blobs: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`oid-${i}`, btoa(`new-${i}`)])) };
-  const rejected = assert.rejects(store.save(state));
+  const rejected = store.save(state).then(
+    () => assert.fail("Expected the object write to fail"),
+    error => assert.equal(error, undefined),
+  );
   const next = store.save({ phase: "next" });
   await rejected; assert.equal(active, 0);
   await next; assert.ok(peak > 1 && peak <= 4);
   assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), { phase: "next" });
+});
+
+test("parallel failures prefer an Error and drain started writes before the queued save", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  await store.save({ phase: "baseline" });
+  const rename = files.rename.bind(files);
+  let active = 0, started = 0, release = () => {};
+  const allStarted = new Promise<void>(resolve => { release = resolve; });
+  files.rename = async (from, to) => {
+    if (!to.includes("/objects/")) { assert.equal(active, 0); return rename(from, to); }
+    const index = started++;
+    active++;
+    if (started === 4) release();
+    try {
+      await allStarted;
+      if (index === 0) throw undefined;
+      if (index === 1) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+        throw new Error("ENOSPC");
+      }
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return await rename(from, to);
+    } finally { active--; }
+  };
+  const state = { blobs: Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`oid-${i}`, btoa(`body-${i}`)])) };
+  const failed = assert.rejects(store.save(state), /ENOSPC/);
+  const queued = store.save({ phase: "after failure" });
+  await failed;
+  assert.equal(started, 4);
+  assert.equal(active, 0);
+  await queued;
+  assert.deepEqual(plain(await store.load()), { phase: "after failure" });
 });
 
 test("duplicate blob bodies cannot race commits to the same immutable object", async () => {
@@ -64,6 +99,92 @@ test("duplicate blob bodies cannot race commits to the same immutable object", a
   const state = { blobs: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`oid-${i}`, btoa("same bytes")])) };
   await store.save(state); assert.equal(objectCommits, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), state);
+});
+
+function nativeRecord(references: number, unique: number, revision: number) {
+  type Entry = { oid: string; mode: string; data: string };
+  const tracked: Record<string, { expected: Entry | null; next: Entry | null }> = Object.create(null);
+  for (let i = 0; i < 12; i++) tracked[`hold-${i}`] = { expected: null, next: null };
+  for (let i = 0; i < references; i++) {
+    const body = i % unique + (revision === 3 ? 2 : 0);
+    const entry = { oid: `oid-${body}`, mode: "100644", data: btoa(`native-body-${body}`) };
+    const item = tracked[`hold-${Math.floor(i / 2)}`];
+    if (i % 2 === 0) item.expected = entry;
+    else item.next = entry;
+  }
+  return {
+    format: 3, policy: { rules: "config/1", configDir: ".obsidian" }, intents: {}, tracked,
+    recoveries: [], acknowledgedOversize: [],
+    supersededRecoveryIds: Array.from({ length: revision + 1 }, (_, i) =>
+      `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`),
+  };
+}
+
+test("native Entry.data verifies 64 unique objects across 160 retained references", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity, "native");
+  const shapes = [[19, 7], [19, 7], [20, 8], [20, 8], [19, 7], [21, 9], [21, 9], [21, 9]];
+  assert.equal(shapes.reduce((total, [references]) => total + references, 0), 160);
+  assert.equal(shapes.reduce((total, [, unique]) => total + unique, 0), 64);
+  for (const [revision, [references, unique]] of shapes.entries())
+    await store.save(nativeRecord(references, unique, revision));
+  const read = files.read.bind(files), exists = files.exists.bind(files);
+  let objectReads = 0, objectExists = 0, active = 0, peak = 0;
+  files.read = async path => {
+    if (!path.includes("/objects/")) return read(path);
+    objectReads++; active++; peak = Math.max(peak, active);
+    try { return await read(path); } finally { active--; }
+  };
+  files.exists = async path => {
+    if (path.includes("/objects/")) objectExists++;
+    return exists(path);
+  };
+  await store.compact();
+  assert.equal(objectReads, 64);
+  assert.equal(peak, 1);
+  objectReads = 0;
+  const latest = nativeRecord(21, 9, 7);
+  assert.deepEqual(plain(await store.load()), plain(latest));
+  assert.equal(objectReads, 9);
+  objectReads = 0;
+  assert.deepEqual(plain(await store.load()), plain(latest));
+  assert.equal(objectReads, 9);
+  objectReads = 0; objectExists = 0;
+  await store.save({ ...latest, supersededRecoveryIds: [...latest.supersededRecoveryIds, crypto.randomUUID()] });
+  assert.equal(objectExists, 9);
+  assert.equal(objectReads, 9);
+  assert.equal(peak, 1);
+  assert.equal(active, 0);
+  const object = [...files.values.keys()].find(path => path.includes("/native/objects/"));
+  assert.ok(object);
+  files.values.set(object, "corrupt");
+  await assert.rejects(store.load(), /checksum/);
+  const recordCount = [...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length;
+  await assert.rejects(store.save(latest), /corrupt/);
+  assert.equal([...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length, recordCount);
+});
+
+test("native compaction rechecks a shared object in every retained record before deleting", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity, "native");
+  const shared = { oid: "same", mode: "100644", data: btoa("retained native evidence") };
+  for (let sequence = 0; sequence < 9; sequence++)
+    await store.save({ sequence, tracked: { hold: { expected: shared, next: shared } } });
+  const object = [...files.values.keys()].find(path => path.includes("/native/objects/"));
+  assert.ok(object);
+  const before = files.values.size, read = files.read.bind(files), remove = files.remove.bind(files);
+  let recordReads = 0, objectReads = 0, removals = 0;
+  files.read = async path => {
+    if (path.includes("/native/records/") && path.endsWith(".json")) {
+      if (++recordReads === 2) files.values.set(object, "corrupt");
+    }
+    if (path.includes("/native/objects/")) objectReads++;
+    return read(path);
+  };
+  files.remove = async path => { removals++; return remove(path); };
+  await assert.rejects(store.compact(), /checksum/);
+  assert.equal(recordReads, 2);
+  assert.equal(objectReads, 2);
+  assert.equal(removals, 0);
+  assert.equal(files.values.size, before);
 });
 class Files implements JournalFiles {
   values = new Map<string, string>();
@@ -230,6 +351,25 @@ test("corrupt recovery bytes block load and cannot be overwritten by a fresh sav
     /checksum/,
   );
   await assert.rejects(store.save(original), /corrupt/);
+});
+test("an acknowledged empty record-temp write fails closed before rename", async () => {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  await store.save(original);
+  const write = files.write.bind(files);
+  let injected = false;
+  files.write = async (path, text) => {
+    if (!injected && path.includes("/records/") && path.endsWith(".tmp")) {
+      injected = true;
+      return write(path, "");
+    }
+    return write(path, text);
+  };
+  await assert.rejects(store.save(updated), /Recovery write verification failed/);
+  assert.equal(injected, true);
+  assert.deepEqual(plain(await new FileJournalStore(files, identity).load()), original);
+  assert.equal([...files.values.keys()].filter(path => path.includes("/records/") && path.endsWith(".json")).length, 1);
+  assert.equal([...files.values.entries()].filter(([path, value]) =>
+    path.includes("/records/") && path.endsWith(".tmp") && value === "").length, 1);
 });
 test("another installation cannot inherit the checkpoint", async () => {
   const files = new Files();

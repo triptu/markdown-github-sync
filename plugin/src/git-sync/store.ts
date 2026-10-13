@@ -36,7 +36,7 @@ async function mapObjects<T, R>(items: T[], operation: (item: T) => Promise<R>):
     }
   }));
   // Every started object write has settled before the journal queue can advance.
-  if (failures.length) throw failures[0];
+  if (failures.length) throw failures.find(error => error instanceof Error) ?? failures[0];
   return results;
 }
 
@@ -79,10 +79,22 @@ export class FileJournalStore implements DurableStore {
     if ((await this.files.read(path)) !== text)
       throw new Error("Recovery commit verification failed. Sync stopped.");
   }
-  private async pack(value: unknown): Promise<unknown> {
+  private async packObject(data: string, pending: Map<string, Promise<string>>): Promise<string> {
+    let object = pending.get(data);
+    if (!object) {
+      object = (async () => {
+        const hash = await digest(data);
+        await this.put(`${this.directory}/objects/${hash}.json`, data);
+        return hash;
+      })();
+      pending.set(data, object);
+    }
+    return object;
+  }
+  private async pack(value: unknown, pending = new Map<string, Promise<string>>()): Promise<unknown> {
     if (Array.isArray(value)) {
       const result: unknown[] = [];
-      for (const item of value) result.push(await this.pack(item));
+      for (const item of value) result.push(await this.pack(item, pending));
       return result;
     }
     if (!isObject(value)) return value;
@@ -93,36 +105,24 @@ export class FileJournalStore implements DurableStore {
         typeof item === "string" &&
         typeof value.oid === "string"
       ) {
-        const hash = await digest(item);
-        await this.put(`${this.directory}/objects/${hash}.json`, item);
-        out[key] = { journalBlob: hash };
+        out[key] = { journalBlob: await this.packObject(item, pending) };
       } else if (key === "blobs" && isObject(item)) {
         const references: Record<string, unknown> = Object.create(null);
-        const pending = new Map<string, Promise<string>>();
         const packed = await mapObjects(Object.entries(item), async ([oid, data]) => {
           if (typeof data !== "string")
             throw new Error("Invalid journal blob table");
-          let object = pending.get(data);
-          if (!object) {
-            object = (async () => {
-              const hash = await digest(data);
-              await this.put(`${this.directory}/objects/${hash}.json`, data);
-              return hash;
-            })();
-            pending.set(data, object);
-          }
-          return { oid, hash: await object };
+          return { oid, hash: await this.packObject(data, pending) };
         });
         for (const { oid, hash } of packed) references[oid] = { journalBlob: hash };
         out[key] = references;
-      } else out[key] = await this.pack(item);
+      } else out[key] = await this.pack(item, pending);
     }
     return out;
   }
-  private async unpack(value: unknown): Promise<unknown> {
+  private async unpack(value: unknown, pending = new Map<string, Promise<string>>()): Promise<unknown> {
     if (Array.isArray(value)) {
       const result: unknown[] = [];
-      for (const item of value) result.push(await this.unpack(item));
+      for (const item of value) result.push(await this.unpack(item, pending));
       return result;
     }
     if (!isObject(value)) return value;
@@ -132,22 +132,27 @@ export class FileJournalStore implements DurableStore {
     ) {
       if (!/^[a-f0-9]{64}$/.test(value.journalBlob))
         throw new Error("Invalid recovery object reference");
-      const bytes = await this.files.read(
-        `${this.directory}/objects/${value.journalBlob}.json`,
-      );
-      if ((await digest(bytes)) !== value.journalBlob)
-        throw new Error("Recovery object checksum failed");
-      return bytes;
+      let object = pending.get(value.journalBlob);
+      if (!object) {
+        object = (async () => {
+          const bytes = await this.files.read(`${this.directory}/objects/${value.journalBlob}.json`);
+          if ((await digest(bytes)) !== value.journalBlob)
+            throw new Error("Recovery object checksum failed");
+          return bytes;
+        })();
+        pending.set(value.journalBlob, object);
+      }
+      return object;
     }
     const result: Record<string, unknown> = Object.create(null);
     for (const [key, item] of Object.entries(value)) {
       if (key === "blobs" && isObject(item)) {
         const unpacked = await mapObjects(Object.entries(item), async ([oid, reference]) =>
-          ({ oid, bytes: await this.unpack(reference) }));
+          ({ oid, bytes: await this.unpack(reference, pending) }));
         const blobs: Record<string, unknown> = Object.create(null);
         for (const { oid, bytes } of unpacked) blobs[oid] = bytes;
         result[key] = blobs;
-      } else result[key] = await this.unpack(item);
+      } else result[key] = await this.unpack(item, pending);
     }
     return result;
   }
