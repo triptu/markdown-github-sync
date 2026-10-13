@@ -1,0 +1,40 @@
+{
+  "completed": true,
+  "checks": [
+    {
+      "name": "installed V2 bundle hash",
+      "pass": true
+    },
+    {
+      "name": "automatic lab configuration guarded",
+      "pass": true
+    },
+    {
+      "name": "automatic session enrolled",
+      "pass": true
+    },
+    {
+      "name": "automatic repository is private lab target",
+      "pass": true
+    },
+    {
+      "name": "automatic checkpoint survives app restart",
+      "pass": true
+    },
+    {
+      "name": "both automatic files survive app restart",
+      "pass": true
+    },
+    {
+      "name": "both automatic bytes persist on GitHub",
+      "pass": true
+    }
+  ],
+  "paths": {
+    "local": "Native Automatic Acceptance 9fed42a7-1527-4336-87d5-bb7e0f84f198/Android.md",
+    "remote": "Native Automatic Acceptance 9fed42a7-1527-4336-87d5-bb7e0f84f198/GitHub.md"
+  },
+  "commit": "28440661cb157b7a0b6c845375eb8d433323be22",
+  "afterRestart": "28440661cb157b7a0b6c845375eb8d433323be22",
+  "productionSha256": "0ef19cb3cc466f2480054f13744e7c49a1677b215dc7afee657aa83ece1812ed"
+}

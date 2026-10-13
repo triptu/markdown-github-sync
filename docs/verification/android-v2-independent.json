@@ -1,0 +1,28 @@
+{
+  "head": "666b3ce06c6b3bd9a5f6f2992c291700705c12e5",
+  "productionSha256": "0ef19cb3cc466f2480054f13744e7c49a1677b215dc7afee657aa83ece1812ed",
+  "checks": [
+    {
+      "path": "Native Automatic Acceptance 9fed42a7-1527-4336-87d5-bb7e0f84f198/Android.md",
+      "sha256": "f9e37d038bf893a0b491b964cb2108dc0df074f7a7246e07c2aaba726e52d198",
+      "localAndRemoteExact": true
+    },
+    {
+      "path": "Native Automatic Acceptance 9fed42a7-1527-4336-87d5-bb7e0f84f198/GitHub.md",
+      "sha256": "65d1252990d1a369bb6f1e26f56ed6f90bccf6f068c3ac9850a67410faeaff7a",
+      "localAndRemoteExact": true
+    },
+    {
+      "path": "Native Conflict Acceptance 12eb189f-2a8c-4ce0-ac99-a917c722ff04/Overlap.md",
+      "sha256": "35d40df625673cbc596e88a1da081337f624675fd3dd7d5c5d7ad8e5ba3dd19d",
+      "localAndRemoteExact": true
+    },
+    {
+      "path": "Native Conflict Acceptance 12eb189f-2a8c-4ce0-ac99-a917c722ff04/Existing.bin",
+      "sha256": "741e03d79f9e2fe8b86d6bb774c705957bd0c82eb12ce58801a8c85fdced1f21",
+      "localAndRemoteExact": true
+    }
+  ],
+  "deletedPathAbsentOnGitHub": true,
+  "automaticRestored": true
+}
