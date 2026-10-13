@@ -550,4 +550,22 @@ test("a fresh configured vault enrolls directly with hidden local files and comm
   if (listing.kind !== "configuration") throw Error("missing listing");
   assert.equal(listing.rules, "config/1");
   assert.ok(listing.unpublished.some(file => file.path === ".obsidian/app.json"));
+  await assert.rejects(plugin.previewConfigurationUpgrade(), /already enabled/);
+});
+
+test("startup failure cannot bypass the durable initial scope binding", async () => {
+  loaded.useRepository(await MemoryRepository.create({ "a.md": await entryFromText("base\n") }));
+  const host = harness();
+  const first = host.create();
+  await first.initialize();
+  first.onunload();
+  const secrets = host.app.secretStorage;
+  Reflect.deleteProperty(host.app, "secretStorage");
+  const next = host.create(true);
+  await assert.rejects(next.initialize(), /secret storage/);
+  await assert.rejects(next.saveConfiguration({ ...settings, configuration: true }), /Initial scope is already bound/);
+  assert.equal(Boolean(next.settings.configuration), false);
+  host.app.secretStorage = secrets;
+  await next.initialize();
+  assert.equal((await next.session!.previewEnrollment()).kind, "preview");
 });

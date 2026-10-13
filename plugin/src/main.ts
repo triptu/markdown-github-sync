@@ -336,6 +336,9 @@ export default class GitVaultSync extends Plugin {
       const journal = this.nativeJournal;
       if (!current || !vault || !store || !journal) throw new Error("Save settings and enroll this device first.");
       await this.assertSingleWriter();
+      const configuration = await current.listConfiguration();
+      if (configuration.kind === "configuration" && configuration.rules === "config/1")
+        throw new Error("Configuration sync is already enabled. Use Review configuration sync in the command palette to review incoming updates.");
       const installation: unknown = this.app.loadLocalStorage(installationKey);
       if (typeof installation !== "string") throw new Error("Missing device identity.");
       const migration = new SyncSession({
@@ -482,8 +485,14 @@ export default class GitVaultSync extends Plugin {
     const saved = parseSettings(next);
     return this.owner().run(async () => {
       const binding = await this.repositoryBinding();
-      if (!binding && this.nativeJournal && Boolean(saved.configuration) !== Boolean(this.settings.configuration))
-        throw new Error("Initial scope is already bound to this vault. Finish enrollment, then use the configuration migration review.");
+      if (!binding && Boolean(saved.configuration) !== Boolean(this.settings.configuration)) {
+        const installation: unknown = this.app.loadLocalStorage(installationKey);
+        const nativeState = typeof installation === "string"
+          ? await new FileJournalStore(this.owner().fence(this.app.vault.adapter), installation, "native").load()
+          : null;
+        if (this.nativeJournal || nativeState !== null)
+          throw new Error("Initial scope is already bound to this vault. Finish enrollment, then use the configuration migration review.");
+      }
       if (binding &&
           (saved.owner.toLowerCase() !== binding.owner.toLowerCase() ||
            saved.repository.toLowerCase() !== binding.name.toLowerCase() ||
