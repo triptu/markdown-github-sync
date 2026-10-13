@@ -5,7 +5,7 @@ import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
 import { HiddenConfigPort } from "./hidden-config";
 import { assertLocalNamespace, inventoryLocal, NativePathPolicy } from "./native-path-policy";
-import { canonicalFilesystemPath, type Scope } from "./scope";
+import { assertNoNestedGitignore, canonicalFilesystemPath, type Scope } from "./scope";
 
 export interface RecoveryAuthorization { replay: string[]; cancel: string[] }
 export interface UnreadableNativeFile { path: string; size: number; mtime: number | null; reason: "oversize" }
@@ -27,6 +27,7 @@ function safeExportPath(path: string, policy: NativePathPolicy): void {
   const [directory, ...suffix] = path.split("/");
   if (!/^\.git-vault-sync-export-[0-9a-f-]{36}$/.test(directory) || suffix.length === 0)
     throw new Error(`Export must use a dedicated hidden directory: ${path}`);
+  assertNoNestedGitignore([path]);
   safePath(suffix.join("/"), policy);
 }
 function exactText(bytes: Uint8Array): string | null {
@@ -487,17 +488,27 @@ export class GitObsidianVault implements LocalVault {
         throw new Error("Configuration scope does not match the native vault policy.");
     }
     const scoped = scope?.rules.rules === "config/1" ? scope : null;
+    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
+    if (scoped) {
+      assertLocalNamespace(inventory, scoped);
+    }
+    const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path)).map(file => ({
+      path: file.path, size: file.stat.size, mtime: file.stat.mtime,
+    }));
+    const indexed = new Set(visibleFiles.map(file => file.path));
+    for (const file of visibleFiles) {
+      if (scoped && !scoped.includes(file.path)) continue;
+      if (!inventory.files.has(file.path))
+        throw new Error(`Visible file missing from local inventory: ${file.path}`);
+    }
+    for (const path of inventory.files) {
+      if (!visible(path) || !(scoped ? scoped.includes(path) : isSyncablePath(path))) continue;
+      if (!indexed.has(path)) throw new Error(`Visible file missing from host index: ${path}`);
+    }
     let snapshot: Snapshot = Object.create(null);
     let unreadable: UnreadableNativeFile[] = [];
     let total = 0;
-    let inventoryFiles: ReadonlySet<string> | null = null;
     if (scoped) {
-      const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
-      assertLocalNamespace(inventory, scoped);
-      inventoryFiles = inventory.files;
-      for (const file of this.app.vault.getFiles()) if (visible(file.path) && scoped.includes(file.path)
-        && !inventory.files.has(file.path))
-        throw new Error(`Visible file missing from local inventory: ${file.path}`);
       const hidden = await new HiddenConfigPort(this.app.vault.adapter, scoped.rules.configDir,
         this.assertActive).scan(scoped, path => this.modes.get(path));
       snapshot = hidden.files;
@@ -505,19 +516,16 @@ export class GitObsidianVault implements LocalVault {
       total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
         - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
     }
-    const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path));
     const paths = new Set<string>();
     for (const file of visibleFiles) {
       if (scoped && !scoped.includes(file.path)) continue;
-      if (inventoryFiles && !inventoryFiles.has(file.path))
-        throw new Error(`Visible file missing from local inventory: ${file.path}`);
       safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
       const folded = canonicalFilesystemPath(file.path);
       if (paths.has(folded)) throw new Error(`Case or Unicode path collision: ${file.path}`);
       paths.add(folded);
       const stat = await this.app.vault.adapter.stat(file.path);
-      const size = stat?.type === "file" ? stat.size : file.stat.size;
-      const mtime = stat?.type === "file" ? stat.mtime : file.stat.mtime;
+      const size = stat?.type === "file" ? stat.size : file.size;
+      const mtime = stat?.type === "file" ? stat.mtime : file.mtime;
       if (size > maxFileBytes) {
         unreadable.push({ path: file.path, size, mtime, reason: "oversize" });
         continue;

@@ -10,7 +10,7 @@ import { NativeTransactionJournal } from "../src/git-sync/native-transactions";
 import { NativePathPolicy } from "../src/git-sync/native-path-policy";
 import { compileScope } from "../src/git-sync/scope";
 import { entryFromBytes, hashBlob } from "../src/git-sync/codec";
-import type { JournalFiles } from "../src/git-sync/store";
+import { FileJournalStore, type JournalFiles } from "../src/git-sync/store";
 import type { App } from "obsidian";
 const temporary = mkdtempSync(join(tmpdir(), "git-native-vault-"));
 const bundle = join(temporary, "adapter.cjs");
@@ -53,10 +53,12 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
   let afterRename: ((from: string, to: string) => void) | undefined;
   let afterRead: ((path: string) => void) | undefined;
   let journalWrite: ((path: string) => void) | undefined;
+  let listHook: ((path: string) => Promise<void>) | undefined;
   let queuedRename: ((from: string, to: string) => Promise<void>) | undefined;
   const views: Array<{ view: InstanceType<typeof loaded.FileView> }> = [];
   const strings = new Map<string, string>();
   const folders = new Set<string>();
+  const absentFromIndex = new Set<string>();
   let holdReads = 0;
   let processCalls = 0;
   const adapterReads: string[] = [];
@@ -95,6 +97,7 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     rename,
     remove: async path => { strings.delete(path); files.delete(path); },
     list: async listedPath => {
+      await listHook?.(listedPath);
       const path = listedPath === "/" ? "" : listedPath;
       const foundFiles = new Set<string>(), foundFolders = new Set<string>();
       for (const item of [...files.keys(), ...strings.keys(), ...folders]) {
@@ -113,7 +116,7 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     workspace: { iterateAllLeaves: (visit: (leaf: { view: InstanceType<typeof loaded.FileView> }) => void) => views.forEach(visit) },
     vault: {
       configDir: ".obsidian",
-      getFiles: () => [...files.values()].map((x) => x.file),
+      getFiles: () => [...files.values()].filter(x => !absentFromIndex.has(x.file.path)).map(x => x.file),
       getAbstractFileByPath: (p: string) => {
         if (p.startsWith(".") || p.split("/").some(part => part.startsWith(".")))
           throw new Error(`Hidden TFile lookup: ${p}`);
@@ -177,12 +180,15 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     holdReads: () => holdReads,
     processCalls: () => processCalls,
     adapterReads,
+    journalFiles,
+    excludeFromIndex: (path: string) => { absentFromIndex.add(path); },
     setConfigDir: (configDir: string) => { app.vault.configDir = configDir; },
     put,
     files,
     strings,
     setReadHook: (fn?: (path: string) => void) => { afterRead = fn; },
     setJournalWriteHook: (fn?: (path: string) => void) => { journalWrite = fn; },
+    setListHook: (fn?: (path: string) => Promise<void>) => { listHook = fn; },
     setQueuedRenameHook: (fn?: (from: string, to: string) => Promise<void>) => { queuedRename = fn; },
     setRenameHook: (fn?: (from: string, to: string) => void) => { afterRename = fn; },
     setBeforeRenameHook: (fn?: (from: string, to: string) => void) => { beforeRename = fn; },
@@ -1209,4 +1215,75 @@ test("oversized scoped config can export only under a dedicated hidden recovery 
     `.git-vault-sync-export-${crypto.randomUUID()}/.obsidian/workspace.json`), /Unsupported vault path/);
   await assert.rejects(vault.exportOversize(record.id,
     `.git-vault-sync-export-${crypto.randomUUID()}/.git-vault-sync/state.json`), /Unsupported vault path/);
+});
+
+test("export rejects a relocated root ignore control before copying and leaves scoped scans usable", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const before = await entryFromBytes(bytes("old-pattern\n"));
+  const next = await entryFromBytes(bytes("new-pattern\n"));
+  h.put(".gitignore", bytes("old-pattern\n"));
+  assert.equal((await h.vault.apply(".gitignore", before, next)).kind, "applied");
+  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
+  assert.ok(hold);
+  const large = new Uint8Array(8 * 1024 * 1024 + 1);
+  h.put(hold, large);
+  await inspectHidden(h.vault);
+  const issue = h.vault.nativeRecoveries().find(record => record.kind === "oversize" && record.sourcePath === hold);
+  assert.ok(issue);
+  const directory = `.git-vault-sync-export-${crypto.randomUUID()}`;
+  for (const name of [".gitignore", ".GITIGNORE"]) {
+    await assert.rejects(h.vault.exportOversize(issue.id, `${directory}/${name}`), /Nested .gitignore/);
+  }
+  assert.equal([...h.files.keys()].some(path => path.startsWith(`${directory}/`)), false);
+  assert.deepEqual(h.files.get(hold)?.data, large);
+  const safeOutput = `${directory}/gitignore-recovery.bin`;
+  assert.equal((await h.vault.exportOversize(issue.id, safeOutput)).path, safeOutput);
+  const reopened = (await h.open()).vault;
+  const captured = await reopened.scan(await configScope("new-pattern\n"));
+  assert.equal(captured.files[".gitignore"].oid, next.oid);
+  assert.deepEqual(h.files.get(safeOutput)?.data, large);
+});
+
+test("policy upgrade rechecks the durable review pause after asynchronous inventory", async () => {
+  const h = await harness();
+  const { journal } = await h.open();
+  const policy = await NativePathPolicy.forConfig(".obsidian");
+  const gate = new FileJournalStore(h.journalFiles, "12345678-1234-1234-1234-123456789abc");
+  await gate.save({ pause: "reviewed" });
+  let checks = 0;
+  h.setListHook(async path => { if (path === "/") await gate.save({ pause: null }); });
+  await assert.rejects(journal.upgradePolicy(policy, async () => {
+    checks++;
+    const durable = await gate.load();
+    if (!durable || typeof durable !== "object" || !("pause" in durable) || durable.pause !== "reviewed")
+      throw new Error("review pause revoked");
+  }), /review pause revoked/);
+  h.setListHook();
+  assert.equal(checks, 2);
+  assert.equal(journal.matchesPolicy(NativePathPolicy.legacy), true);
+  await assert.rejects(h.open(undefined, policy), /policy does not match/);
+});
+
+for (const scoped of [false, true]) {
+  test(`${scoped ? "configured" : "legacy"} capture refuses a visible disk file omitted by the host index`, async () => {
+    const h = await harness(undefined, scoped ? await NativePathPolicy.forConfig(".obsidian") : NativePathPolicy.legacy);
+    h.put("note.md", bytes("still on disk"));
+    h.put(".obsidian/private", bytes("excluded confidential bytes"));
+    h.excludeFromIndex("note.md");
+    const scope = scoped ? await configScope() : undefined;
+    await assert.rejects(h.vault.scan(scope), /Visible file missing from host index: note.md/);
+    await assert.rejects(h.vault.capture(scope), /Visible file missing from host index: note.md/);
+    assert.deepEqual(h.files.get("note.md")?.data, bytes("still on disk"));
+    assert.deepEqual(h.adapterReads, []);
+  });
+}
+
+test("scoped inventory ignores an omitted host-index file excluded by committed rules", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  h.put(".gitignore", bytes("ignored.md\n"));
+  h.put("ignored.md", bytes("private bytes"));
+  h.excludeFromIndex("ignored.md");
+  const scanned = await h.vault.scan(await configScope("ignored.md\n"));
+  assert.deepEqual(Object.keys(scanned.files), [".gitignore"]);
+  assert.equal(h.adapterReads.includes("ignored.md"), false);
 });

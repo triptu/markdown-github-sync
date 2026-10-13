@@ -222,8 +222,11 @@ export class NativeTransactionJournal {
       throw new Error("Native policy upgrade requires a legacy journal and a config policy.");
     await assertDurableReviewedPause();
     this.trusted();
-    if (Object.keys(this.state.intents).length || this.state.recoveries.length)
-      throw new Error("Resolve native intents and recovery issues before configuration enrollment.");
+    const assertQuiescent = () => {
+      if (Object.keys(this.state.intents).length || this.state.recoveries.length)
+        throw new Error("Resolve native intents and recovery issues before configuration enrollment.");
+    };
+    assertQuiescent();
     for (const tracked of Object.values(this.state.tracked)) if (!next.allows(tracked.path))
       throw new Error(`Retained native path is outside configuration policy: ${tracked.path}`);
     for (const acknowledged of this.state.acknowledgedOversize)
@@ -237,6 +240,9 @@ export class NativeTransactionJournal {
         [...inventory.files].some(path => path.startsWith(`${directory}/`) && !this.state.tracked[path]))
         throw new Error(`Untracked native ${kind} files block configuration enrollment.`);
     }
+    await assertDurableReviewedPause();
+    this.trusted();
+    assertQuiescent();
     // The record is the commit point. A failed save leaves this instance
     // uncertain; reopen under whichever policy the durable record contains.
     await this.save({ ...this.state, policy: next.binding });
