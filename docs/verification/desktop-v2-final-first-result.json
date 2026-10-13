@@ -1,0 +1,10 @@
+{
+  "completed": false,
+  "runId": "22e20410-660e-408c-83b1-9f53e9a1e5eb",
+  "device": "desktop",
+  "stage": "preflight",
+  "productionSha256": "a85020d6205f2efbcf777074e47d896f4acafc69e7385744a48d2e2cfa4ecad5",
+  "checks": [],
+  "commits": {},
+  "error": "Visible file missing from host index: Final Acceptance 22e20410-660e-408c-83b1-9f53e9a1e5eb/Seed.md"
+}
