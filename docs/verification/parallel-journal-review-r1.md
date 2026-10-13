@@ -88,3 +88,7 @@ shares bytes with a blob) to those two sweeps.
 | Record `put` after parallel section | existing sweeps | A |
 | Load `read` + checksum (parallel) | corruption test | E, G |
 | Cleanup after failed parallel save | none | I |
+
+## Follow-up
+
+The repository now includes a persistence-boundary sweep with 16 blob entries, duplicate bodies, and bytes shared with a file entry. All 17 journal tests pass. The shipped worker limit is four; the latency diagnosis compares four and eight workers as synthetic models, not device measurements. Error selection remains a nonblocking diagnostics limitation: concurrent failures may report an earlier non-Error rejection instead of a later Error.

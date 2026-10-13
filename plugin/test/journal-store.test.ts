@@ -168,6 +168,41 @@ test("each interrupted persistence boundary recovers a complete prior or new rec
   }
   assert.ok(failures >= 8);
 });
+test("each parallel blob persistence boundary recovers a complete prior or new record", async () => {
+  const original = { ...updated, blobs: { shared: btoa("New edit") } };
+  const updatedWithBlobs = {
+    ...updated,
+    phase: "parallel-save",
+    blobs: Object.fromEntries(Array.from({ length: 16 }, (_, i) =>
+      [`oid-${i}`, btoa(i < 2 ? "New edit" : `parallel body ${i}`)])),
+  };
+  let failures = 0;
+  const probeFiles = new Files(), probe = new FileJournalStore(probeFiles, identity);
+  await probe.save(original);
+  probeFiles.count = 0;
+  await probe.save(updatedWithBlobs);
+  const boundaries = probeFiles.count;
+  for (let position = 1; position <= boundaries + 1; position++) {
+    const files = new Files();
+    const store = new FileJournalStore(files, identity);
+    await store.save(original);
+    files.count = 0;
+    files.failAt = position;
+    try {
+      await store.save(updatedWithBlobs);
+    } catch {
+      failures++;
+    }
+    files.failAt = Infinity;
+    const recovered = plain(await new FileJournalStore(files, identity).load());
+    assert.ok(
+      JSON.stringify(recovered) === JSON.stringify(original) ||
+        JSON.stringify(recovered) === JSON.stringify(updatedWithBlobs),
+      `boundary ${position}`,
+    );
+  }
+  assert.ok(failures >= 8);
+});
 test("corrupt latest record blocks instead of rolling baseline backwards", async () => {
   const files = new Files();
   const store = new FileJournalStore(files, identity);
