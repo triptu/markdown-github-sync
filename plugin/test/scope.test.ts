@@ -56,7 +56,7 @@ test("built-in privacy denies dominate an empty or negating .gitignore", async (
   }
   assert.equal(compiled.classify("notes/.hidden.md"), "outside");
   assert.equal(compiled.classify(".obsidian/plugins/unknown/private.pem"), "denied");
-  const otherConfigDir = compileScope({ rules: "config/1", configDir: ".config", gitignore: null }, null);
+  const otherConfigDir = await compileScope({ rules: "config/1", configDir: ".config", gitignore: null }, null);
   assert.equal(otherConfigDir.classify(".obsidian/todoist-token"), "denied");
 });
 
@@ -93,21 +93,21 @@ test("root .gitignore is a control file even when its own rules match it", async
 test("transaction scope is the intersection of parent, remote and local exclusions", async () => {
   const parent = await scope();
   const remote = await scope("remote.md\n");
-  const transaction = freezeTransactionScope(parent, remote, "local.md\n");
+  const transaction = await freezeTransactionScope(parent, remote, "local.md\n");
   assert.equal(transaction.includes("local.md"), false, "new local rule blocks upload in the same transaction");
   assert.equal(transaction.classify("local.md"), "ignored");
   assert.equal(transaction.includes("remote.md"), false);
   assert.equal(transaction.includes("kept.md"), true);
   assert.equal(transaction.includes(".gitignore"), true);
   const formerlyIgnored = await scope("old.md\n");
-  const unignored = freezeTransactionScope(formerlyIgnored, parent, "");
+  const unignored = await freezeTransactionScope(formerlyIgnored, parent, "");
   assert.equal(unignored.includes("old.md"), false, "parent exclusion remains frozen for this transaction");
 });
 
 test("nested .gitignore blocks activation, including a file under a denied directory", async () => {
   assert.throws(() => assertNoNestedGitignore(["notes/a.md", "folder/.gitignore"]), UnsupportedNestedGitignoreError);
-  assert.throws(() => compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: null }, null)
-    .classify(".obsidian/cache/.gitignore"), UnsupportedNestedGitignoreError);
+  const compiled = await scope();
+  assert.throws(() => compiled.classify(".obsidian/cache/.gitignore"), UnsupportedNestedGitignoreError);
   await assert.rejects(scopeForTree(
     [{ path: ".obsidian/cache/.gitignore", type: "blob", sha: "0".repeat(40) }],
     async () => new Uint8Array(), ".obsidian", "config/1",
@@ -130,7 +130,7 @@ test("tree resolution validates bytes, object ID, UTF-8 and the 64 KiB limit", a
   ), /valid UTF-8/);
   await assert.rejects(scopeForTree([item], async () => new Uint8Array(65537), ".obsidian", "config/1"), ScopeError);
   await assert.rejects(scopeForTree([{ ...item, type: "tree" }], async () => bytes, ".obsidian", "config/1"), ScopeError);
-  assert.throws(() => compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: oid }, "other\n"), ScopeError);
+  await assert.rejects(() => compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: oid }, "other\n"), ScopeError);
 });
 
 test("digest is SHA-1 of canonical rules and policy version, independent of object identity", async () => {
@@ -138,10 +138,10 @@ test("digest is SHA-1 of canonical rules and policy version, independent of obje
   const oid = await hashBlob(new TextEncoder().encode(text));
   const rules: ScopeRules = { rules: "config/1", configDir: ".obsidian", gitignore: oid };
   const expected = createHash("sha1").update(JSON.stringify(["scope-policy/2", rules])).digest("hex");
-  assert.equal(compileScope(rules, text).digest, expected);
-  assert.equal(compileScope({ ...rules }, text).digest, expected);
+  assert.equal((await compileScope(rules, text)).digest, expected);
+  assert.equal((await compileScope({ ...rules }, text)).digest, expected);
   assert.notEqual((await scope("!*.tmp\n")).digest, expected);
-  const legacy = compileScope({ rules: "visible-only", configDir: ".obsidian", gitignore: null }, null);
+  const legacy = await compileScope({ rules: "visible-only", configDir: ".obsidian", gitignore: null }, null);
   assert.equal(legacy.classify(".obsidian/app.json"), "outside");
   assert.equal(legacy.classify("note.md"), "content");
   const maximumText = `#${"x".repeat(65534)}\n`;
@@ -149,10 +149,10 @@ test("digest is SHA-1 of canonical rules and policy version, independent of obje
     rules: "config/1", configDir: ".obsidian",
     gitignore: await hashBlob(new TextEncoder().encode(maximumText)),
   };
-  assert.equal(compileScope(maximumRules, maximumText).digest,
+  assert.equal((await compileScope(maximumRules, maximumText)).digest,
     createHash("sha1").update(JSON.stringify(["scope-policy/2", maximumRules])).digest("hex"));
   const overflowText = `${maximumText}x`;
   const overflowOid = await hashBlob(new TextEncoder().encode(overflowText));
-  assert.throws(() => compileScope({ ...maximumRules, gitignore: overflowOid },
+  await assert.rejects(() => compileScope({ ...maximumRules, gitignore: overflowOid },
     overflowText), /64 KiB/);
 });
