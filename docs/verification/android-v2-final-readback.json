@@ -1,0 +1,48 @@
+{
+  "runId": "0b1e37f9-2f11-44f0-85f9-a66e43baca47",
+  "head": "87229cd0d68541f580ea5aca4fc663255e2c58b1",
+  "productionSha256": "dc3984a2da5298d8e3a651c19b8702f0999f901e6809ec2d8cc7f64e7a83d103",
+  "checks": [
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/Seed.md",
+      "sha256": "9c446a3e91030eec010e29a10cd24025e79aa568e9149d905288de2ef6b03bb3",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-attachment.bin",
+      "sha256": "741e03d79f9e2fe8b86d6bb774c705957bd0c82eb12ce58801a8c85fdced1f21",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-automatic-local.md",
+      "sha256": "8c2d6ec3f0b369c1a3a3d378c243beb1b807e57bae84c8227f60908810b8834c",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-automatic-remote.md",
+      "sha256": "a14648620648055f314cc310275ae527a93378c223b157e5bd5ee77f5683c248",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-editor.md",
+      "sha256": "932fe3ab5309ff2cbffb50c98b870a8254ffb000f74f6c1c8353fa79800163e0",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-independent-local.md",
+      "sha256": "e833b5ccb067fd1104bb4600826708d93a993dd088c552b4ed80bccb26d9303d",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-independent-remote.md",
+      "sha256": "3f3f98c794e0a345d680494c8f9133c5ca0b3414e31c1e0430e4c02aace0afd1",
+      "exact": true
+    },
+    {
+      "path": "Final Acceptance 0b1e37f9-2f11-44f0-85f9-a66e43baca47/android-overlap.md",
+      "sha256": "9410e564ff6024e638b30e7314ef40984f23cc3b448adb85d04bc5e0b7deea6a",
+      "exact": true
+    }
+  ],
+  "savedEditMethod": "Typed into the visible Obsidian Markdown editor through Android UI; saved bytes independently read with ADB"
+}

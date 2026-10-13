@@ -1,0 +1,106 @@
+{
+  "completed": true,
+  "runId": "0b1e37f9-2f11-44f0-85f9-a66e43baca47",
+  "device": "android",
+  "branch": "native-final-0b1e37f9-2f11-44f0-85f9-a66e43baca47",
+  "productionSha256": "dc3984a2da5298d8e3a651c19b8702f0999f901e6809ec2d8cc7f64e7a83d103",
+  "checks": [
+    {
+      "name": "exact private branch enrolled through installed production plugin",
+      "pass": true
+    },
+    {
+      "name": "automatic fixture paths fresh",
+      "pass": true
+    },
+    {
+      "name": "foreground automatic local and GitHub edits converged without Sync now",
+      "pass": true
+    },
+    {
+      "name": "new Obsidian host after full restart",
+      "pass": true
+    },
+    {
+      "name": "automatic checkpoint and bytes survive restart",
+      "pass": true
+    },
+    {
+      "name": "automatic paused for ordinary saved-edit case",
+      "pass": true
+    },
+    {
+      "name": "visible editor fixture path fresh",
+      "pass": true
+    },
+    {
+      "name": "visible Markdown edit was saved to native vault bytes",
+      "pass": true
+    },
+    {
+      "name": "ordinary saved Markdown edit published through production sync",
+      "pass": true
+    },
+    {
+      "name": "controlled fixture paths fresh",
+      "pass": true
+    },
+    {
+      "name": "remote text and binary seed installed by production",
+      "pass": true
+    },
+    {
+      "name": "ordinary nonconflicting local and remote edits converged",
+      "pass": true
+    },
+    {
+      "name": "same-file conflict appears without clobbering local bytes",
+      "pass": true
+    },
+    {
+      "name": "reviewed conflict decision recorded",
+      "pass": true
+    },
+    {
+      "name": "reviewed merged bytes published and installed",
+      "pass": true
+    },
+    {
+      "name": "remote binary replacement exact and deletion applied",
+      "pass": true
+    },
+    {
+      "name": "production history includes original fixture commit",
+      "pass": true
+    },
+    {
+      "name": "production history restore preview has exact versions",
+      "pass": true
+    },
+    {
+      "name": "reviewed historical version restored as local draft",
+      "pass": true
+    },
+    {
+      "name": "history restore published exact old bytes as new commit",
+      "pass": true
+    },
+    {
+      "name": "automatic setting restored",
+      "pass": true
+    }
+  ],
+  "commits": {
+    "seed": "60ee24f00a40970119ade1f509f196441d422684",
+    "autoRemote": "3e8e8d6e6a80f2d1eb13e426fbdc8db17bf4ab9a",
+    "autoConverged": "ebe282cd07152fcbf448a27def1513b677093d02",
+    "editor": "c9ccd8de04131695de9668db42eb59e3b19b004c",
+    "controlledSeed": "6d1afeffd52a92dcb720cfad339e0d5870b7c78b",
+    "independent": "11e04042d27e431a32d05d8b5a1de13ccbb3a8a2",
+    "resolved": "90066f70e8a4c496c7b67671d0ca2dc0c3a8c95c",
+    "binaryDelete": "1fa80a4f5c6dd1c8be300bb3289fec7a546c7ac3",
+    "restored": "87229cd0d68541f580ea5aca4fc663255e2c58b1"
+  },
+  "finalPhase": "idle",
+  "pending": []
+}
