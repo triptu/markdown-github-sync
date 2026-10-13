@@ -1,194 +1,66 @@
 # GitHub sync engine API
 
-Engine modules under `plugin/src/git-sync/`. They depend only on `contracts.ts`, Web Crypto, `TextEncoder`/`TextDecoder`, `atob`/`btoa` and `structuredClone`. They have no Node or Obsidian runtime imports. The root wraps `SyncSession` with the GitHub `Repository`, an Obsidian `LocalVault` and a `DurableStore`.
+This page describes the current developer contract in `plugin/src/git-sync/`. `SyncSession` owns one vault's synchronization state. The root plugin supplies a `Repository`, `LocalVault`, and `DurableStore`, then exposes enrollment, Changes, configuration review, and Local recovery in Obsidian. Session calls are serialized. This is a contract reference for the checkout, not a release or acceptance claim.
 
-## `codec.ts`
+## Entries, snapshots, and scope
 
-| Export | Purpose |
+`contracts.ts` defines an `Entry` as `{ oid, mode, data }`: a Git blob SHA-1, mode `100644` or `100755`, and canonical base64 bytes. A `Snapshot` maps paths to entries; a `Manifest` in `codec.ts` keeps only `{ oid, mode }`. `verifyEntry` hashes decoded bytes, and `verifySnapshot` validates each own path against the supplied `Scope`. Use `dictionary()` or own-key enumeration for path maps, including names such as `__proto__`. `sameEntry` compares oid and mode, not base64 spelling.
+
+`scope.ts` supports `visible-only` and `config/1`. Visible-only excludes every hidden segment. `config/1` includes ordinary content, the root `.gitignore`, and eligible files under the vault's configured hidden directory. It denies sync metadata, OS metadata, workspace and cache files, this plugin and competing sync plugins, and known secret names. Other hidden directories remain outside scope. Eligible configuration is classified as `config-inert` or `config-live`; a committed root `.gitignore` can exclude either. Nested `.gitignore` files and ambiguous root aliases are unsupported. The scope digest binds the built-in policy, configuration directory, and committed root ignore object. A transaction uses the intersection of checkpoint, remote, and local ignore policies, so a new ignore rule can exclude its own upload. Excluded paths are preserved in repository trees and are not inferred to be deletions.
+
+An existing visible-only enrollment moves to `config/1` through `previewConfigurationScope()` and `enableConfigurationScope({ token })`. The latter saves a `scope-enrollment` pause. The root checks and upgrades the native journal policy under that durable pause, then obtains a fresh `previewEnrollment()` and `enroll({ token })`. The survey compares the prior checkpoint under its original scope. Newly included paths have no assumed merge base; `reentry` tracks paths returning after exclusion. A requested setting alone does not broaden an existing enrollment.
+
+## Repository publication
+
+`Repository` in `contracts.ts` reads identity, head, immutable commits, ancestry, per-commit scope, and this installation's ledger ref (`refs/vault-sync/devices/<installationId>`). `prepare(parent, changes, message, { anchor, operation })` verifies the parent and candidate trees, preserves excluded entries, and creates an unreferenced candidate plus a receipt commit. The receipt names the candidate and extends the prior ledger anchor. The GitHub adapter's `publish` sends one non-force GraphQL `updateRefs` request that compares and moves both the branch (`parent` to `candidate`) and ledger (`anchor` to `receipt`). The session saves the operation and receipt identity before dispatch. An acknowledged, validated response accepts the publication; any other response is inconclusive.
+
+For inconclusive dispatch, `readLedger()` supplies the verdict. The receipt means accepted, including after a branch rewind. A seal commit made against the same anchor and observed in the ledger means cancelled; the session may then reconcile again. An unchanged anchor can race the one durable seal. Unreachable or older ledger reads return `settling` and send no new candidate. An unrelated ledger value pauses as `ledger-diverged`; a descendant of this installation's receipt or seal indicates `duplicate-installation`. The root must keep the installation identity unique and retain the journal. Branch reachability alone does not settle a current ledger publication.
+
+Migrated `/2` publications have no receipt. The session uses branch reachability to accept one, or publishes a same-tree ledger fence when the branch is still at its old parent. A fenced but unresolved candidate remains `publication-unknown` until reviewed. `previewPublicationRecovery()` supplies exact candidate, head, and local snapshots only for a reviewable held publication. `recoverPublication({ token, choice })` archives the candidate and local files, releases the operation, and pauses for re-enrollment; `choice` is `discard` by default or `republish`. It neither updates GitHub nor writes vault files. A current ledger publication in `settling` is not eligible for this review.
+
+## Reconciliation and decisions
+
+`reconcile()` in `reconcile.ts` is a pure three-way plan over effective base, captured local files, and one remote commit. It returns `needs-decision` or `ready` with `target`, `outgoing`, ordered `incoming` compare-and-swap steps, merged paths, and resolved or held conflicts. One-sided changes, including a single deletion, converge automatically. A unique exact-byte rename on one side can carry the other side's edit to the new name. Markdown changes merge only when their line regions are safely separated; byte details such as BOM and line endings remain significant.
+
+Conflicts include `content`, `add-add`, edit-versus-deletion, path `collision`, `bulk-deletion`, and native `interrupted-write`, `displaced-write`, or `oversize-write`. `local-deletion` and `remote-deletion` are legacy kinds parsed for migration, not current one-sided deletion decisions. A bulk deletion needs one decision when at least `max(25, ceil(0.2 * base file count))` unmoved files disappear on one side, or a top-level folder with at least three unmoved files vanishes. The ID binds its path set, head, and local manifest. `mine` and `remote` choose the corresponding side. A collision has no in-app choice; rename a file and sync again.
+
+Version decisions are `mine`, `remote`, `edit`, and `both` when a safe sibling name exists. `both` leaves GitHub's version at the original path and moves this device's version to a conflict sibling. Native holds additionally offer `expected`, `next`, and `found` when that version exists. Conflict IDs bind the exact versions; the session prunes decisions whose conflict changed. A local compare-and-swap sees exact captured bytes, leaves a changed file alone, and carries its origin into the next reconcile. `notifyLocalChange()` is a scheduling compatibility hook; it does not revoke a decision or persist an event generation. The root still records vault events and transfers rename mode metadata before scheduling work.
+
+## Session methods
+
+| Method | Contract |
 | --- | --- |
-| `encodeBase64(bytes)`, `decodeBase64(text)` | Exact byte transport for `Entry.data`. Decoding is strict: whitespace, URL-safe alphabets and bad padding throw `IntegrityError`. |
-| `hashBlob(bytes)` | Git blob SHA-1 (`blob <n>\0` + bytes). This is the `Entry.oid` contract. |
-| `entryFromBytes(bytes, mode?)`, `entryFromText(text, mode?)` | Build a verified `Entry`. |
-| `entryText(entry)` | Exact UTF-8 text, including any BOM, or `null` if the bytes are not valid UTF-8. |
-| `isValidPath`, `isExcludedPath`, `isSyncablePath` | Structural path safety and V1 scope. Any hidden segment (`.git`, `.obsidian`, `.trash`, …) is out of scope. |
-| `foldPath(path)` | NFC plus lowercase key used to detect case- and normalization-insensitive collisions. |
-| `sameEntry`, `sameManifest` | Semantic equality: oid and mode, never the base64 text. |
-| `verifyEntry`, `verifySnapshot` | Check every path is in scope and every entry's bytes hash to its oid. They throw `IntegrityError`. |
-| `toRef`, `toManifest`, `Ref`, `Manifest` | Identity-only forms used for checkpoints and stored state. |
-| `dictionary(entries?)`, `own(values, key)` | Construct a null-prototype dictionary and read an own entry only. Verified snapshots, manifests, plans, recovery exports, and dictionaries passed to the store use null prototypes. |
+| `status()`, `inspect()` | Status reads durable state without a vault scan or network call. Inspect scans local files and reports pending changes and unreadable paths; in `config/1`, it also reads the checkpoint scope through the repository port. Neither writes vault files. |
+| `previewEnrollment()`, `enroll({ token })` | Compare the head and local survey; enrollment anchors a checkpoint and ledger without applying files. A stale survey returns a new preview. Pending native intents are cancelled under the reviewed enrollment and require another preview. |
+| `sync()` | Checks identity, pause, and ledger binding before native recovery; settles an operation before new planning. It may return `up-to-date`, `synced`, `needs-decision`, `blocked`, `contended`, `settling`, `publication-unknown`, `native-error`, `paused`, `unenrolled`, or `corrupt`. Successful content progress can include `attention` for unreadable, held, and deferred work. |
+| `resolve({ conflictId, choice })`, `keepLocal({ path })` | Store an exact conflict choice, or keep the live file for a blocked local step. A later sync performs the work. `edit.data` is canonical base64. |
+| `previewRestore({ path, commit })`, `restore({ token, path, commit })` | Review a historical entry, then compare-and-swap it into the vault as a local draft. A later sync publishes the draft. |
+| `listRecovery()`, `exportRecovery({ id })`, `discardRecovery({ id })` | List, export exact bytes, or explicitly discard an immutable recovery record. An operation's active record cannot be discarded. |
 
-## `reconcile.ts` (pure)
+`sync()` verifies the checkpoint against its immutable commit and pauses on repository identity, history, scope, or base mismatch. It records local drafts and every incoming preimage and target before publication or application. The checkpoint advances only after all local steps are accounted for and newer captured drafts are saved. A blocked adapter step keeps the operation; a later sync retries it, while `keepLocal()` can carry the live version forward. Unknown local bytes and native holds are excluded from automatic planning, including deletion counts. Other paths can progress while they remain held.
 
-`reconcile({ base, local, remote, decisions, reviewScope? })` returns either `{ kind: "needs-decision", conflicts, merged }` or `{ kind: "ready", target, outgoing, incoming, merged, resolved }`.
+## Configuration review
 
-- A change made on only one side is taken automatically. Equal changes converge.
-- Both sides edited the same Markdown file (`.md`): it is merged line by line only if each changed region is separated from the other side's changes by at least one unchanged line, and all three versions are valid UTF-8. Otherwise the result is a `content` conflict. Line endings, BOM and a missing final newline are preserved byte-exact.
-- Every deletion needs a decision, in both directions: `local-deletion`, `remote-deletion`, `local-deleted-remote-edited`, `local-edited-remote-deleted`. Other conflict kinds are `add-add` and `content`. If paths collide when case and Unicode normalization are ignored, the result is a `collision` with no in-app choice. The user renames one file and syncs again.
-- `VersionConflict.id` hashes `reviewScope`, the kind, the path, and the exact base, local, and remote versions. `SyncSession` supplies the remote commit and a durable review generation as the scope. Any observed change to the head or local manifest invalidates all approvals and creates a new generation. Every enrolled capture performs local invalidation, including `inspect`, restore previews, enrollment surveys, and publication recovery previews. A successful restore invalidates approvals durably before writing, including when its response is lost. A recreated file followed by a second observed deletion therefore requires a new approval.
-- Direct callers that retain decisions across captures supply their own `reviewScope`. The default empty scope is suitable only for one review of fixed inputs. Input dictionaries are copied using their own enumerable keys.
-- Choices are `mine`, `remote`, `both` and `edit` (with an exact `Entry`). `both` keeps GitHub's version at the path and this device's version at `sibling`: `Name (conflict <local oid7>).ext`. It is offered only when that name is unused on every side and passes the same scope and path-length validation as stored paths. Otherwise `sibling` is `null`, and the remaining choices still work.
-- `incoming` lists guarded local steps with `consent: {kind: "automatic"}` or `{kind: "reviewed", base: Entry | null}`. Every mutation produced by a conflict choice, including a `both` sibling, is reviewed. `base` retains the original conflict base. A sibling's base is absence. Creations and replacements run first, then deletions. A deletion that frees a folded name runs before the creation that needs it.
-- Also exported: `mergeText`, `diff`, `splitLines`, `siblingPath`, `choicesFor`.
+In `config/1`, `listConfiguration()` reports `deferred` incoming files, `unpublished` local hidden additions, and `guarded` files changed after an explicit application. New local hidden files require exact-version `previewHiddenPublication(path)` and `consentHiddenPublication({ path, token })` before upload, except the root `.gitignore`. Consent is tied to a path and version; a changed version needs another preview. Existing tracked hidden files follow normal reconciliation.
 
-## `session.ts`: `new SyncSession({ repository, vault, store, deviceName?, now? })`
+Incoming files under the configuration directory are committed to the checkpoint but held in `deferred`, with their original local preimage. `previewApplyConfiguration()` returns the expected and incoming entries plus blocks. `applyConfiguration({ token })` saves a separate operation before exact compare-and-swap writes. If the local file changed, it returns `review-needed` and leaves that version for conflict review. Applying configuration does not reload Obsidian or plugins; the UI asks the user to restart.
 
-Durable transactions are serialized: a call queues behind the one in progress. `notifyLocalChange()` increments the session’s local event generation synchronously, before joining that queue. Active transactions see forwarded events across await boundaries. Any thrown error leaves the durable state consistent, so it is safe to call `sync()` again.
+`configurationGuards` bind a reviewed apply to the Obsidian host lifetime and applied version. If the same running host rewrites or deletes an applied file, automatic publication of that saved version is held. `previewGuardedConfigurationPublication(path)` and `consentGuardedConfigurationPublication({ path, token })` authorize an exact local version against the current head and scope digest. On a new host lifetime, the first observed version is checked before the old guard can retire. The root stores the host lifetime on the App across plugin reloads. These guards do not detect unsaved editor buffers or writers outside the captured and native compare-and-swap windows.
 
-| Method | Network | Vault writes | Result |
-| --- | --- | --- | --- |
-| `status()` | no | no | `SessionStatus` without `pending` |
-| `inspect()` | no | no (captures) | `SessionStatus` plus `pending` changes relative to the checkpoint |
-| `notifyLocalChange()` | no | no | `invalidated` or unavailable. Immediately retires review and operation approval for active transactions; its queued result confirms durable invalidation. Includes cycles that return to identical captured bytes. |
-| `previewEnrollment()` | yes | no | `EnrollmentPreview` (`token`, `items[{path, action}]`, `unchanged`, `reenrollment`), `already-enrolled` or `corrupt` |
-| `enroll({ token })` | yes | **none** | `enrolled`, `stale` (with a fresh preview), `already-enrolled` or `corrupt` |
-| `sync()` | yes | guarded | `SyncOutcome` (below) |
-| `resolve({ conflictId, choice })` | no | no | `recorded`, `stale` or `invalid`. `choice.edit.data` is base64. |
-| `keepLocal({ path })` | no | no | For a blocked step: keep this device's file. It is published by a later sync. |
-| `previewRestore({ path, commit })` | yes | no | `RestorePreview` (historical and current `Entry`) or a refusal: `not-in-history`, `missing`, `invalid-path`, `busy`, `paused` |
-| `restore({ token, path, commit })` | yes | one guarded write | `restored`, `unchanged`, `stale` or `blocked`. The result is a local draft; `sync()` publishes it as a new commit. |
-| `previewPublicationRecovery()` | yes | no (captures) | A `PublicationRecoveryPreview`, `missing`, `reachable`, `paused`, or an unavailable outcome |
-| `recoverPublication({ token })` | yes | **none** | `released{pause}`, `stale`, or a recovery refusal. Archives the reviewed candidate and current local bytes before requiring re-enrollment. |
-| `listRecovery()`, `exportRecovery({ id })`, `discardRecovery({ id })` | no | no | Recovery summaries, exact bytes as a `Snapshot`, or removal (refused while an operation uses the record) |
+## Native vault and oversized files
 
-`SyncOutcome` is one of:
+`LocalVault.capture()` and optional `scan()` are read-only. `scan()` reports visible or eligible hidden files over 8 MiB as `{ path, size, mtime, reason: "oversize" }` instead of treating them as absent. The Obsidian adapter also limits captured content to 128 MiB, checks the disk inventory against Obsidian's visible index, and reads eligible hidden configuration through the adapter. The engine leaves an unreadable path untouched on both sides until it can be read. The `LocalVault` contract reserves mutation for `apply`, `recover`, and `acknowledgeRecovery`.
 
-- `unenrolled`
-- `corrupt{detail}`
-- `paused{pause}`
-- `up-to-date{commit}`
-- `synced{commit, published, carried}`
-- `needs-decision{conflicts, merged}`
-- `blocked{commit, steps[{path, reason}]}`
-- `publication-unknown{operationId, parent, candidate, head}`: the candidate is not confirmed reachable. The operation remains held.
-- `rejected{message}` and `contended` remain in the public union for compatibility. Current publication handling returns `publication-unknown` whenever reachability is unconfirmed, including a rejected or head-moved classification.
+`apply(path, expected, next)` compares exact bytes (`null` means absence). A visible replacement with exact supported text uses Obsidian `vault.process`. Creations, deletions, binary changes, and other replacements use a durable `rename` intent with stage and hold files. For a visible rename replacement or deletion, an open `FileView` blocks dispatch; recovery also checks a view retargeted to the hidden hold. Native mode metadata has its own journal and follows root-observed renames. A mismatched pending intent blocks a different write at that path.
 
-`SessionStatus.phase` is one of `idle`, `local-changes`, `needs-decision`, `publication-unknown`, `applying`, `blocked` or `paused`.
+`pendingIntents()` is read-only. After the session's repository, pause, and installation fences, `recover({ replay, cancel })` may replay only an unfinished step of an accepted apply or reviewed restore or configuration operation with the same expected and next versions. Other intents are cancelled without installing their next version. Unexpected bytes produce stable native issues and a per-path hold. The engine saves verified byte evidence in pinned recovery before acknowledgement; an unverifiable issue remains unacknowledged and holds its path or the whole vault if the path is unknown. A native hold requires a decision, even if another path syncs successfully.
 
-### Enrollment
+Native evidence over 8 MiB remains at its source and appears as metadata in an `oversize-write` hold; the engine does not ingest those bytes. `GitObsidianVault.inspectOversize(id)` reads source size and modification time. `exportOversize(id, destination?)` copies to an excluded `.git-vault-sync-export-<uuid>` directory, checks the source again, and leaves it retained. `retainedHiddenSummary()` counts stage and hold files and known bytes. A decision must be durable before `acknowledgeRecovery` releases an oversize issue; acknowledgement checks the source metadata and does not delete the source. A changed retained version gets new evidence and needs a new decision. `nativeRecoveries()` exposes retained issues for the root Local recovery UI.
 
-`enroll` writes only the durable state. The checkpoint becomes the previewed head, and a per-path *carry* records what each local file descends from. The first `sync()` then downloads, uploads and asks for decisions through the normal guarded path. Preview actions:
+## Durable storage and recovery
 
-- `download`
-- `upload`
-- `conflict` (an `add-add` decision)
-- `update-local`, `review-local-deletion` and `review-remote-deletion`: only when re-enrolling after a pause. Local files are classified against the old checkpoint, so content removed by a rewrite is offered as a remote deletion and never silently re-uploaded.
+`state.ts` writes `github-vault-sync/4`. `parseState()` treats `DurableStore.load()` as untrusted: it checks shapes, own paths, scope membership, operations, references, preimage and incoming records, and blob hashes. Corrupt state yields `corrupt` instead of a silent reset. Older `/1` and `/2` reviews are retired during migration while their captured local and edited bytes become pinned recovery records. Legacy publications retain their identity for fenced settlement; an accepted old apply is replanned from a fresh capture. A missing legacy `__proto__` checkpoint entry is recovered from the immutable commit before deletion classification.
 
-The token covers the repository identity, head, old checkpoint, full local manifest, and the session’s local event generation. Forwarded events invalidate it even when the bytes return to the reviewed manifest. Preview tokens belong to one session instance; a restart requires a fresh preview.
+Recovery record bytes are immutable. Reasons include `sync`, `enrollment`, `restore`, `incoming`, `carried`, `publication-recovery`, `conflict-edit`, `migration`, and `native`. Records with bytes that may exist only locally remain pinned until explicit discard. The engine retains at most 20 unpinned records beyond active ones. `DurableStore.save()` must be durable when it resolves; a save may land and still return an error. `FileJournalStore` stores hash-checked record and content objects under `.git-vault-sync/<installationId>/`, with separate `modes` and `native` namespaces. It refuses a corrupt latest record and checks for a stale writer before append or compaction. The IO4 bound is four concurrent object writes or blob reads (`mapObjects`); each started write settles before the journal queue advances. `compact()` verifies the retained records, keeps the newest eight records and their referenced objects, then removes older records, unreferenced objects, and matching temporary files. It does not delete retained native stage or hold files or exported copies. Earlier journal records are not a permanent forensic archive.
 
-Enrollment returns `already-enrolled` while any operation is active, including during a repository identity pause. Enrollment cannot erase an uncertain publication. If the original repository identity is restored while an operation is held, `sync()` resumes that operation.
-
-### One sync transaction
-
-1. Load state, then check the repository identity. A mismatch pauses with `repository-changed`.
-2. Resume any persisted operation (see below).
-3. Durably mark a pending observation before reading the head when review or operation consent is live. Read the head and verify all bytes. Record the consent result and clear the marker in one save. If the checkpoint is not an ancestor of the head, pause with `history-rewritten`.
-4. Capture the vault and verify it. Every enrolled capture archives previously unarchived local drafts in pinned recovery and invalidates any review whose local manifest changed before returning. Inspection and previews can therefore save durable state without writing vault files.
-5. Verify the checkpoint against its immutable commit, reusing the head when identical. Recover a missing legacy `__proto__` baseline from that commit before classifying deletions. Other manifest differences pause with `base-mismatch`. Build the effective base from the checkpoint plus carry, using bytes from local, remote, or stored blobs.
-6. Validate the review head, captured local manifest, and local event generation before reusing decisions. Events observed before capture retire old approvals; events during capture, checkpoint verification, or reconciliation restart the review from a new capture. Prune approvals that no longer match current conflicts. The durable review includes approved conflicts so other unresolved paths cannot resurrect an invalidated approval. Status and sync outcomes show only unresolved conflicts.
-7. Save recovery records of every local draft, every preimage the steps may overwrite, and every intended incoming version. Incoming bytes are pinned for the active operation and available through `exportRecovery`. If nothing goes out, save an `apply` operation for the head. Otherwise `prepare` the candidate, require its files to equal the planned target exactly, and save a `publish` operation (parent, candidate, target, steps) **before** `publish(parent, candidate)`. Recheck the local event generation after preparation and after the durable operation save, immediately before publication dispatch. If it changed, clear the unsent operation durably and reconcile again without the old approvals. Apply-only operations receive the same check before starting vault writes. A candidate already dispatched to the repository retains the normal reachability settlement rules; later events cannot cancel its in-flight publication.
-8. Anything other than `accepted` is settled from the branch:
-   - Head equals the candidate, or the candidate is its ancestor: published, even if later commits reverted the content.
-   - Otherwise: return `publication-unknown` and retain the operation. An unchanged parent, a sibling descendant, an unrelated rewind, or a missing candidate cannot prove nonpublication. The engine prepares and publishes no further candidates while held.
-   - An ancestry lookup that throws leaves the operation in place as `publication-unknown`.
-   - A candidate is never re-published after it is known to have landed.
-9. Apply the steps with `LocalVault.apply(path, expected, next)`. When resuming after a restart, the vault is captured again and the target commit is read again first. Each dispatch consumes forwarded events and checks the operation's durable approval.
-   - Any forwarded local event revokes the operation's approval, including an unrelated change or a same-byte recreation. A captured manifest change also revokes approval. An adapter CAS result of `changed` independently proves a local change. Before dispatching each CAS with live consent, the engine saves a pending observation; afterward it saves the step result, updated local manifest or revocation, and settled observation together. A failed result save therefore leaves either the pending marker or the recorded result. Revocation survives review clearing, publication promotion, failure before persistence, save response loss, and restart.
-   - A pending or blocked reviewed step that still needs a write and has revoked approval is accounted for as `revoked`, without a vault dispatch. Its live bytes remain intact. Automatic steps can continue.
-   - Current equals `next`: the step counts as applied.
-   - Current differs from `expected`: the step is `changed`. The newer edit is kept and carried, with its own base, into the next reconcile, so it merges or conflicts instead of overwriting GitHub's change.
-   - `blocked`: the operation is held. Captures at resume and after application preserve newer drafts before the blocked return. Each later `sync()` makes exactly one more attempt, nothing else is published, and `keepLocal` or a manual change releases it.
-10. Recapture the vault after application. Save the exact newer draft bytes in pinned recovery records before advancing the checkpoint. Carry records the draft origin separately from its captured bytes. A revoked reviewed step uses its original conflict base as its carry origin. This lets the next reconcile request a fresh decision for a deletion or conflicting replacement, even if the bytes returned to the approved snapshot. Pin origin references before any intermediate save can prune blobs, then persist the carry with the new checkpoint. Edits to other paths during application are captured too. Only after every step is accounted for and newer drafts are durable does the checkpoint advance. Then clear decisions and review.
-
-### Approval for durable local steps
-
-State stores `observation: "settled" | "pending"`. Before a head read, enrolled vault capture, or local CAS that can disprove live consent, the engine durably saves `pending`. The port is called only after that save resolves. The result and its effect on consent are saved together with `settled`; CAS results also record the completed step and update the expected local manifest. Events received during the attempt save are checked again before a reviewed CAS dispatch.
-
-Loading an unresolved observation retires the review and decisions and revokes operation approval before further effects. The loader preserves captured local conflict versions and edited replacements in recovery, then durably settles that revocation. This is deliberately conservative: a pending save whose acknowledgement was lost can require fresh review even if the port was never called. Failure before the attempt save lands cannot dispatch the observation. Failure before the result save lands cannot restore approval, even when the observed bytes later return to their prior values. Observations without live review or valid operation approval need no consent marker.
-
-An operation stores `approval: {kind: "valid", local: Manifest}` or `{kind: "revoked"}` independently of the current review. The valid manifest starts with the captured local snapshot. A completed engine write updates that manifest at its path. Revocation applies to every remaining reviewed step, regardless of which path changed, and cannot become valid again within that operation.
-
-Resume and each local dispatch enforce revocation. A file already equal to the intended target counts as applied without a write. Completed or already dispatched writes retain their results. Publication settlement still follows branch reachability, and a revoked local step cannot cause an accepted candidate to be published again.
-
-After all steps are accounted for, the engine advances the checkpoint with carried drafts and clears the operation. A direct application can return `synced` with revoked paths in `carried`. The next sync produces a fresh review. A resumed application continues into reconciliation in the same sync. Automatic adapter blocks retain the existing `blocked` and `keepLocal` workflow.
-
-A save that throws does not advance the in-memory generation trusted by later loads. Queued event notifications therefore revoke a pending operation even when its save landed and its acknowledgement was lost. A notification whose save landed also protects a fresh session after restart. A save failure before persistence requires another successful save before restart can rely on that notification.
-
-### Other local decisions
-
-`resolve` checks the local event generation before recording a choice and after saving it. An intervening event returns `stale` and retires the approval durably. Restore tokens include the local event generation and session identity; `restore` checks again after its preservation save, before dispatching the guarded vault write. Same-byte cycles therefore require a fresh preview. Once a vault write or repository publication has been dispatched, later events cannot cancel that in-flight operation; CAS and post-application capture preserve newer drafts.
-
-`keepLocal` expresses the intent to retain the live file of a blocked step, without binding approval to captured bytes. The next application capture preserves its current bytes as a draft. Recovery listing, export, and discard operate on immutable record IDs rather than approval tokens.
-
-### Reviewed publication recovery
-
-`previewPublicationRecovery()` returns a token, the operation ID, the parent, the candidate, the current head, and three exact snapshots: `candidateFiles`, `headFiles`, and `localFiles`. The candidate must match its recorded immutable commit and target manifest. A reachable candidate returns `reachable`; normal sync can settle it.
-
-`recoverPublication({ token })` rechecks the repository identity, head, operation, captured local manifest, and local event generation. A changed review returns `stale`. A successful review archives the entire candidate and current local snapshot in pinned recovery records. It clears the operation and pauses with `history-rewritten`, requiring a new enrollment preview. No GitHub ref or vault file changes.
-
-The captured local versions become the origins for re-enrollment. Differences from the live head are then offered as local updates or reviewed remote deletions. Abandoned content is not automatically replayed. Restoring an archived draft later remains an explicit user action. Recovery requires access to the recorded candidate; an unavailable object leaves the operation held.
-
-## Durable state (`state.ts`)
-
-Format `github-vault-sync/2`, saved whole through `DurableStore.save`. It contains:
-
-- observation state `settled` or `pending`
-- repository identity
-- checkpoint `{commit, tree, files: Manifest}`
-- carry
-- at most one operation, with incoming preservation `{kind: "captured", recoveryId}` or `{kind: "legacy"}`
-- operation approval `{kind: "valid", local: Manifest}` or `{kind: "revoked"}`
-- step consent `{kind: "automatic"}` or `{kind: "reviewed", base: Ref | null}`, with status `pending`, `applied`, `changed`, `blocked`, `kept`, or `revoked`
-- pause
-- review `{head, scope, local: Manifest, conflicts}`
-- decisions
-- recovery records
-- content-addressed `blobs` (oid → base64)
-- an id counter
-
-`parseState` rejects any unknown or missing key, an invalid path, oid, mode or enum, duplicate steps or records, a step preimage missing from its recovery record, and any captured incoming step missing from its incoming recovery record or target manifest. Approval and consent metadata also have exact keys. Deletions require reviewed consent. A revoked step requires reviewed consent and revoked operation approval. Every referenced conflict origin must have verified local bytes. It also re-hashes every blob and requires every referenced blob to be present. Rejection yields `corrupt`, and every method then refuses to mutate. The root must move the bad state aside explicitly before enrolling again.
-
-Recovery reasons are `sync`, `enrollment`, `restore`, `incoming`, `carried`, `publication-recovery`, `conflict-edit`, and `migration`. Edited conflict replacements are archived when recorded, so invalidating approval cannot discard their bytes. Previous reviewed local versions are also archived before review replacement.
-
-Recovery records are immutable. A record stays pinned while any of its bytes might exist only on this device. Unpinned records, whose bytes are in an old or new checkpoint on GitHub, are pruned beyond the newest 20. Pinned records stay until `discardRecovery`.
-
-### Migration from older state
-
-Older `/2` records without `observation` cannot prove whether a consent-invalidating observation finished. They migrate as unresolved: review and decisions are retired, operation approval is revoked, and reviewed local versions and edited replacements are archived. Completed steps, carry, incoming recovery, publication identity, and reachability settlement remain intact. This also applies to older `/2` records that already contain operation approval and step consent metadata. A missing marker never grants permission to replay a publication or a reviewed local write.
-
-`parseState` accepts legacy state and returns `/2`. Legacy review and approvals are discarded because their scope cannot be proven. Captured local conflict versions and edited replacements are retained in pinned `migration` recovery records. Their timestamp is the epoch because the legacy state has no capture timestamp.
-
-Legacy operations retain their publication identity and completed steps, with incoming preservation marked `legacy` and operation approval revoked. Before a legacy apply operation resumes, the engine reads its immutable target, verifies it, and saves incoming step bytes as pinned recovery.
-
-Older operations in either format that lack approval and step consent metadata migrate with revoked approval. Every step is classified as reviewed because its consent source cannot be proven. Existing review and decisions are retired, with captured local versions and edited replacements archived in pinned `migration` records. A deletion's conservative conflict origin is its expected preimage. A replacement's origin is absence, so an existing local file conflicts with the target before replacement. Completed steps remain completed.
-
-Uncertain publication remains held until the candidate is reachable or explicitly abandoned after review. Revocation does not assert nonpublication or permit replay. Missing required preimages or corrupt blobs still yield `corrupt`. The state format remains `/2`; stores must preserve the observation, operation, and step fields.
-
-Surviving own JSON keys, including `__proto__`, are retained. Sync and re-enrollment compare the checkpoint with its immutable commit to repair a previously omitted `__proto__` baseline. An absent saved key alone never authorizes deletion. Bytes or operations already removed from old state cannot be reconstructed from the latest state. Journal compaction retains only the latest eight records and their referenced objects, so earlier records are not a permanent forensic archive; preserve a copy before recovery investigation.
-
-## Root UI changes
-
-The root UI handles `SyncOutcome.kind === "publication-unknown"` in every exhaustive outcome switch, including `plugin/src/main.ts`'s outcome formatter. The UI displays the held operation and offers a fresh `previewPublicationRecovery()` before calling `recoverPublication({ token })`. A successful `released` outcome leads to the existing enrollment preview. The scheduler retains its normal polling cadence while held and does not treat `head-moved` as permission to retry publication.
-
-The recovery browser accepts the new reasons above and can export the original, incoming, carried, or edited version. Callers use `Object.keys`, `Object.entries`, or `own` for file dictionaries; inherited methods such as `hasOwnProperty` are unavailable. A store or test fixture that validates state formats accepts `/2` and preserves legacy journal records.
-
-## Requirements on the root's ports
-
-- Both repository and vault snapshots retain every own path, including `__proto__`, `constructor`, and `toString`. The adapters use null-prototype dictionaries or own-key construction before returning snapshots.
-- `LocalVault.capture()` returns only in-scope paths with correct oids. It reports a stable mode for a file the engine wrote. An adapter that cannot store the executable bit either durably preserves logical modes for existing and new files or rejects unsupported `100755` entries before enrollment, publication, and application.
-- The root calls `notifyLocalChange()` immediately in each observed create, modify, delete, and rename event handler, before queueing or awaiting other work. Calling it exposes the event generation synchronously to an active sync; awaiting its result confirms durable review and operation invalidation for restart. Do not defer the call behind the scheduler or active sync. A notification retires approvals even if a later capture has identical bytes. The vault port itself has no generation or event feed; the session cannot detect events that the root does not forward.
-- `LocalVault.apply(path, expected, next)` is compare-and-swap:
-  - `expected: null` means exclusive create.
-  - `next: null` means move to trash.
-  - It returns `changed` if the file is not exactly `expected`.
-  - Markdown replacement should use the atomic `vault.process`.
-  - Existing binary replacement and deletion should return `blocked` until a safe primitive is demonstrated.
-- `Repository.publish` must use the exact `beforeOid`. The engine never needs a force update. `isAncestor` should throw rather than guess when it is unsure.
-- `DurableStore.save` must be durable when it resolves. It receives the whole state, including the observation marker, operation approval, step consent, and pinned blobs for local drafts, preimages, incoming versions, and conflict origins. A save may land and then throw. The store must retain the saved revocation fields when loading that record.
-
-## Known limits
-
-- Reachability cannot distinguish a never-published candidate from one published and then removed by a rewind. The engine holds both cases. Reviewed abandonment preserves bytes and requires re-enrollment.
-- Without a forwarded vault event, changes and reversals that occur entirely between captures are indistinguishable from unchanged inputs. Review invalidation covers observed head and local changes and forwarded events; it cannot identify an unobserved file incarnation from its bytes.
-- Observations with live consent add durable saves before dispatch and when recording the result; storage failures can require fresh review even without a content change.
-- Every sync verifies every byte of the head and the capture. This is simple and safe but costs O(vault size) hashing.
-- Edits made outside the CAS window by other writers, and unsaved editor buffers, are outside the engine's guarantee. Captured snapshots are the preservation contract.
+The root serializes plugin work across reloads and fences retired owners. It checks for a separate Git checkout and enabled competing sync plugins before sync or reviewed configuration application. Recovery and compaction are available through Local recovery. The maintained authored protocol models are Quint; finite model checks do not prove the TypeScript implementation, composed native disk behavior, Android acceptance, or a complete release.
