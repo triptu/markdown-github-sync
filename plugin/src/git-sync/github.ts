@@ -309,7 +309,8 @@ export class GitHubRepository implements Repository {
   }
   private async headOid(): Promise<string> {
     let ref: Record<string, unknown>;
-    try { ref = record(await this.rest(`/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}`)); }
+    const url = `${this.base}/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}?fresh=${globalThis.crypto.randomUUID()}`;
+    try { ref = record((await this.request(url, "GET", undefined, { "Cache-Control": "no-cache", Pragma: "no-cache" })).json); }
     catch (error) {
       if (error instanceof GitHubError && (error.status === 404 || error.status === 409)) throw new GitHubError("Unsupported enrollment: branch missing or repository empty/unborn", error.status);
       throw error;

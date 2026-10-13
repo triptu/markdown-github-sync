@@ -199,6 +199,33 @@ test("one-file deltas fetch only the new blob, even across an unrelated head and
   assert.deepEqual(await other.head(), parent);
   assert.deepEqual(objectGets(api), { commits: 1, trees: 1, blobs: 3, refs: 1 }, "instances must not share cache state");
 });
+test("mutable branch reads bypass a URL cache while ancestry still checks the new head", async () => {
+  const api = new FakeGitHub({ "note.md": file("base") });
+  const cachedRefs = new Map<string, GitHubResponse>();
+  const transport: GitHubTransport = {
+    async request(request) {
+      if (request.method !== "GET" || !new URL(request.url).pathname.includes("/git/ref/heads/")) return api.request(request);
+      const cached = cachedRefs.get(request.url);
+      if (cached) return cached;
+      const result = await api.request(request);
+      cachedRefs.set(request.url, result);
+      return result;
+    },
+  };
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport, token: async () => "t", installation: INSTALLATION });
+  const before = await repo.head();
+  api.head = api.addCommit({ "note.md": file("new") }, before.oid);
+  const after = await repo.head();
+  assert.equal(after.oid, api.head);
+  assert.equal(await repo.isAncestor(before.oid, after.oid), true);
+  const refReads = api.requests.filter(request => new URL(request.url).pathname.includes("/git/ref/heads/"));
+  assert.equal(refReads.length, 2, "each mutable branch read must reach the transport");
+  assert.notEqual(refReads[0]?.url, refReads[1]?.url);
+  for (const request of refReads) {
+    assert.equal(request.headers["Cache-Control"], "no-cache");
+    assert.equal(request.headers.Pragma, "no-cache");
+  }
+});
 test("caller mutation of snapshots, entries and prepared results cannot poison cached objects", async () => {
   const api = new FakeGitHub(), repo = client(api), parent = await repo.head();
   const expected = structuredClone(parent);
