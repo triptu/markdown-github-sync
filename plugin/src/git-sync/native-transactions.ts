@@ -16,7 +16,15 @@ export interface FileIntent {
   attempted: boolean;
   hostLifetime: string | null;
 }
-export interface NativeBytesRecovery extends NativeIssue { sourcePath: string }
+export interface NativeBytesRecovery {
+  id: string;
+  kind: "interrupted" | "displaced";
+  path: string;
+  sourcePath: string;
+  expected: Entry | null;
+  next: Entry | null;
+  found: Entry | null;
+}
 export interface NativeOversizeRecovery {
   id: string;
   kind: "oversize";
@@ -25,8 +33,17 @@ export interface NativeOversizeRecovery {
   expected: Entry | null;
   next: Entry | null;
   size: number;
+  mtime: number | null;
 }
 export type NativeRecovery = NativeBytesRecovery | NativeOversizeRecovery;
+export interface PendingNativeIntent {
+  id: string;
+  path: string;
+  expected: { oid: string; mode: Entry["mode"] } | null;
+  next: { oid: string; mode: Entry["mode"] } | null;
+  attempted: boolean;
+}
+interface AcknowledgedOversize { sourcePath: string; size: number; mtime: number | null }
 interface TrackedHidden {
   path: string;
   expected: Entry | null;
@@ -39,8 +56,12 @@ interface JournalState {
   intents: Record<string, FileIntent>;
   tracked: Record<string, TrackedHidden>;
   recoveries: NativeRecovery[];
+  acknowledgedOversize: AcknowledgedOversize[];
 }
 const uuid = /^[0-9a-f-]{36}$/;
+function isHiddenPath(root: string, path: string): boolean {
+  return new RegExp(`^${root.replaceAll(".", "\\.")}/(?:stage|hold)/[0-9a-f-]{36}$`).test(path);
+}
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -53,7 +74,9 @@ async function validateEntry(path: string, value: Entry | null): Promise<void> {
 }
 async function parseState(value: unknown, root: string): Promise<JournalState> {
   if (!object(value) || value.format !== 3 || !object(value.intents) || !object(value.tracked)
-    || !Array.isArray(value.recoveries)) throw new Error("Native transaction journal is corrupt.");
+    || !Array.isArray(value.recoveries)
+    || (value.acknowledgedOversize !== undefined && !Array.isArray(value.acknowledgedOversize)))
+    throw new Error("Native transaction journal is corrupt.");
   const intents: Record<string, FileIntent> = Object.create(null);
   for (const [path, raw] of Object.entries(value.intents)) {
     if (!object(raw) || !isSyncablePath(path) || raw.path !== path || typeof raw.id !== "string"
@@ -84,7 +107,7 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
       || !optionalEntry(raw.expected) || !optionalEntry(raw.next)
       || (raw.hostLifetime !== null && (typeof raw.hostLifetime !== "string" || !uuid.test(raw.hostLifetime)))
       || (raw.observed !== null && !isOid(raw.observed))
-      || !new RegExp(`^${root.replaceAll(".", "\\.")}/(?:stage|hold)/[0-9a-f-]{36}$`).test(hidden))
+      || !isHiddenPath(root, hidden))
       throw new Error("Native hidden-file tracking is corrupt.");
     await validateEntry(raw.path, raw.expected);
     await validateEntry(raw.path, raw.next);
@@ -100,10 +123,12 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
     await validateEntry(raw.path, raw.expected);
     await validateEntry(raw.path, raw.next);
     if (raw.kind === "oversize") {
-      if (typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0)
+      if (!isHiddenPath(root, raw.sourcePath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size <= 0
+        || (raw.mtime !== undefined && raw.mtime !== null
+          && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
         throw new Error("Native recovery record is corrupt.");
       recoveries.push({ id: raw.id, kind: "oversize", path: raw.path, sourcePath: raw.sourcePath,
-        expected: raw.expected, next: raw.next, size: raw.size });
+        expected: raw.expected, next: raw.next, size: raw.size, mtime: raw.mtime ?? null });
     } else if (raw.kind === "interrupted" || raw.kind === "displaced") {
       if (!optionalEntry(raw.found)) throw new Error("Native recovery record is corrupt.");
       await validateEntry(raw.path, raw.found);
@@ -111,13 +136,21 @@ async function parseState(value: unknown, root: string): Promise<JournalState> {
         expected: raw.expected, next: raw.next, found: raw.found });
     } else throw new Error("Native recovery record is corrupt.");
   }
-  return { format: 3, intents, tracked, recoveries };
+  const acknowledgedOversize: AcknowledgedOversize[] = [];
+  for (const raw of value.acknowledgedOversize ?? []) {
+    if (!object(raw) || typeof raw.sourcePath !== "string" || !isHiddenPath(root, raw.sourcePath)
+      || !Number.isSafeInteger(raw.size) || typeof raw.size !== "number" || raw.size <= 0
+      || (raw.mtime !== null && (typeof raw.mtime !== "number" || !Number.isSafeInteger(raw.mtime) || raw.mtime < 0)))
+      throw new Error("Native oversize acknowledgement is corrupt.");
+    acknowledgedOversize.push({ sourcePath: raw.sourcePath, size: raw.size, mtime: raw.mtime });
+  }
+  return { format: 3, intents, tracked, recoveries, acknowledgedOversize };
 }
 
 /** Native intent and evidence state in the same verified, compactable journal implementation as engine state. */
 export class NativeTransactionJournal {
   readonly root: string;
-  private state: JournalState = { format: 3, intents: Object.create(null), tracked: Object.create(null), recoveries: [] };
+  private state: JournalState = { format: 3, intents: Object.create(null), tracked: Object.create(null), recoveries: [], acknowledgedOversize: [] };
   private uncertain = false;
   private constructor(private files: JournalFiles, private store: FileJournalStore, installationId: string) {
     this.root = `.git-vault-sync/${installationId}`;
@@ -148,9 +181,15 @@ export class NativeTransactionJournal {
   }
   intent(path: string): FileIntent | null { this.trusted(); return this.state.intents[path] ?? null; }
   pending(): FileIntent[] { this.trusted(); return Object.values(this.state.intents); }
+  pendingIntents(): PendingNativeIntent[] {
+    return this.pending().map(intent => ({ id: intent.id, path: intent.path,
+      expected: intent.expectedEntry ? { oid: intent.expectedEntry.oid, mode: intent.expectedEntry.mode } : null,
+      next: intent.nextEntry ? { oid: intent.nextEntry.oid, mode: intent.nextEntry.mode } : null,
+      attempted: intent.attempted }));
+  }
   tracked(path: string): TrackedHidden | null { this.trusted(); return this.state.tracked[path] ?? null; }
   recoveries(): NativeRecovery[] { this.trusted(); return [...this.state.recoveries]; }
-  issues(): NativeIssue[] { this.trusted(); return this.state.recoveries.filter((item): item is NativeBytesRecovery => item.kind !== "oversize"); }
+  issues(): NativeIssue[] { this.trusted(); return [...this.state.recoveries]; }
   async begin(path: string, expected: Entry | null, next: Entry | null, method: NativeMethod, hostLifetime: string | null = null): Promise<FileIntent> {
     this.trusted();
     if (!isSyncablePath(path) || (!expected && !next)) throw new Error(`Unsupported native transaction path: ${path}`);
@@ -198,6 +237,8 @@ export class NativeTransactionJournal {
     }
     await this.save({ ...this.state, intents, tracked });
   }
+  /** Durable cancellation; hidden stage/hold files remain tracked for inspection. */
+  async cancel(path: string): Promise<void> { await this.finish(path); }
   async observe(path: string, oid: string): Promise<void> {
     this.trusted();
     const old = this.state.tracked[path];
@@ -232,12 +273,17 @@ export class NativeTransactionJournal {
   async retainMissing(path: string, expected: Entry | null, next: Entry | null): Promise<NativeBytesRecovery> {
     return this.retainIssue({ kind: "interrupted", path, sourcePath: path, expected, next, found: null });
   }
-  async retainOversize(path: string, sourcePath: string, expected: Entry | null, next: Entry | null, size: number): Promise<NativeOversizeRecovery> {
+  async retainOversize(path: string, sourcePath: string, expected: Entry | null, next: Entry | null,
+    size: number, mtime: number | null = null): Promise<NativeOversizeRecovery | null> {
     this.trusted();
-    const prior = this.state.recoveries.find(item => item.kind === "oversize" && item.sourcePath === sourcePath && item.size === size);
+    if (this.state.acknowledgedOversize.some(item => item.sourcePath === sourcePath && item.size === size && item.mtime === mtime)) return null;
+    const prior = this.state.recoveries.find(item => item.kind === "oversize" && item.sourcePath === sourcePath && item.size === size && item.mtime === mtime);
     if (prior?.kind === "oversize") return prior;
-    const record: NativeOversizeRecovery = { id: crypto.randomUUID(), kind: "oversize", path, sourcePath, expected, next, size };
-    await this.save({ ...this.state, recoveries: [...this.state.recoveries, record] });
+    const record: NativeOversizeRecovery = { id: crypto.randomUUID(), kind: "oversize", path, sourcePath, expected, next, size, mtime };
+    // A changed source supersedes its old metadata; the old version is no
+    // longer exportable or acknowledgeable from this path.
+    const recoveries = this.state.recoveries.filter(item => item.kind !== "oversize" || item.sourcePath !== sourcePath);
+    await this.save({ ...this.state, recoveries: [...recoveries, record] });
     return record;
   }
   async readEvidence(record: NativeBytesRecovery): Promise<Uint8Array> {
@@ -252,7 +298,12 @@ export class NativeTransactionJournal {
     this.trusted();
     const accepted = new Set(ids);
     const recoveries = this.state.recoveries.filter(item => !accepted.has(item.id));
-    if (recoveries.length !== this.state.recoveries.length) await this.save({ ...this.state, recoveries });
+    if (recoveries.length !== this.state.recoveries.length) {
+      const acknowledgedOversize = [...this.state.acknowledgedOversize];
+      for (const item of this.state.recoveries) if (accepted.has(item.id) && item.kind === "oversize")
+        acknowledgedOversize.push({ sourcePath: item.sourcePath, size: item.size, mtime: item.mtime });
+      await this.save({ ...this.state, recoveries, acknowledgedOversize });
+    }
   }
   async compact(): Promise<void> { this.trusted(); if (this.files.remove) await this.store.compact(); }
 }

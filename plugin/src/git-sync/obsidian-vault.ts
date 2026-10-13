@@ -1,8 +1,11 @@
 import { App, FileView, TFile } from "obsidian";
-import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, verifyEntry } from "./codec";
+import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry } from "./codec";
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
-import { NativeTransactionJournal, type FileIntent, type NativeRecovery } from "./native-transactions";
+import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
+
+export interface RecoveryAuthorization { replay: string[]; cancel: string[] }
+export interface UnreadableNativeFile { path: string; size: number; mtime: number | null; reason: "oversize" }
 
 const maxFileBytes = 8 * 1024 * 1024;
 const maxVaultBytes = 128 * 1024 * 1024;
@@ -12,6 +15,13 @@ function safePath(path: string): void {
   if (!isSyncablePath(path) || path.split("/").some(part => !part || part === "." || part === ".."
     || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
     || /[\\:\x00-\x1f\x7f]/.test(path)) throw new Error(`Unsupported vault path: ${path}`);
+}
+function safeExportPath(path: string): void {
+  if (!isValidPath(path)) throw new Error(`Unsupported export path: ${path}`);
+  const [directory, ...suffix] = path.split("/");
+  if (!/^\.git-vault-sync-export-[0-9a-f-]{36}$/.test(directory) || suffix.length === 0)
+    throw new Error(`Export must use a dedicated hidden directory: ${path}`);
+  safePath(suffix.join("/"));
 }
 function exactText(bytes: Uint8Array): string | null {
   try {
@@ -49,6 +59,11 @@ export class GitObsidianVault implements LocalVault {
   }
   private async hiddenBytes(path: string): Promise<Uint8Array | "oversize" | null> {
     if (!(await this.app.vault.adapter.exists(path))) return null;
+    const stat = await this.app.vault.adapter.stat(path);
+    if (stat?.type === "file" && stat.size > maxFileBytes) {
+      this.oversized.set(path, stat.size);
+      return "oversize";
+    }
     const file = this.app.vault.getAbstractFileByPath(path);
     if (file instanceof TFile && file.stat.size > maxFileBytes) {
       this.oversized.set(path, file.stat.size);
@@ -66,11 +81,15 @@ export class GitObsidianVault implements LocalVault {
     const bytes = await this.hiddenBytes(path);
     return bytes === null || bytes === "oversize" ? bytes : hashBlob(bytes);
   }
+  private async hiddenMtime(path: string): Promise<number | null> {
+    const stat = await this.app.vault.adapter.stat(path);
+    return stat?.type === "file" ? stat.mtime : null;
+  }
   private async preserve(path: string, intent: FileIntent, kind: "interrupted" | "displaced"): Promise<ApplyResult> {
     const bytes = path === intent.path ? await this.read(path) : await this.hiddenBytes(path);
     if (bytes === "oversize") {
       await this.transactions?.retainOversize(intent.path, path, intent.expectedEntry, intent.nextEntry,
-        this.oversized.get(path) ?? maxFileBytes + 1);
+        this.oversized.get(path) ?? maxFileBytes + 1, await this.hiddenMtime(path));
       return { kind: "blocked", reason: `Native recovery file exceeds 8 MiB: ${intent.path}. Review the retained hidden file.` };
     }
     if (bytes === null && path !== intent.path)
@@ -135,8 +154,17 @@ export class GitObsidianVault implements LocalVault {
       const staged = await this.stage(intent);
       if (staged) return this.finish(intent, staged);
       await this.transactions.markAttempted(intent.path);
+      if (this.openView(intent.path)) return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
       this.assertActive();
       await adapter.rename(intent.path, intent.hold!);
+      // The adapter may queue a rename while a view opens. Undo the retargeting
+      // before proceeding; the no-clobber reverse rename preserves later edits.
+      if (this.openView(intent.hold!)) {
+        await this.rollbackHeld(intent);
+        if (await this.oid(intent.path) === intent.expected && await this.hiddenOid(intent.hold!) === null)
+          await this.transactions.clearAttempt(intent.path);
+        return { kind: "blocked", reason: `Close the open view before replacing or deleting ${intent.path}.` };
+      }
       held = await this.hiddenOid(intent.hold!);
       if (held !== intent.expected) {
         const issue = await this.preserve(intent.hold!, intent, "displaced");
@@ -216,13 +244,53 @@ export class GitObsidianVault implements LocalVault {
     await this.modes.set(intent.path, intent.nextEntry.mode);
     return this.finish(intent, { kind: "applied" });
   }
-  /** Replays pending intents and scans hidden files once at this boundary, never per apply step. */
-  async recoverNative(): Promise<NativeRecovery[]> {
+  private async cancelIntent(intent: FileIntent): Promise<void> {
+    if (!this.transactions) return;
+    if (!intent.attempted) { await this.transactions.cancel(intent.path); return; }
+    const live = await this.oid(intent.path);
+    const held = intent.hold ? await this.hiddenOid(intent.hold) : null;
+    if (live === intent.expected && (held === null || held === intent.expected)) {
+      await this.transactions.cancel(intent.path);
+      return;
+    }
+    if (live === null && held === intent.expected && intent.hold) {
+      await this.rollbackHeld(intent);
+      await this.transactions.cancel(intent.path);
+      return;
+    }
+    if (held === "oversize" && intent.hold) {
+      await this.preserve(intent.hold, intent, "displaced");
+      await this.transactions.cancel(intent.path);
+      return;
+    }
+    if (held !== null && held !== intent.expected && intent.hold)
+      await this.preserve(intent.hold, intent, "displaced");
+    if (live === intent.next && intent.expectedEntry) {
+      await this.transactions.retainBytes(decodeBase64(intent.expectedEntry.data), intent.path,
+        intent.hold ?? intent.path, "displaced", intent.expectedEntry, intent.nextEntry);
+    } else if (live !== intent.expected && live !== intent.next) {
+      await this.preserve(intent.path, intent, "interrupted");
+    } else if (live === intent.next && intent.expected === null) {
+      await this.preserve(intent.path, intent, "interrupted");
+    }
+    await this.transactions.cancel(intent.path);
+  }
+  pendingIntents(): Promise<PendingNativeIntent[]> {
+    this.assertActive();
+    return Promise.resolve(this.transactions?.pendingIntents() ?? []);
+  }
+  /** Only an engine-authorized call may replay/cancel intents or persist hidden evidence. */
+  async recoverNative(authorization: RecoveryAuthorization): Promise<NativeRecovery[]> {
     this.assertActive();
     if (!this.transactions) return [];
+    const replay = new Set(authorization.replay), cancel = new Set(authorization.cancel);
+    for (const id of replay) if (cancel.has(id)) throw new Error(`Conflicting native recovery authorization: ${id}`);
     for (const intent of this.transactions.pending()) {
-      if (intent.method === "rename") await this.renameTransaction(intent);
-      else await this.textTransaction(intent);
+      if (cancel.has(intent.id)) await this.cancelIntent(intent);
+      else if (replay.has(intent.id)) {
+        if (intent.method === "rename") await this.renameTransaction(intent);
+        else await this.textTransaction(intent);
+      }
     }
     for (const kind of ["hold", "stage"] as const) {
       const directory = `${this.transactions.root}/${kind}`;
@@ -233,22 +301,14 @@ export class GitObsidianVault implements LocalVault {
         if (bytes === null) { await this.transactions.untrack(path); continue; }
         if (bytes === "oversize") {
           await this.transactions.retainOversize(tracked.path, path, tracked.expected, tracked.next,
-            this.oversized.get(path) ?? maxFileBytes + 1);
+            this.oversized.get(path) ?? maxFileBytes + 1, await this.hiddenMtime(path));
           continue;
         }
         const oid = await hashBlob(bytes);
-        // Only a new host App lifetime proves the old TFile and its delayed writes are gone.
-        // The journal has already durably stored and verified the exact preimage entry.
+        // No atomic remove-if-hash exists. Keep even clean preimages because a
+        // writer can change a hold between inspection and adapter.remove().
         const known = kind === "hold" ? tracked.expected : tracked.next;
-        if (tracked.hostLifetime && this.hostLifetime && tracked.hostLifetime !== this.hostLifetime
-          && known?.oid === oid && this.app.vault.adapter.remove) {
-          await verifyEntry(tracked.path, known);
-          this.assertActive();
-          await this.app.vault.adapter.remove(path);
-          await this.transactions.untrack(path);
-          continue;
-        }
-        if (oid === (kind === "hold" ? tracked.expected?.oid : tracked.next?.oid) || oid === tracked.observed) continue;
+        if (oid === known?.oid || oid === tracked.observed) continue;
         await this.transactions.retainBytes(bytes, tracked.path, path, "displaced", tracked.expected, tracked.next);
         await this.transactions.observe(path, oid);
       }
@@ -256,32 +316,123 @@ export class GitObsidianVault implements LocalVault {
     await this.transactions.compact();
     return this.transactions.recoveries();
   }
-  async recover(): Promise<NativeIssue[]> {
-    await this.recoverNative();
+  async recover(authorization?: RecoveryAuthorization): Promise<NativeIssue[]> {
+    if (!authorization) throw new Error("Native recovery requires engine authorization.");
+    await this.recoverNative(authorization);
     return this.transactions?.issues() ?? [];
   }
-  async acknowledgeRecovery(ids: string[]): Promise<void> { await this.transactions?.acknowledge(ids); }
-  nativeRecoveries(): NativeRecovery[] { return this.transactions?.recoveries() ?? []; }
-  async capture(): Promise<Snapshot> {
+  async acknowledgeRecovery(ids: string[]): Promise<void> {
     this.assertActive();
-    await this.recoverNative();
-    await this.modes.recover?.(path => this.oid(path));
-    const files = this.app.vault.getFiles().filter(file => visible(file.path));
+    const selected = new Set(ids);
+    for (const record of this.transactions?.recoveries() ?? []) {
+      if (record.kind !== "oversize" || !selected.has(record.id)) continue;
+      const { currentSize, currentMtime } = await this.inspectOversize(record.id);
+      if (currentSize !== record.size || currentMtime !== record.mtime)
+        throw new Error("Oversized source changed. Recover again before acknowledging.");
+    }
+    await this.transactions?.acknowledge(ids);
+  }
+  nativeRecoveries(): NativeRecovery[] { return this.transactions?.recoveries() ?? []; }
+  private oversizeRecord(id: string): NativeOversizeRecovery {
+    const record = this.transactions?.recoveries().find(item => item.id === id);
+    if (record?.kind !== "oversize") throw new Error(`Unknown oversized native recovery: ${id}`);
+    return record;
+  }
+  /** Metadata inspection does not read oversized bytes into the sync engine. */
+  async inspectOversize(id: string): Promise<{ recovery: NativeOversizeRecovery; currentSize: number | null; currentMtime: number | null }> {
+    this.assertActive();
+    const recovery = this.oversizeRecord(id);
+    const stat = await this.app.vault.adapter.stat(recovery.sourcePath);
+    return { recovery, currentSize: stat?.type === "file" ? stat.size : null,
+      currentMtime: stat?.type === "file" ? stat.mtime : null };
+  }
+  /** Copy to an excluded export directory, then publish by no-clobber rename. The source remains retained. */
+  async exportOversize(id: string, destination?: string): Promise<{ path: string; size: number }> {
+    this.assertActive();
+    const { recovery, currentSize, currentMtime } = await this.inspectOversize(id);
+    const output = destination ?? `.git-vault-sync-export-${crypto.randomUUID()}/${recovery.id}.bin`;
+    safeExportPath(output);
+    if (currentSize !== recovery.size || currentMtime !== recovery.mtime)
+      throw new Error("Oversized source changed. Recover again before exporting.");
+    const adapter = this.app.vault.adapter;
+    if (await adapter.exists(output)) throw new Error(`Export destination exists: ${output}`);
+    await this.folders(output);
+    const temporary = `${output.split("/")[0]}/.stage-${crypto.randomUUID()}`;
+    this.assertActive();
+    await adapter.copy(recovery.sourcePath, temporary);
+    const copied = await adapter.stat(temporary);
+    if (copied?.type !== "file" || copied.size !== recovery.size)
+      throw new Error(`Oversized export is incomplete at ${temporary}; source is retained.`);
+    const sourceAfter = await adapter.stat(recovery.sourcePath);
+    if (sourceAfter?.type !== "file" || sourceAfter.size !== recovery.size || sourceAfter.mtime !== recovery.mtime)
+      throw new Error(`Oversized source changed during export. Keep the copy at ${temporary} for inspection.`);
+    this.assertActive();
+    await adapter.rename(temporary, output);
+    return { path: output, size: copied.size };
+  }
+  /** Read-only storage accounting, including pending and untracked hidden files. */
+  async retainedHiddenSummary(): Promise<{ files: number; bytes: number; missingStats: number; holds: number; stages: number }> {
+    this.assertActive();
+    if (!this.transactions) return { files: 0, bytes: 0, missingStats: 0, holds: 0, stages: 0 };
+    const adapter = this.app.vault.adapter;
+    let files = 0, bytes = 0, missingStats = 0, holds = 0, stages = 0;
+    for (const kind of ["hold", "stage"] as const) {
+      const listed = await adapter.list(`${this.transactions.root}/${kind}`);
+      for (const path of listed.files) {
+        files++;
+        if (kind === "hold") holds++; else stages++;
+        const stat = await adapter.stat(path);
+        if (stat?.type === "file") bytes += stat.size;
+        else missingStats++;
+      }
+    }
+    return { files, bytes, missingStats, holds, stages };
+  }
+  /** Explicit user decision; the source is retained and later changed versions can reappear. */
+  async acknowledgeOversize(id: string): Promise<void> {
+    this.assertActive();
+    this.oversizeRecord(id);
+    await this.acknowledgeRecovery([id]);
+  }
+  async capture(): Promise<Snapshot> {
+    const { files, unreadable } = await this.scan();
+    if (unreadable.length) throw new Error(`File exceeds 8 MiB: ${unreadable[0].path}`);
+    return files;
+  }
+  /** Read-only survey; oversized visible files are reported without reading their bytes. */
+  async scan(): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
+    this.assertActive();
+    const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path));
     const snapshot: Snapshot = Object.create(null);
+    const unreadable: UnreadableNativeFile[] = [];
     const paths = new Set<string>();
     let total = 0;
-    for (const file of files) {
+    for (const file of visibleFiles) {
       safePath(file.path);
       const folded = file.path.normalize("NFC").toLowerCase();
       if (paths.has(folded)) throw new Error(`Case or Unicode path collision: ${file.path}`);
       paths.add(folded);
-      const bytes = await this.read(file.path);
-      if (!bytes) throw new Error("The vault changed during capture. Sync will retry.");
+      const stat = await this.app.vault.adapter.stat(file.path);
+      const size = stat?.type === "file" ? stat.size : file.stat.size;
+      const mtime = stat?.type === "file" ? stat.mtime : file.stat.mtime;
+      if (size > maxFileBytes) {
+        unreadable.push({ path: file.path, size, mtime, reason: "oversize" });
+        continue;
+      }
+      if (!(await this.app.vault.adapter.exists(file.path)))
+        throw new Error("The vault changed during capture. Sync will retry.");
+      const bytes = new Uint8Array(await this.app.vault.adapter.readBinary(file.path));
+      if (bytes.length > maxFileBytes) {
+        const grown = await this.app.vault.adapter.stat(file.path);
+        unreadable.push({ path: file.path, size: bytes.length,
+          mtime: grown?.type === "file" ? grown.mtime : null, reason: "oversize" });
+        continue;
+      }
       total += bytes.length;
       if (total > maxVaultBytes) throw new Error("Vault content exceeds the 128 MiB safety limit.");
       snapshot[file.path] = await entryFromBytes(bytes, this.modes.get(file.path));
     }
-    return snapshot;
+    return { files: snapshot, unreadable };
   }
   private async folders(path: string): Promise<void> {
     const parts = path.split("/"); parts.pop();
@@ -299,7 +450,12 @@ export class GitObsidianVault implements LocalVault {
     if (this.transactions?.recoveries().some(item => item.kind === "oversize" && item.path === path))
       return { kind: "blocked", reason: `Review oversized native recovery file for ${path} before writing this path.` };
     const pending = this.transactions?.intent(path);
-    if (pending) return pending.method === "rename" ? this.renameTransaction(pending) : this.textTransaction(pending);
+    if (pending) {
+      if (pending.expected !== (expected?.oid ?? null) || pending.next !== (next?.oid ?? null)
+        || pending.expectedEntry?.mode !== expected?.mode || pending.nextEntry?.mode !== next?.mode)
+        return { kind: "blocked", reason: `A different native transaction is pending for ${path}.` };
+      return pending.method === "rename" ? this.renameTransaction(pending) : this.textTransaction(pending);
+    }
     await this.modes.recover?.(pendingPath => this.oid(pendingPath));
     if (expected) await verifyEntry(path, expected);
     if (next) await verifyEntry(path, next);

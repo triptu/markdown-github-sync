@@ -78,3 +78,18 @@ test("duplicate native record sequence is rejected on open", async () => {
     await assert.rejects(NativeTransactionJournal.open(fs.files, installation), /Multiple journal writers/);
   } finally { await fs.close(); }
 });
+test("lost cancellation acknowledgment reopens as cancelled, never replayable", async () => {
+  const fs = await filesystem();
+  try {
+    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const before = await entryFromBytes(new Uint8Array([1]));
+    await journal.begin("n.md", before, null, "rename");
+    fs.loseNextRecordAck();
+    await assert.rejects(journal.cancel("n.md"), /lost acknowledgment/);
+    assert.throws(() => journal.pending(), /persistence is uncertain/);
+    const reopened = await NativeTransactionJournal.open(fs.files, installation);
+    assert.deepEqual(reopened.pendingIntents(), []);
+    await reopened.cancel("n.md");
+    assert.deepEqual((await NativeTransactionJournal.open(fs.files, installation)).pendingIntents(), []);
+  } finally { await fs.close(); }
+});
