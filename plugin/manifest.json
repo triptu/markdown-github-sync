@@ -1,0 +1,9 @@
+{
+  "id": "cloud-vault-sync",
+  "name": "Cloud Vault Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.6.0",
+  "description": "End-to-end encrypted sync through your own Cloudflare Worker.",
+  "author": "Cloud Vault Sync contributors",
+  "isDesktopOnly": false
+}
