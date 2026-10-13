@@ -14,7 +14,7 @@ for (const [path, expected] of Object.entries(expectedNativeSources))
   if (sha256(await readFile(path)) !== expected) throw new Error(`Native source changed: ${path}`);
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
-await mkdir("dist/native-editor-race", { recursive: true });
+await mkdir("dist/native-editor-race-r2", { recursive: true });
 await require("esbuild").build({
   entryPoints: ["plugin/test/native/editor-race-acceptance.ts"],
   bundle: true,
@@ -23,12 +23,12 @@ await require("esbuild").build({
   target: "es2020",
   external: ["obsidian"],
   define: { EXPECTED_PRODUCTION_SHA: JSON.stringify(expectedProductionSha) },
-  outfile: "dist/native-editor-race/main.js",
+  outfile: "dist/native-editor-race-r2/main.js",
 });
-await writeFile("dist/native-editor-race/manifest.json", JSON.stringify({
-  id: "git-sync-native-editor-race",
-  name: "Git Sync Native Editor Race Acceptance",
-  version: "0.0.1",
+await writeFile("dist/native-editor-race-r2/manifest.json", JSON.stringify({
+  id: "git-sync-native-editor-race-r2",
+  name: "Git Sync Native Editor Race Acceptance R2",
+  version: "0.0.2",
   minAppVersion: "1.11.4",
   description: "Disposable acceptance helper for the named synthetic Android vault",
   author: "Vault Sync",

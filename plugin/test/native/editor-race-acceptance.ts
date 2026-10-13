@@ -1,13 +1,17 @@
 import { FileView, MarkdownView, Plugin, TFile } from "obsidian";
 import { entryFromBytes } from "../../src/git-sync/codec";
-import type { Entry, NativeIssue } from "../../src/git-sync/contracts";
+import type { NativeIssue } from "../../src/git-sync/contracts";
 import { NativeTransactionJournal } from "../../src/git-sync/native-transactions";
 import { GitObsidianVault } from "../../src/git-sync/obsidian-vault";
 
 declare const EXPECTED_PRODUCTION_SHA: string;
 
-const progressPath = ".git-sync-native-editor-race-progress.json";
-const resultPath = ".git-sync-native-editor-race-result.json";
+const priorRunId = "254fe269-7e5d-4fea-8e85-c1a830544bf7";
+const priorResultPath = ".git-sync-native-editor-race-result.json";
+const priorArchivePath = `.git-sync-native-editor-race-r1-${priorRunId}-result.json`;
+const pointerPath = ".git-sync-native-editor-race-r2-run.json";
+const progressPath = (runId: string): string => `.git-sync-native-editor-race-r2-${runId}-progress.json`;
+const resultPath = (runId: string): string => `.git-sync-native-editor-race-r2-${runId}-result.json`;
 const encoder = new TextEncoder();
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -20,15 +24,24 @@ function buffer(bytes: Uint8Array): ArrayBuffer {
 
 type Check = { name: string; pass: boolean };
 type Progress = {
-  format: 1;
+  format: 2;
   runId: string;
   path: string;
   otherPath: string;
   hold: string;
   intentId: string;
   checks: Check[];
-  injection: { originalPathAtSecondRename: string; viewType: string; boundPath: string | null };
+  injection: { selection: "explicit-markdown-view-state"; originalPathAtSecondRename: string;
+    viewType: string; boundPath: string | null; sameOriginalTFile: boolean };
 };
+
+function parseRunId(value: unknown): string {
+  const runId = typeof value === "object" && value !== null ? Reflect.get(value, "runId") : null;
+  if (typeof value !== "object" || value === null || Reflect.get(value, "format") !== 2 ||
+      typeof runId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(runId))
+    throw new Error("Invalid editor race run pointer");
+  return runId;
+}
 
 function parseProgress(value: unknown): Progress {
   if (typeof value !== "object" || value === null) throw new Error("Invalid editor race progress");
@@ -40,7 +53,7 @@ function parseProgress(value: unknown): Progress {
   const checks = Reflect.get(value, "checks");
   const injection = Reflect.get(value, "injection");
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  if (Reflect.get(value, "format") !== 1 || typeof runId !== "string" || !uuid.test(runId) ||
+  if (Reflect.get(value, "format") !== 2 || typeof runId !== "string" || !uuid.test(runId) ||
       path !== `Native Editor Race ${runId}.md` || otherPath !== `Native Editor Race Other ${runId}.bin` ||
       typeof hold !== "string" || !hold.startsWith(`.git-vault-sync/${runId}/hold/`) ||
       typeof intentId !== "string" || !uuid.test(intentId) || !Array.isArray(checks) ||
@@ -49,8 +62,10 @@ function parseProgress(value: unknown): Progress {
   for (const item of checks) if (typeof item !== "object" || item === null ||
       typeof Reflect.get(item, "name") !== "string" || typeof Reflect.get(item, "pass") !== "boolean")
     throw new Error("Invalid editor race check");
-  if (typeof Reflect.get(injection, "originalPathAtSecondRename") !== "string" ||
+  if (Reflect.get(injection, "selection") !== "explicit-markdown-view-state" ||
+      typeof Reflect.get(injection, "originalPathAtSecondRename") !== "string" ||
       typeof Reflect.get(injection, "viewType") !== "string" ||
+      typeof Reflect.get(injection, "sameOriginalTFile") !== "boolean" ||
       !(Reflect.get(injection, "boundPath") === null || typeof Reflect.get(injection, "boundPath") === "string"))
     throw new Error("Invalid editor race injection");
   return value as Progress;
@@ -113,28 +128,52 @@ export default class NativeEditorRaceAcceptance extends Plugin {
     return new GitObsidianVault(this.app, undefined, undefined, transactions);
   }
 
-  private async report(completed: boolean, checks: Check[], runId: string | null, error: string | null,
+  private async preservePriorResult(): Promise<void> {
+    const fs = this.app.vault.adapter;
+    if (!await fs.exists(priorResultPath)) throw new Error("Prior Android failure result is missing");
+    const original = await fs.read(priorResultPath);
+    const result: unknown = JSON.parse(original);
+    if (typeof result !== "object" || result === null || Reflect.get(result, "runId") !== priorRunId ||
+        Reflect.get(result, "completed") !== false ||
+        Reflect.get(result, "error") !== "Obsidian did not open a real Markdown FileView on the held TFile")
+      throw new Error("Prior Android result differs from the reported failed run");
+    if (await fs.exists(priorArchivePath)) {
+      if (await fs.read(priorArchivePath) !== original) throw new Error("Prior result archive differs from original");
+    } else await fs.write(priorArchivePath, original);
+    if (await fs.read(priorArchivePath) !== original) throw new Error("Prior Android result was not preserved exactly");
+  }
+
+  private async report(completed: boolean, checks: Check[], runId: string, error: string | null,
     extra: Record<string, unknown> = {}): Promise<void> {
-    await this.app.vault.adapter.write(resultPath, JSON.stringify({ completed, runId, productionSha256: EXPECTED_PRODUCTION_SHA,
+    await this.app.vault.adapter.write(resultPath(runId), JSON.stringify({ completed, runId,
+      priorFailureArchive: priorArchivePath, productionSha256: EXPECTED_PRODUCTION_SHA,
       sourceBoundary: "Bundled current GitObsidianVault and NativeTransactionJournal with an isolated synthetic journal; installed production bundle hash checked separately",
+      selectionBoundary: "Host-created Markdown FileView requested explicitly by setViewState after displacement; natural UI open-request timing is not established",
       checks, error, ...extra }, null, 2));
   }
 
   private async execute(): Promise<void> {
     if (this.app.vault.getName() !== "Vault Sync Lab") return;
     const fs = this.app.vault.adapter;
-    if (await fs.exists(resultPath)) return;
-    if (await fs.exists(progressPath)) { await this.settleFromProgress(); return; }
+    if (await fs.exists(pointerPath)) {
+      const priorAttempt = parseRunId(JSON.parse(await fs.read(pointerPath)));
+      if (await fs.exists(resultPath(priorAttempt))) return;
+      if (await fs.exists(progressPath(priorAttempt))) { await this.settleFromProgress(); return; }
+      await this.report(false, [], priorAttempt, "Attempt interrupted before progress was recorded");
+      return;
+    }
     const checks: Check[] = [];
-    let runId: string | null = null;
+    const runId = crypto.randomUUID();
     const race: { injected: boolean; injection: Progress["injection"] | null } =
       { injected: false, injection: null };
     try {
+      await fs.write(pointerPath, JSON.stringify({ format: 2, runId }));
+      await this.preservePriorResult();
+      this.check(checks, "prior failed result archived byte for byte", true);
       this.check(checks, "installed production bundle is exact requested SHA",
         await this.sha256(".obsidian/plugins/github-vault-sync/main.js") === EXPECTED_PRODUCTION_SHA);
       this.check(checks, "production sync plugin disabled during isolated local race",
         !this.productionEnabled());
-      runId = crypto.randomUUID();
       const path = `Native Editor Race ${runId}.md`;
       const otherPath = `Native Editor Race Other ${runId}.bin`;
       this.check(checks, "synthetic names unused", !await fs.exists(path) && !await fs.exists(otherPath));
@@ -157,19 +196,25 @@ export default class NativeEditorRaceAcceptance extends Plugin {
         const originalPathAtSecondRename = file.path;
         if (!file.path.startsWith(`.git-vault-sync/${runId}/hold/`))
           throw new Error("Obsidian did not retarget the original TFile to its hidden hold");
-        await leaf.openFile(file);
+        // Obsidian's openFile chooses a view from the file's current extension.
+        // The hold has no extension, so model a request that selected Markdown
+        // while the original path still had .md. Obsidian must bind the file.
+        await leaf.setViewState({ type: "markdown", state: { file: file.path }, active: true });
+        await leaf.loadIfDeferred();
         const view = leaf.view;
-        race.injection = { originalPathAtSecondRename, viewType: view.getViewType(),
-          boundPath: view instanceof FileView ? view.file?.path ?? null : null };
+        race.injection = { selection: "explicit-markdown-view-state", originalPathAtSecondRename,
+          viewType: view.getViewType(), boundPath: view instanceof FileView ? view.file?.path ?? null : null,
+          sameOriginalTFile: view instanceof FileView && view.file === file };
         if (!(view instanceof MarkdownView) || view.file !== file || view.file.path !== file.path)
-          throw new Error("Obsidian did not open a real Markdown FileView on the held TFile");
+          throw new Error("Explicit Markdown view did not bind the original held TFile");
         return rename(from, to);
       };
       let result: Awaited<ReturnType<GitObsidianVault["apply"]>>;
       try { result = await vault.apply(path, expected, next); }
       finally { fs.rename = originalRename; }
-      this.check(checks, "queued stage-to-visible rename opened a real held FileView", race.injected &&
-        race.injection !== null && race.injection.boundPath === file.path && this.heldView(file.path));
+      this.check(checks, "explicit Markdown selection bound a real held FileView", race.injected &&
+        race.injection !== null && race.injection.sameOriginalTFile &&
+        race.injection.boundPath === file.path && this.heldView(file.path));
       const hold = file.path;
       this.check(checks, "second rename returns blocked", result.kind === "blocked");
       this.check(checks, "incoming bytes installed and original bytes held", await this.exact(path, nextBytes) &&
@@ -204,13 +249,13 @@ export default class NativeEditorRaceAcceptance extends Plugin {
         (await vault.pendingIntents()).some(pending => pending.id === intent.id));
       const injection = race.injection;
       if (injection === null) throw new Error("Missing second rename observation");
-      const progress: Progress = { format: 1, runId, path, otherPath, hold, intentId: intent.id, checks,
+      const progress: Progress = { format: 2, runId, path, otherPath, hold, intentId: intent.id, checks,
         injection };
-      await fs.write(progressPath, JSON.stringify(progress, null, 2));
+      await fs.write(progressPath(runId), JSON.stringify(progress, null, 2));
       this.watchForClose(progress);
     } catch (error) {
       await this.report(false, checks, runId, error instanceof Error ? error.message : String(error),
-        { injection: race.injection });
+        { path: `Native Editor Race ${runId}.md`, injection: race.injection });
     }
   }
 
@@ -235,11 +280,17 @@ export default class NativeEditorRaceAcceptance extends Plugin {
   private async settleFromProgress(): Promise<void> {
     if (this.settling || this.app.vault.getName() !== "Vault Sync Lab") return;
     const fs = this.app.vault.adapter;
-    if (await fs.exists(resultPath) || !await fs.exists(progressPath)) return;
+    if (!await fs.exists(pointerPath)) return;
+    const runId = parseRunId(JSON.parse(await fs.read(pointerPath)));
+    if (await fs.exists(resultPath(runId)) || !await fs.exists(progressPath(runId))) return;
     let progress: Progress;
-    try { progress = parseProgress(JSON.parse(await fs.read(progressPath))); }
+    try { progress = parseProgress(JSON.parse(await fs.read(progressPath(runId)))); }
     catch (error) {
-      await this.report(false, [], null, error instanceof Error ? error.message : String(error));
+      await this.report(false, [], runId, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (progress.runId !== runId) {
+      await this.report(false, [], runId, "Progress belongs to a different editor race run");
       return;
     }
     if (this.heldView(progress.hold)) { this.watchForClose(progress); return; }
