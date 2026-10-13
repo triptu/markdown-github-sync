@@ -163,7 +163,7 @@ Older operations in either format that lack approval and step consent metadata m
 
 Uncertain publication remains held until the candidate is reachable or explicitly abandoned after review. Revocation does not assert nonpublication or permit replay. Missing required preimages or corrupt blobs still yield `corrupt`. The state format remains `/2`; stores must preserve the observation, operation, and step fields.
 
-Surviving own JSON keys, including `__proto__`, are retained. Sync and re-enrollment compare the checkpoint with its immutable commit to repair a previously omitted `__proto__` baseline. An absent saved key alone never authorizes deletion. Bytes or operations already removed from old state cannot be reconstructed from the latest state; older journal records and immutable history remain evidence for reviewed recovery.
+Surviving own JSON keys, including `__proto__`, are retained. Sync and re-enrollment compare the checkpoint with its immutable commit to repair a previously omitted `__proto__` baseline. An absent saved key alone never authorizes deletion. Bytes or operations already removed from old state cannot be reconstructed from the latest state. Journal compaction retains only the latest eight records and their referenced objects, so earlier records are not a permanent forensic archive; preserve a copy before recovery investigation.
 
 ## Root UI changes
 

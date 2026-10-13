@@ -1,0 +1,52 @@
+{
+  "completed": true,
+  "platform": "Android 15 / Obsidian 1.14.4",
+  "checks": [
+    {
+      "name": "8 MiB displacement preserves exact original bytes",
+      "pass": true
+    },
+    {
+      "name": "8 MiB installation preserves exact incoming bytes",
+      "pass": true
+    },
+    {
+      "name": "rename refuses occupied destination without overwriting either file",
+      "pass": true
+    },
+    {
+      "name": "visible vault index recovers installed binary",
+      "pass": true
+    }
+  ],
+  "events": [
+    {
+      "event": "create",
+      "path": "Rename primitive 53834b54-1e7b-4930-993f-6e16cd6dd685.bin"
+    },
+    {
+      "event": "rename",
+      "path": ".git-sync-rename-probe-53834b54-1e7b-4930-993f-6e16cd6dd685/hold.bin",
+      "oldPath": "Rename primitive 53834b54-1e7b-4930-993f-6e16cd6dd685.bin"
+    },
+    {
+      "event": "delete",
+      "path": ".git-sync-rename-probe-53834b54-1e7b-4930-993f-6e16cd6dd685/hold.bin"
+    },
+    {
+      "event": "create",
+      "path": "Rename primitive 53834b54-1e7b-4930-993f-6e16cd6dd685.bin"
+    }
+  ],
+  "path": "Rename primitive 53834b54-1e7b-4930-993f-6e16cd6dd685.bin",
+  "hold": ".git-sync-rename-probe-53834b54-1e7b-4930-993f-6e16cd6dd685/hold.bin",
+  "before": "bdf23837181f5808331800c1ae2b4f7d7a839536b10d58491471c50dde23833a",
+  "next": "ff759025e49978f0771cff5dbb258aa590a58b3a8fe7826b95133285f77f6940",
+  "originalTFilePath": ".git-sync-rename-probe-53834b54-1e7b-4930-993f-6e16cd6dd685/hold.bin",
+  "displacedIndex": {
+    "originalTFilePath": ".git-sync-rename-probe-53834b54-1e7b-4930-993f-6e16cd6dd685/hold.bin",
+    "visiblePresent": false,
+    "hiddenPresent": false
+  },
+  "installedTFilePath": "Rename primitive 53834b54-1e7b-4930-993f-6e16cd6dd685.bin"
+}

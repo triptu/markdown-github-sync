@@ -194,10 +194,10 @@ async function cleanupFixture() {
 test("cleanup retains recent records and every referenced unpublished byte", async () => {
   const {files, store} = await cleanupFixture();
   const result = await store.compact();
-  assert.deepEqual(result, {recordsRemoved: 4, objectsRemoved: 4});
+  assert.deepEqual(result, {recordsRemoved: 4, objectsRemoved: 4, temporaryFilesRemoved: 0});
   assert.equal([...files.values.keys()].filter(path => path.includes("/records/")).length, 8);
   assert.deepEqual(plain(await new FileJournalStore(files, identity).load()), {sequence: 11, draft: {oid: "local", data: btoa("unpublished draft")}, file: {oid: "11", data: btoa("version 11")}});
-  assert.deepEqual(await store.compact(), {recordsRemoved: 0, objectsRemoved: 0});
+  assert.deepEqual(await store.compact(), {recordsRemoved: 0, objectsRemoved: 0, temporaryFilesRemoved: 0});
 });
 test("every interrupted cleanup boundary preserves the latest state and resumes", async () => {
   const sample = await cleanupFixture(); sample.files.count = 0; await sample.store.compact(); const boundaries = sample.files.count;
@@ -219,4 +219,33 @@ test("cleanup refuses stale writers and corrupt retained data before deleting an
   const latest = [...files.values.keys()].filter(path => path.includes("/records/")).sort().at(-1)!;
   files.values.set(latest, "{}");
   await assert.rejects(store.compact(), /checksum/); assert.equal(files.values.size, count);
+});
+
+test("cleanup removes interrupted-write temporary files only within its own namespace", async () => {
+  const { files, store } = await cleanupFixture();
+  const suffix = ".12345678-1234-1234-1234-123456789abc.tmp";
+  const object = `${store.directory}/objects/${"a".repeat(64)}.json${suffix}`;
+  const record = `${store.directory}/records/000000000013-${"b".repeat(64)}.json${suffix}`;
+  const preserved = [`${store.directory}/records/user.tmp`, `${store.directory}/hold/${"a".repeat(64)}.json${suffix}`, `${store.directory}/modes/objects/${"a".repeat(64)}.json${suffix}`];
+  for (const path of [object, record, ...preserved]) files.values.set(path, "partial");
+  const result = await store.compact();
+  assert.equal(result.temporaryFilesRemoved, 2);
+  assert.equal(files.values.has(object), false); assert.equal(files.values.has(record), false);
+  for (const path of preserved) assert.equal(files.values.has(path), true);
+  assert.equal(plain(await new FileJournalStore(files, identity).load()).sequence, 11);
+});
+
+test("cleanup after every failed append keeps the last committed state and removes its temporary debris", async () => {
+  const sample = new Files(), probe = new FileJournalStore(sample, identity);
+  await probe.save(original); sample.count = 0; await probe.save(updated);
+  for (let at = 1; at <= sample.count; at++) {
+    const files = new Files(), store = new FileJournalStore(files, identity);
+    await store.save(original); files.count = 0; files.failAt = at;
+    try { await store.save(updated); } catch { /* Every storage boundary is interrupted in turn. */ }
+    files.failAt = Infinity;
+    const reopened = new FileJournalStore(files, identity), committed = plain(await reopened.load());
+    await reopened.compact();
+    assert.deepEqual(plain(await new FileJournalStore(files, identity).load()), committed);
+    assert.equal([...files.values.keys()].some(path => path.endsWith(".tmp")), false, `boundary ${at}`);
+  }
 });

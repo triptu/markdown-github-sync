@@ -164,7 +164,7 @@ export class FileJournalStore implements DurableStore {
   save(state: unknown): Promise<void> {
     return serialize(this.files, this.directory, () => this.append(state));
   }
-  compact(): Promise<{ recordsRemoved: number; objectsRemoved: number }> {
+  compact(): Promise<{ recordsRemoved: number; objectsRemoved: number; temporaryFilesRemoved: number }> {
     return serialize(this.files, this.directory, async () => {
       if (!this.files.remove) throw new Error("This storage adapter does not support recovery cleanup.");
       if (!this.loaded) await this.loadRecord();
@@ -189,7 +189,7 @@ export class FileJournalStore implements DurableStore {
         references(state);
       }
       await this.assertHead();
-      let recordsRemoved = 0, objectsRemoved = 0;
+      let recordsRemoved = 0, objectsRemoved = 0, temporaryFilesRemoved = 0;
       // Remove obsolete records first: an interruption may leave extra objects, never dangling references.
       for (const record of records.slice(8)) { await this.files.remove(record.path); recordsRemoved++; }
       for (const path of (await this.files.list(`${this.directory}/objects`)).files) {
@@ -198,7 +198,20 @@ export class FileJournalStore implements DurableStore {
           await this.files.remove(path); objectsRemoved++;
         }
       }
-      return { recordsRemoved, objectsRemoved };
+      // Saves use the same queue. Only our exact temporary naming scheme is disposable.
+      for (const kind of ["records", "objects"] as const) {
+        const prefix = `${this.directory}/${kind}/`;
+        const pattern = kind === "records"
+          ? /^\d{12}-[a-f0-9]{64}\.json\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/
+          : /^[a-f0-9]{64}\.json\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp$/;
+        for (const path of (await this.files.list(`${this.directory}/${kind}`)).files) {
+          if (path.startsWith(prefix) && pattern.test(path.slice(prefix.length))) {
+            await this.files.remove(path);
+            temporaryFilesRemoved++;
+          }
+        }
+      }
+      return { recordsRemoved, objectsRemoved, temporaryFilesRemoved };
     });
   }
   private async assertHead(): Promise<void> {

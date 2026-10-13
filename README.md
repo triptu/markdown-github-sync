@@ -40,7 +40,7 @@ An uncertain publication, including some competing-device publication races, pau
 
 The recovery view exports captured files into a separate hidden folder. Historical restore accepts a vault-relative path and a full GitHub commit SHA, previews the result, and restores it as a local draft that can then be committed normally.
 
-Local journal records and immutable objects live under `.git-vault-sync/`. They are excluded from sync. Physical journal files currently remain indefinitely, but the browsable recovery index keeps only the latest 20 unpinned records; pinned recovery stays until explicitly discarded. Storage usage grows with edits; there is no garbage collector yet. Preserve that directory when investigating interrupted or corrupt state.
+Local journal records and immutable objects live under `.git-vault-sync/`. They are excluded from sync. Cleanup retains the latest eight journal checkpoints and every object they reference, including pinned recovery and active operations. The browsable recovery index keeps the latest 20 unpinned records; pinned recovery stays until explicitly discarded. Cleanup removes obsolete checkpoints before their unreferenced objects and can resume after interruption. Run it from local recovery; it also runs periodically after successful sync. Preserve the directory when investigating interrupted or corrupt state. These limits bound historical retention, not total bytes: large pinned recovery can still consume substantial space.
 
 ## Boundaries
 
