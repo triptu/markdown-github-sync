@@ -116,7 +116,6 @@ async function run(): Promise<void> {
   assert.equal((await b.head()).oid, recovery.oid);
   assert.equal(await a.isAncestor(downloaded.oid, recovery.oid), true);
   assert.equal(await a.isAncestor(recovery.oid, downloaded.oid), false);
-  assert.equal(sha(object((await harness(`/git/ref/heads/${encodeURIComponent(String(defaultBranch))}`, "GET")).object).sha), defaultHead, "default branch changed during lab test");
   // Real SyncSession + production GitHub adapter. Only the local filesystem is simulated.
   let armedRace = false, waiting = 0;
   let releaseRace: () => void = () => {};
@@ -178,6 +177,7 @@ async function run(): Promise<void> {
   assert.equal((await a.head()).oid, acceptedHead.oid, "Restart duplicated the accepted commit");
   await devices[1].session.sync();
   assert.equal(devices[1].vault.text("engine-lost-response.md"), "durable draft after restart");
+  assert.equal(sha(object((await harness(`/git/ref/heads/${encodeURIComponent(String(defaultBranch))}`, "GET")).object).sha), defaultHead, "default branch changed during lab test");
   console.log(JSON.stringify({ repository: `${owner}/${name}`, branch, seed, roundtrip: roundtrip.oid, binaryBytes: binary.length, race: race.map(r => r.accepted ? "accepted" : "not-accepted"), raceCandidates: [left.oid, right.oid], winner: winner.oid, forcedRewindCandidate: rewindCandidate.oid, forcedRewind: "blocked; head unchanged", lostResponse: recovery.oid, hiddenEntriesPreserved: hiddenEntries.length, engineRace: engineRace.map(outcome => outcome.kind), engineConverged: engineConverged.oid, engineLostResponseRestart: resumed.kind, acceptedHead: acceptedHead.oid, scope: "Production GitHub adapter and SyncSession; in-memory vault and durable-store serialization, not native filesystem or process-kill acceptance", requests, defaultBranchUnchanged: defaultHead }, null, 2));
 }
 void run().catch((error: unknown) => { console.error(error instanceof Error && !String(error.stack).includes(credential) ? error.stack : "Integration failed; sensitive error suppressed"); process.exitCode = 1; }).finally(() => { credential = ""; });

@@ -1,0 +1,31 @@
+{
+  "repository": "your-name/vault-sync-test",
+  "branch": "github-client-2026-10-13T16-35-53-673Z-7aefa3f9",
+  "seed": "58ade2ccb306acebc7ad0101a3e0e4a1257a5825",
+  "roundtrip": "1d808401d9f29d00db238961005757c18de871cc",
+  "binaryBytes": 4320889,
+  "race": [
+    "accepted",
+    "not-accepted"
+  ],
+  "raceCandidates": [
+    "89a1bdea39bfef6f40e68794360b0542cfa45f9b",
+    "27c1490c1ef825c584b6de228a3b2ad8de0b5d35"
+  ],
+  "winner": "89a1bdea39bfef6f40e68794360b0542cfa45f9b",
+  "forcedRewindCandidate": "fcf51221d0140eb443cc74937d145fa238c04184",
+  "forcedRewind": "blocked; head unchanged",
+  "lostResponse": "0b258f3ba7ef60c442ec794c28749b037cf68088",
+  "hiddenEntriesPreserved": 3,
+  "engineRace": [
+    "synced",
+    "synced"
+  ],
+  "engineConverged": "993abedb96ff7756a82d890e28cff95455a226e5",
+  "engineLostResponseRestart": "synced",
+  "acceptedHead": "0fab4490e689d846fcdab9c310c5a26efe881615",
+  "scope": "Production GitHub adapter and SyncSession; in-memory vault and durable-store serialization, not native filesystem or process-kill acceptance",
+  "requests": 206,
+  "defaultBranchUnchanged": "9471df028e8fbf9d34c9d5528a66d45211ba5b2f",
+  "defaultBranchCheckedAfterEngine": true
+}
