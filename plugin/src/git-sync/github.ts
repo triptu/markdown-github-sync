@@ -1,4 +1,6 @@
 import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+import { assertNoNestedGitignore, compileScope, scopeForTree } from "./scope";
+import type { Scope, ScopeRules } from "./scope";
 
 export interface GitHubRequest {
   url: string;
@@ -28,6 +30,10 @@ export interface GitHubRepositoryOptions {
   installation: string;
   /** Injectable clock for rate-limit scheduling. */
   now?: () => number;
+  /** Defaults to the existing visible-only behavior until the engine opts in. */
+  scopeRules?: ScopeRules["rules"];
+  /** Vault configuration directory; defaults to `.obsidian`. */
+  configDir?: string;
 }
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number, readonly retryAt?: number) { super(message); this.name = "GitHubError"; }
@@ -187,12 +193,18 @@ export class GitHubRepository implements Repository {
   private readonly base: string;
   private readonly now: () => number;
   private readonly ledger: string;
+  private readonly ruleVersion: ScopeRules["rules"];
+  private readonly configDir: string;
   private readonly cache = new Map<string, { object: CachedObject; cost: number }>();
+  private readonly scopeCache = new Map<string, Scope>();
   private cacheCost = 0;
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
     if (typeof options.installation !== "string" || !INSTALLATION.test(options.installation)) throw new GitHubError("Invalid installation identity");
+    if (options.scopeRules !== undefined && options.scopeRules !== "visible-only" && options.scopeRules !== "config/1") throw new GitHubError("Invalid scope rule version");
+    this.ruleVersion = options.scopeRules ?? "visible-only";
+    this.configDir = options.configDir ?? ".obsidian";
     this.ledger = `refs/vault-sync/devices/${options.installation}`;
     this.base = `https://api.github.com/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.name)}`;
     this.now = options.now ?? Date.now;
@@ -262,13 +274,17 @@ export class GitHubRepository implements Repository {
     return { id, owner, name, branch: this.options.branch };
   }
   async history(input: { path: string; at?: string; page?: number }): Promise<FileHistoryPage> {
-    if (!input.path || !visible(input.path)) throw new GitHubError("Choose a visible vault file for history");
+    if (!input.path) throw new GitHubError("Choose a vault file for history");
+    pathParts(input.path);
+    if (this.ruleVersion === "visible-only" && !visible(input.path)) throw new GitHubError("Choose a visible vault file for history");
     const page = input.page ?? 1;
     if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || (page > 1 && !input.at))
       throw new GitHubError("Invalid history page");
     const pinned = input.at === undefined ? undefined : oid(input.at);
     await this.identity();
     const at = pinned ?? await this.headOid();
+    if (this.ruleVersion === "config/1" && !(await this.scopeFor(at)).includes(input.path))
+      throw new GitHubError("File is outside the commit's scope");
     const query = new URLSearchParams({ sha: at, path: input.path, per_page: "30", page: String(page) });
     const rows = list(await this.rest(`/commits?${query}`));
     if (rows.length > 30) throw new GitHubError("Oversized history page");
@@ -318,10 +334,8 @@ export class GitHubRepository implements Repository {
       seen.add(path);
       if (item.type !== "blob" && item.type !== "tree" && item.type !== "commit") throw new GitHubError("Invalid tree object type");
       if (!(item.type === "tree" && mode === "040000" || item.type === "blob" && ["100644", "100755", "120000"].includes(mode) || item.type === "commit" && mode === "160000")) throw new GitHubError("Invalid tree object mode");
-      if (visible(path) && item.type !== "tree" && (item.type !== "blob" || (mode !== "100644" && mode !== "100755"))) throw new GitHubError("Symlink or submodule unsupported in content scope");
       return { path, mode, sha, type: item.type, ...(item.type === "blob" ? { size: size(item.size) } : {}) };
     });
-    validatePaths(items.filter(i => visible(i.path)).map(i => i.path));
     await verifyTree(items, hash);
     this.remember(hash, { kind: "tree", items });
     return items;
@@ -342,10 +356,42 @@ export class GitHubRepository implements Repository {
     this.remember(hash, { kind: "blob", size: length, data });
     return data;
   }
+  private async scopeForItems(treeOid: string, items: TreeItem[]): Promise<Scope> {
+    if (this.ruleVersion === "config/1") assertNoNestedGitignore(items.map(item => item.path));
+    const cached = this.scopeCache.get(treeOid);
+    if (cached) return cached;
+    const scope = await scopeForTree(items, async hash => {
+      const rootIgnore = items.find(item => item.path === ".gitignore");
+      if (!rootIgnore || rootIgnore.mode !== "100644" && rootIgnore.mode !== "100755" || rootIgnore.size === undefined)
+        throw new GitHubError("Unsupported root .gitignore entry");
+      return decode(await this.blob(hash, size(rootIgnore.size)));
+    }, this.configDir, this.ruleVersion);
+    if (this.scopeCache.size >= 256) this.scopeCache.delete(this.scopeCache.keys().next().value!);
+    this.scopeCache.set(treeOid, scope);
+    return scope;
+  }
+  /** The policy of this exact commit, including its pinned root `.gitignore`. */
+  async scopeFor(commitOid: string): Promise<Scope> {
+    const value = await this.getCommit(commitOid);
+    const items = await this.tree(value.treeOid);
+    return this.scopeForItems(value.treeOid, items);
+  }
+  /** Verified text for the engine's local transaction-scope freeze. */
+  async readRootGitignore(commitOid: string): Promise<string | null> {
+    const value = await this.getCommit(commitOid);
+    const items = await this.tree(value.treeOid);
+    await this.scopeForItems(value.treeOid, items);
+    if (this.ruleVersion === "visible-only") return null;
+    const rootIgnore = items.find(item => item.path === ".gitignore");
+    return rootIgnore ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(await this.blob(rootIgnore.sha, size(rootIgnore.size)))) : null;
+  }
   private async snapshot(value: Commit, items: TreeItem[]): Promise<CommitSnapshot> {
-    const included = items.filter(i => i.type === "blob" && visible(i.path));
+    const scope = await this.scopeForItems(value.treeOid, items);
+    const included = items.filter(i => i.type !== "tree" && scope.includes(i.path));
+    validatePaths(items.filter(i => scope.includes(i.path)).map(i => i.path));
     let total = 0;
     for (const item of included) {
+      if (item.type !== "blob" || item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Symlink or submodule unsupported in content scope");
       const length = size(item.size);
       total += length;
       if (length > FILE_LIMIT || total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded");
@@ -383,12 +429,24 @@ export class GitHubRepository implements Repository {
     const items = await this.tree(value.treeOid);
     const actual = await this.snapshot(value, items);
     if (!sameFiles(actual.files, parent.files)) throw new GitHubError("Parent snapshot mismatch");
+    const parentScope = await this.scopeForItems(value.treeOid, items);
     const checked = new Map<string, Entry | null>();
     const files: Snapshot = Object.assign(Object.create(null), actual.files);
     for (const [path, next] of Object.entries(changes)) {
-      if (!visible(path)) throw new GitHubError("Change outside visible content scope");
+      pathParts(path);
+      if (!parentScope.includes(path)) throw new GitHubError("Change outside parent commit scope");
       if (next === null) { delete files[path]; checked.set(path, null); }
       else { const verified = await entry(next); files[path] = verified.entry; checked.set(path, verified.entry); }
+    }
+    if (this.ruleVersion === "config/1") {
+      const rootIgnore = checked.get(".gitignore");
+      const ignoreText = rootIgnore === undefined ? await this.readRootGitignore(value.oid) :
+        rootIgnore === null ? null : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(rootIgnore.data));
+      const ignoreOid = rootIgnore === undefined ? parentScope.rules.gitignore : rootIgnore?.oid ?? null;
+      const candidateScope = await compileScope({ rules: "config/1", configDir: this.configDir, gitignore: ignoreOid }, ignoreText);
+      for (const path of checked.keys()) if (!candidateScope.includes(path))
+        throw new GitHubError("Change excluded by candidate .gitignore");
+      assertNoNestedGitignore(Array.from(new Set([...items.map(item => item.path), ...checked.keys()])));
     }
     validatePaths(Object.keys(files));
     const expected = terminals(items);
@@ -417,14 +475,22 @@ export class GitHubRepository implements Repository {
     // GitHub rejects an empty tree edit list; an unchanged candidate (a fence) reuses the parent tree.
     const treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
     const candidateItems = await this.tree(treeOid);
-    const excluded = (entries: TreeItem[]) => new Map(entries.filter(i => !visible(i.path)).map(i => [i.path, `${i.mode}:${i.type}:${i.sha}`]));
+    const sharedDirs = new Set<string>();
+    for (const item of items) if (item.type !== "tree" && parentScope.includes(item.path)) {
+      for (let slash = item.path.indexOf("/"); slash >= 0; slash = item.path.indexOf("/", slash + 1))
+        sharedDirs.add(item.path.slice(0, slash));
+    }
+    const excluded = (entries: TreeItem[]) => new Map(entries.filter(item =>
+      !parentScope.includes(item.path) && (item.type !== "tree" || !sharedDirs.has(item.path)))
+      .map(item => [item.path, `${item.mode}:${item.type}:${item.sha}`]));
     if (!sameMap(excluded(items), excluded(candidateItems))) throw new GitHubError("Prepared tree changed excluded repository paths");
     if (!sameMap(expected, terminals(candidateItems))) throw new GitHubError("Prepared tree does not preserve requested and excluded paths");
+    const candidateFiles = (await this.snapshot({ oid: "", treeOid, parents: [] }, candidateItems)).files;
     const created = await this.createCommit(message, treeOid, [value.oid]);
     // The receipt keeps every candidate reachable from the ledger, even after a branch rewind.
     const receiptMessage = `vault-sync receipt/1\n\nop: ${operation}\ninstallation: ${this.options.installation}\nparent: ${value.oid}\ncandidate: ${created}\nstatus: accepted\n`;
     const receipt = await this.createCommit(receiptMessage, treeOid, anchor === null ? [created] : [anchor, created]);
-    return { oid: created, treeOid, files, receipt };
+    return { oid: created, treeOid, files: candidateFiles, receipt };
   }
   async createSeal(input: { anchor: string | null; parent: string; operation: string }): Promise<string> {
     const anchor = input.anchor === null ? null : oid(input.anchor);

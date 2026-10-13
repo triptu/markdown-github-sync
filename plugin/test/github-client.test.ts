@@ -135,8 +135,8 @@ class FakeGitHub implements GitHubTransport {
 const INSTALLATION = "0f8a6e3c-1b2d-4c5e-8f90-123456789abc";
 const LEDGER = `refs/vault-sync/devices/${INSTALLATION}`;
 const L = { anchor: null, operation: "publish-1" };
-function client(api: FakeGitHub, token: () => Promise<string> = async () => "SHOULD_NOT_ESCAPE", installation = INSTALLATION): GitHubRepository {
-  return new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token, installation, now: () => 1_000_000 });
+function client(api: FakeGitHub, token: () => Promise<string> = async () => "SHOULD_NOT_ESCAPE", installation = INSTALLATION, scopeRules?: "visible-only" | "config/1", configDir?: string): GitHubRepository {
+  return new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token, installation, now: () => 1_000_000, scopeRules, configDir });
 }
 test("browser byte codec matches independent Git hashing including binary and empty blobs", async () => {
   for (const bytes of [Buffer.alloc(0), Buffer.from("\ufeffhello 日本語\r\n"), Buffer.from([0, 255, 128, 10])]) {
@@ -583,4 +583,149 @@ test("history rejects unsafe paths, unpinned later pages and malformed metadata"
   assert.equal(api.requests.length, 0);
   api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo/commits" ? response([{sha: "a".repeat(40), commit: { message: "broken", author: { name: "author", date: "not-a-date" } }}]) : undefined;
   await assert.rejects(repo.history({path: "note.md"}), /history date/);
+});
+
+test("config scope reads tracked eligible hidden files while preserving ignored and denied tree entries", async () => {
+  const initial = {
+    ".gitignore": file(".gitignore\n.obsidian/plugins/vikalp/data.json\n.obsidian/cache/\n"),
+    "note.md": file("note"),
+    ".obsidian/appearance.json": file("{\"theme\":\"dark\"}"),
+    ".obsidian/plugins/vikalp/main.js": file("plugin", "100755"),
+    ".obsidian/plugins/vikalp/data.json": file("private tracked bytes"),
+    ".obsidian/cache/index": file("cache"),
+    ".obsidian/workspace.json": file("workspace"),
+    ".obsidian/plugins/obsidian-git/main.js": file("competing"),
+    ".obsidian/plugins/github-vault-sync/data.json": file("device secret"),
+  };
+  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  const snapshot = await repo.head();
+  assert.deepEqual(Object.keys(snapshot.files).sort(), [".gitignore", ".obsidian/appearance.json", ".obsidian/plugins/vikalp/main.js", "note.md"].sort());
+  assert.equal(await repo.readRootGitignore(snapshot.oid), Buffer.from(initial[".gitignore"].data, "base64").toString());
+  const scope = await repo.scopeFor(snapshot.oid);
+  assert.equal(scope.rules.gitignore, initial[".gitignore"].oid);
+  assert.equal(scope.classify(".obsidian/plugins/vikalp/data.json"), "ignored");
+  assert.equal(scope.classify(".obsidian/plugins/obsidian-git/main.js"), "denied");
+  assert.equal(scope.classify(".gitignore"), "config-inert", "root control file cannot ignore itself");
+  const legacy = await client(api).head();
+  assert.deepEqual(Object.keys(legacy.files), ["note.md"], "default is still visible-only");
+});
+
+test("prepare retains every excluded parent terminal exactly and returns the candidate's new policy", async () => {
+  const initial = {
+    ".gitignore": file(".obsidian/cache/\n"),
+    "note.md": file("note"),
+    ".obsidian/config.json": file("tracked config"),
+    ".obsidian/cache/index": file("ignored bytes", "100755"),
+    ".obsidian/plugins/obsidian-git/main.js": file("denied bytes"),
+  };
+  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  const parent = await repo.head();
+  const candidate = await repo.prepare(parent, { ".gitignore": file(".obsidian/cache/\n.obsidian/config.json\n"), "note.md": file("edited") }, "scope update", L);
+  assert.deepEqual(Object.keys(candidate.files).sort(), [".gitignore", "note.md"]);
+  assert.equal(candidate.files["note.md"].oid, file("edited").oid);
+  const parentTree = api.files.get(parent.treeOid)!;
+  const candidateTree = api.files.get(candidate.treeOid)!;
+  for (const path of [".obsidian/config.json", ".obsidian/cache/index", ".obsidian/plugins/obsidian-git/main.js"]) {
+    assert.deepEqual(candidateTree.get(path), parentTree.get(path), `${path} is preserved with its exact bytes and mode`);
+  }
+  for (const path of [".obsidian/cache", ".obsidian/plugins/obsidian-git"]) {
+    assert.deepEqual(api.trees.get(candidate.treeOid)!.tree.find(item => item.path === path),
+      api.trees.get(parent.treeOid)!.tree.find(item => item.path === path), `${path} tree identity is preserved`);
+  }
+  assert.equal((await repo.scopeFor(candidate.oid)).includes(".obsidian/config.json"), false);
+  assert.deepEqual((await repo.readCommit(candidate.oid)).files, candidate.files);
+  assert.equal(api.head, parent.oid);
+});
+
+test("a new local ignore rule rejects changes it excludes before uploading or deleting", async () => {
+  for (const changed of [file("new private bytes"), null]) {
+    const api = new FakeGitHub({ ".gitignore": file(""), "note.md": file("base"), ".obsidian/plugins/vikalp/data.json": file("old") });
+    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    await assert.rejects(repo.prepare(parent, {
+      ".gitignore": file(".obsidian/plugins/vikalp/data.json\n"),
+      ".obsidian/plugins/vikalp/data.json": changed,
+    }, "unsafe policy edit", L), /excluded by candidate/);
+    assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+    assert.equal(api.files.get(parent.treeOid)!.get(".obsidian/plugins/vikalp/data.json")!.oid, file("old").oid);
+  }
+});
+
+test("denied and ignored tracked paths cannot be edited, including competing sync plugins", async () => {
+  const api = new FakeGitHub({
+    ".gitignore": file(".obsidian/plugins/vikalp/data.json\n"),
+    ".obsidian/plugins/vikalp/data.json": file("ignored"),
+    ".obsidian/plugins/obsidian-git/main.js": file("denied"),
+    ".obsidian/plugins/github-vault-sync/data.json": file("self"),
+    ".obsidian/workspace.json": file("live workspace"),
+    "note.md": file("safe"),
+  });
+  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  for (const path of [".obsidian/plugins/vikalp/data.json", ".obsidian/plugins/obsidian-git/main.js", ".obsidian/plugins/github-vault-sync/data.json", ".obsidian/workspace.json"]) {
+    await assert.rejects(repo.prepare(parent, { [path]: null }, "forbidden", L), /outside parent commit scope/);
+  }
+  assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+});
+
+test("different commits retain independent ignore policies and repeat reads reuse the pinned blob", async () => {
+  const api = new FakeGitHub({ ".gitignore": file(""), "note.md": file("one"), ".obsidian/config.json": file("config") });
+  const first = api.head;
+  const second = api.addCommit({ ".gitignore": file(".obsidian/config.json\n"), "note.md": file("two"), ".obsidian/config.json": file("config") }, first);
+  const repo = client(api, undefined, INSTALLATION, "config/1");
+  assert.ok((await repo.scopeFor(first)).includes(".obsidian/config.json"));
+  assert.equal((await repo.scopeFor(second)).includes(".obsidian/config.json"), false);
+  assert.ok((await repo.scopeFor(first)).includes(".obsidian/config.json"));
+  assert.equal((await repo.readCommit(first)).files[".obsidian/config.json"].oid, file("config").oid);
+  assert.equal((await repo.readCommit(second)).files[".obsidian/config.json"], undefined);
+  for (const ignoreOid of [file("").oid, file(".obsidian/config.json\n").oid]) {
+    assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${ignoreOid}`)).length, 1,
+      "each pinned policy blob is read only once");
+  }
+});
+
+test("nested ignore rules block config activation even inside denied directories", async () => {
+  const api = new FakeGitHub({ ".gitignore": file(""), ".obsidian/plugins/obsidian-git/.gitignore": file("secret\n"), "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1");
+  await assert.rejects(repo.head(), /Nested .gitignore is unsupported/);
+  await assert.rejects(repo.scopeFor(api.head), /Nested .gitignore is unsupported/);
+  assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
+});
+
+test("eligible hidden LFS pointers and size limits block config snapshots", async () => {
+  for (const hidden of [file("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 9\n"), file(Buffer.alloc(8 * 1024 * 1024 + 1))]) {
+    const api = new FakeGitHub({ ".obsidian/plugins/vikalp/main.js": hidden, "note.md": file("safe") });
+    await assert.rejects(client(api, undefined, INSTALLATION, "config/1").head(), /LFS|size limit/);
+  }
+});
+
+test("hidden symlinks block when eligible and remain untouched when ignored", async () => {
+  const symlink = { ...file("target"), mode: "120000" } as unknown as Entry;
+  const initial = { ".gitignore": file(""), ".obsidian/plugins/vikalp/main.js": symlink, "note.md": file("safe") };
+  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  await assert.rejects(repo.head(), /Symlink or submodule unsupported/);
+  const ignored = api.addCommit({ ...initial, ".gitignore": file(".obsidian/plugins/vikalp/main.js\n") }, api.head);
+  const snapshot = await repo.readCommit(ignored);
+  assert.equal(snapshot.files[".obsidian/plugins/vikalp/main.js"], undefined);
+  assert.equal(api.files.get(snapshot.treeOid)!.get(".obsidian/plugins/vikalp/main.js")!.mode, "120000");
+});
+
+test("history accepts only paths in the selected commit's scope, including tracked hidden paths", async () => {
+  const api = new FakeGitHub({ ".gitignore": file(".obsidian/plugins/vikalp/data.json\n"), ".obsidian/appearance.json": file("{}"), ".obsidian/plugins/vikalp/data.json": file("ignored"), "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1");
+  api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo/commits" ? response([]) : undefined;
+  const history = await repo.history({ path: ".obsidian/appearance.json", at: api.head });
+  assert.equal(history.at, api.head);
+  assert.equal(new URL(api.requests.at(-1)!.url).searchParams.get("path"), ".obsidian/appearance.json");
+  for (const path of [".obsidian/plugins/vikalp/data.json", ".obsidian/plugins/obsidian-git/main.js", "nested/.gitignore"]) {
+    await assert.rejects(repo.history({ path, at: api.head }));
+  }
+});
+
+test("explicit configuration directory is applied to commit scope", async () => {
+  const api = new FakeGitHub({ ".gitignore": file(".vault/private.json\n"), ".vault/settings.json": file("sync"), ".vault/private.json": file("ignored"), ".obsidian/settings.json": file("other config"), "note.md": file("safe") });
+  const repo = client(api, undefined, INSTALLATION, "config/1", ".vault");
+  const head = await repo.head();
+  assert.ok(head.files[".vault/settings.json"]);
+  assert.equal(head.files[".vault/private.json"], undefined);
+  assert.equal(head.files[".obsidian/settings.json"], undefined);
+  assert.equal((await repo.scopeFor(head.oid)).rules.configDir, ".vault");
 });
