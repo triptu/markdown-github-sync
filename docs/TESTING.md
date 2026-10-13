@@ -1,17 +1,26 @@
 # Validation
 
-Run `npm run check` for TypeScript validation, plugin tests, real Cloudflare workerd tests, and the plugin build. Server deployment shape is checked with `cd server && npx wrangler deploy --dry-run`. These checks do not prove native Obsidian UI or mobile filesystem behavior.
+The current plugin talks directly to GitHub. No Cloudflare deployment or setup code is involved. The retained `server/` tests cover the earlier prototype only.
 
-Before using a real vault, run this acceptance pass on a disposable vault on each target platform:
+Run `npm run check` for plugin/server typechecks, tests, and the plugin build. Run the Quint checks documented in [formal/README.md](../formal/README.md) separately. Neither establishes native Obsidian behavior. Device evidence must identify the installed `main.js` SHA-256, Obsidian version, platform, and result file; a later build does not inherit an earlier device pass.
 
-1. Install and enable the plugin; configure the deployed HTTPS Worker on laptop A. Add a note, nested note, Canvas file and binary attachment. Sync with an empty laptop B and phone vault using the same private setup code. Verify bytes and links.
-2. Edit offline on both laptops, reconnect and sync twice. Verify both conflicting versions survive. Check conflict copies reach the phone.
-3. Delete an already-synced file on one device; confirm the others remove it. Edit the same file offline on a second device before receiving deletion and confirm the edit survives in a conflict copy.
-4. Rename a folder, sync twice, and confirm new paths and old-path tombstones settle. Try case-only conflicting names and confirm the pass stops instead of overwriting.
-5. Disable networking during upload. Restart the plugin, reconnect and verify convergence. Repeat while downloading.
-6. Enter the wrong token/key on a fresh test vault. Confirm it fails without modifying local files.
-7. Recover both an older note and an attachment through history. Confirm recovery creates new files and leaves the current revision intact. Inspect local recovery copies and trash.
-8. Background the phone, edit on a laptop, then foreground Obsidian. Confirm it catches up. Do not expect background delivery.
-9. Check plugin status after an oversized file, server error, and invalid configuration. Resolve the cause and sync again.
+## Disposable-vault acceptance
 
-Known native API limit: text changes use `Vault.process`; binary writes and deletion have comparison guards plus backups but cannot provide fully atomic compare-and-swap. Physical iOS/Android and live desktop verification remain unperformed in this environment.
+Use a private synthetic repository and separate test vaults. Never point an acceptance helper at the original vault or its repository. Preserve failed results and use a fresh run identifier for a retry.
+
+1. Install the built plugin on desktop and Android. Configure the private repository, existing branch and Obsidian SecretStorage credential. Review enrollment; verify it refuses a local `.git` checkout and competing sync plugins. Enroll each installation separately without copying journals or device identifiers.
+2. With automatic sync enabled, save different notes on two devices from the same checkpoint. Verify GitHub commits contain both edits and both vaults converge. Repeat with concurrent publication and after returning from the background. Background delivery is not promised.
+3. Test note creation, replacement, folder rename, attachment creation and replacement, and one-sided deletion. Verify exact bytes on GitHub and the receiving device. Close views before binary replacement or deletion; an open view must hold the affected path while unrelated files progress.
+4. Make overlapping edits and an edit-versus-deletion conflict. Verify both versions remain recoverable, inspect the conflict UI, and resolve through the production controls. Change a version after preview and confirm stale approval is rejected.
+5. Exercise a naturally opened Markdown note with clean, dirty-unsaved and saved editor state. Plain UTF-8 fixtures must exercise `Vault.process`; a fixture containing control bytes exercises the binary transaction instead. Record host merge behavior separately from the guarantee for saved bytes.
+6. Interrupt network requests and restart Obsidian during publication and native application. Verify receipts settle ambiguous publication, durable recovery preserves captured versions, and retries converge. Injected adapter failures and actual process termination are separate evidence.
+7. Browse history, preview an older note or attachment, and restore it as a local draft. Verify the subsequent commit contains the chosen bytes without rewriting Git history. Test a local edit after preview and a remote-head change before publication.
+8. Review incoming configuration through the production UI. Verify unapplied settings stay deferred, a stale write by a still-running plugin stays held across restart, and unrelated notes continue syncing. Test configuration restore and fresh consent after GitHub changes. New hidden additions require their own publication approval.
+9. Exercise unreadable/oversized files, wrong credentials, unavailable GitHub, and invalid scope. Verify affected data is preserved and the status explains outstanding work. Export recovery without clobbering visible content; cleanup must preserve active and pinned evidence.
+10. Re-run the relevant acceptance on the exact packaged bundle. Compare checksums, keep the result artifacts, and record any untested platform or authorization type before rollout.
+
+## Evidence and limits
+
+See [implementation gates](implementation-plan.md), [Android V2 results](verification/android-v2.md), [editor host assessment](verification/editor-host-evidence-assessment-r4.md), and [Quint verification](verification/quint.md). Earlier failures remain failures even when a later retry succeeds.
+
+The native adapter compares saved bytes and retains recovery evidence. It does not own Obsidian's unsaved buffers or third-party editor state. Source inspection of Obsidian 1.14.4 finds Markdown merging on external modification, while Canvas and Bases use different host behavior; real-host tests must distinguish those paths. Emulator and process-restart checks do not establish physical-phone storage behavior or hardware power-loss durability.
