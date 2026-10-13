@@ -1015,7 +1015,9 @@ export class SyncSession {
     }
     let guardsChanged = false;
     for (const [path, guard] of Object.entries(state.configurationGuards)) {
-      if (guard.consent && state.base.commit !== guard.consent.head && sameRef(state.base.files[path], guard.consent.version)) {
+      // Consent is consumed once its bytes are the checkpoint, even when no
+      // commit was needed because the checkpoint already had those bytes.
+      if (guard.consent && sameRef(state.base.files[path], guard.consent.version)) {
         guard.applied = guard.consent.version;
         guard.consent = null;
         guardsChanged = true;
@@ -1029,10 +1031,11 @@ export class SyncSession {
       }
       const observed = this.#observeLocal(state, local, path);
       const authorized = observed.kind === "known" && guard.consent && sameRef(guard.consent.version, observed.entry) && guard.consent.head === head.oid && guard.consent.scope === headScope.digest;
+      const needsReconsent = observed.kind === "known" && needsConfigurationReconsent(guard, observed.entry, head.oid, headScope.digest);
       // A new host proves nothing about what was flushed at shutdown. Compare
       // its first observed version before retiring the old host's guard.
       if (guard.hostLifetimeId !== this.#hostLifetimeId) {
-        if (observed.kind === "known" && (sameEntry(observed.entry, guard.applied) || authorized)) {
+        if (observed.kind === "known" && ((sameEntry(observed.entry, guard.applied) && !needsReconsent) || authorized)) {
           delete state.configurationGuards[path];
           guardsChanged = true;
           continue;
@@ -1040,8 +1043,7 @@ export class SyncSession {
         guard.hostLifetimeId = this.#hostLifetimeId;
         guardsChanged = true;
       }
-      if (observed.kind === "unknown" || (sameEntry(observed.entry, guard.applied) &&
-          !needsConfigurationReconsent(guard, observed.entry, head.oid, headScope.digest))) continue;
+      if (observed.kind === "unknown" || (sameEntry(observed.entry, guard.applied) && !needsReconsent)) continue;
       if (!authorized) this.#guarded.push(path);
     }
     // A deferred live path and every unconsented hidden addition are held out

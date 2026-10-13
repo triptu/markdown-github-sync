@@ -96,6 +96,59 @@ for (const guarded of [true, false]) {
     assert.ok(stillHeld.kind === "configuration" && stillHeld.guarded.some((item) => item.path === PATH));
   });
 
+  test(`${guarded ? "existing" : "new"} guard: consent to already-published bytes clears the hold without a commit`, async () => {
+    const data = await fixture(guarded);
+    assert.equal((await restore(data.first, data.historical)).kind, "restored");
+    await data.vault.write(PATH, NEW);
+    await data.first.sync();
+    const preview = await data.first.previewGuardedConfigurationPublication(PATH);
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") throw Error("Missing guarded publication preview");
+    assert.equal((await data.first.consentGuardedConfigurationPublication({ path: PATH, token: preview.token })).kind, "recorded");
+
+    const head = data.repository.branchHead;
+    assert.equal((await data.first.sync()).kind, "up-to-date");
+    assert.equal(data.repository.branchHead, head, "consent to the current base creates no commit");
+    const settled = (await state(data.store)).configurationGuards[PATH];
+    assert.equal(settled?.applied?.oid, (await entryFromText(NEW)).oid);
+    assert.equal(settled?.consent, null);
+    const listing = await data.first.listConfiguration();
+    assert.ok(listing.kind === "configuration" && !listing.guarded.some((item) => item.path === PATH));
+    assert.equal((await data.first.previewGuardedConfigurationPublication(PATH)).kind, "missing");
+
+    await data.vault.write(PATH, "later edit");
+    await data.first.sync();
+    assert.equal(data.repository.branchHead, head, "a later edit still needs its own consent");
+    const later = await data.first.listConfiguration();
+    assert.ok(later.kind === "configuration" && later.guarded.some((item) => item.path === PATH));
+  });
+
+  for (const syncBeforeRestart of [false, true]) {
+    test(`${guarded ? "existing" : "new"} guard: moved-head direct restore stays held after restart ${syncBeforeRestart ? "after" : "before"} first sync`, async () => {
+      const data = await fixture(guarded);
+      assert.equal((await restore(data.first, data.historical)).kind, "restored");
+      await data.repository.push({ "note.md": await entryFromText("remote note") });
+      if (syncBeforeRestart) {
+        await data.first.sync();
+        assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW);
+      }
+
+      const restarted = data.session("host-2");
+      await restarted.sync();
+      assert.equal(data.vault.text(PATH), OLD);
+      assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW, "restart does not publish without fresh consent");
+      assert.equal((await state(data.store)).configurationGuards[PATH]?.hostLifetimeId, "host-2");
+      const listing = await restarted.listConfiguration();
+      assert.ok(listing.kind === "configuration" && listing.guarded.some((item) => item.path === PATH));
+      const preview = await restarted.previewGuardedConfigurationPublication(PATH);
+      assert.equal(preview.kind, "preview");
+      if (preview.kind !== "preview") throw Error("Missing re-consent preview");
+      assert.equal((await restarted.consentGuardedConfigurationPublication({ path: PATH, token: preview.token })).kind, "recorded");
+      await restarted.sync();
+      assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), OLD, "fresh consent releases the restore");
+    });
+  }
+
   test(`${guarded ? "existing" : "new"} guard: resumed restore after head moves keeps re-consent through a stale flush`, async () => {
     const data = await fixture(guarded);
     failRestoreRecordSave(data.store);
@@ -112,23 +165,29 @@ for (const guarded of [true, false]) {
     assert.ok(listing.kind === "configuration" && listing.guarded.some((item) => item.path === PATH));
     assert.equal((await writer.previewGuardedConfigurationPublication(PATH)).kind, "preview", "the restored bytes can be re-consented");
 
+    const restarted = data.session("host-3");
+    await restarted.sync();
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW, "the re-consent hold survives an Obsidian restart");
+    assert.equal((await state(data.store)).configurationGuards[PATH]?.hostLifetimeId, "host-3");
+    assert.equal((await restarted.previewGuardedConfigurationPublication(PATH)).kind, "preview");
+
     await data.vault.write(PATH, NEW);
-    await writer.sync();
+    await restarted.sync();
     assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW);
-    const afterFlush = await writer.listConfiguration();
+    const afterFlush = await restarted.listConfiguration();
     assert.ok(afterFlush.kind === "configuration" && afterFlush.guarded.some((item) => item.path === PATH));
 
     await data.vault.write(PATH, OLD);
-    const preview = await writer.previewGuardedConfigurationPublication(PATH);
+    const preview = await restarted.previewGuardedConfigurationPublication(PATH);
     assert.equal(preview.kind, "preview");
     if (preview.kind !== "preview") throw Error("Missing re-consent preview");
-    assert.equal((await writer.consentGuardedConfigurationPublication({ path: PATH, token: preview.token })).kind, "recorded");
-    await writer.sync();
+    assert.equal((await restarted.consentGuardedConfigurationPublication({ path: PATH, token: preview.token })).kind, "recorded");
+    await restarted.sync();
     assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), OLD, "fresh consent publishes the reviewed restore");
     await data.vault.write(PATH, NEW);
-    await writer.sync();
+    await restarted.sync();
     assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), OLD);
-    const afterPublication = await writer.listConfiguration();
+    const afterPublication = await restarted.listConfiguration();
     assert.ok(afterPublication.kind === "configuration" && afterPublication.guarded.some((item) => item.path === PATH));
   });
 
