@@ -441,3 +441,30 @@ for (const visibility of [false, undefined, "true", null]) {
     assert.equal(api.requests[0].method, "GET");
   });
 }
+
+test("file history pins pagination to a commit and safely encodes the file path", async () => {
+  const api = new FakeGitHub(), repo = client(api), originalHead = api.head;
+  const metadata = (index: number) => ({ sha: index.toString(16).padStart(40, "0"), commit: { message: `Version ${index}\nDetails`, author: { name: "Writer", date: "2026-10-13T12:00:00Z" } } });
+  api.intercept = request => {
+    const url = new URL(request.url);
+    if (url.pathname !== "/repos/owner/repo/commits") return undefined;
+    assert.equal(url.searchParams.get("sha"), originalHead);
+    assert.equal(url.searchParams.get("path"), "Notes/a & b.md");
+    return response(url.searchParams.get("page") === "1" ? Array.from({length: 30}, (_, i) => metadata(i + 1)) : [metadata(31)]);
+  };
+  const first = await repo.history({ path: "Notes/a & b.md" });
+  assert.equal(first.at, originalHead); assert.equal(first.entries.length, 30); assert.equal(first.nextPage, 2);
+  assert.deepEqual(first.entries[0], { commit: "1".padStart(40, "0"), message: "Version 1\nDetails", author: "Writer", date: "2026-10-13T12:00:00Z" });
+  api.head = api.addCommit({ "note.md": file("changed") }, api.head);
+  const second = await repo.history({path: "Notes/a & b.md", at: first.at, page: 2});
+  assert.equal(second.entries.length, 1); assert.equal(second.nextPage, null);
+  assert.equal(api.requests.filter(request => request.url.includes("/git/ref/")).length, 1);
+});
+test("history rejects unsafe paths, unpinned later pages and malformed metadata", async () => {
+  const api = new FakeGitHub(), repo = client(api);
+  for (const path of ["", ".obsidian/settings.json", "../note.md"]) await assert.rejects(repo.history({path}));
+  await assert.rejects(repo.history({path: "note.md", page: 2}), /history page/);
+  assert.equal(api.requests.length, 0);
+  api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo/commits" ? response([{sha: "a".repeat(40), commit: { message: "broken", author: { name: "author", date: "not-a-date" } }}]) : undefined;
+  await assert.rejects(repo.history({path: "note.md"}), /history date/);
+});

@@ -35,6 +35,7 @@ class Files implements JournalFiles {
     this.values.set(to, value);
     this.values.delete(from);
   }
+  async remove(path: string) { this.tick(); this.values.delete(path); }
   async list(path: string) {
     this.tick();
     return {
@@ -183,4 +184,39 @@ test("an older fork remains fatal after newer checkpoints, for load and save", a
   await assert.rejects(new FileJournalStore(files, identity).load(), /Multiple journal writers/);
   await assert.rejects(a.save({ phase: "later" }), /Multiple journal writers/);
   await assert.rejects(a.save({ phase: "complete" }), /Multiple journal writers/);
+});
+
+async function cleanupFixture() {
+  const files = new Files(), store = new FileJournalStore(files, identity);
+  for (let sequence = 0; sequence < 12; sequence++) await store.save({ sequence, draft: { oid: "local", data: btoa("unpublished draft") }, file: { oid: String(sequence), data: btoa(`version ${sequence}`) } });
+  return { files, store };
+}
+test("cleanup retains recent records and every referenced unpublished byte", async () => {
+  const {files, store} = await cleanupFixture();
+  const result = await store.compact();
+  assert.deepEqual(result, {recordsRemoved: 4, objectsRemoved: 4});
+  assert.equal([...files.values.keys()].filter(path => path.includes("/records/")).length, 8);
+  assert.deepEqual(plain(await new FileJournalStore(files, identity).load()), {sequence: 11, draft: {oid: "local", data: btoa("unpublished draft")}, file: {oid: "11", data: btoa("version 11")}});
+  assert.deepEqual(await store.compact(), {recordsRemoved: 0, objectsRemoved: 0});
+});
+test("every interrupted cleanup boundary preserves the latest state and resumes", async () => {
+  const sample = await cleanupFixture(); sample.files.count = 0; await sample.store.compact(); const boundaries = sample.files.count;
+  for (let at = 1; at <= boundaries; at++) {
+    const {files, store} = await cleanupFixture(); const expected = plain(await store.load());
+    files.count = 0; files.failAt = at;
+    await assert.rejects(store.compact(), /Simulated interruption/);
+    files.failAt = Infinity;
+    const reopened = new FileJournalStore(files, identity);
+    assert.deepEqual(plain(await reopened.load()), expected, `boundary ${at}`);
+    await reopened.compact();
+    assert.deepEqual(plain(await reopened.load()), expected);
+  }
+});
+test("cleanup refuses stale writers and corrupt retained data before deleting anything", async () => {
+  const {files, store} = await cleanupFixture(); const stale = new FileJournalStore(files, identity); await stale.load();
+  await store.save(updated); const count = files.values.size;
+  await assert.rejects(stale.compact(), /Stale journal writer/); assert.equal(files.values.size, count);
+  const latest = [...files.values.keys()].filter(path => path.includes("/records/")).sort().at(-1)!;
+  files.values.set(latest, "{}");
+  await assert.rejects(store.compact(), /checksum/); assert.equal(files.values.size, count);
 });

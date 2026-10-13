@@ -54,6 +54,9 @@ export default class GitVaultSync extends Plugin {
   private ownership: PluginOwnership | null = null;
   private unloaded = false;
   private rawSession: SyncSession | null = null;
+  private repository: GitHubRepository | null = null;
+  private journals: FileJournalStore[] = [];
+  private lastCleanup = 0;
   private modes: NativeModeStore | null = null;
   private owner(): PluginOwnership {
     if (this.unloaded) throw new Error("This sync instance has retired.");
@@ -168,6 +171,8 @@ export default class GitVaultSync extends Plugin {
     await owner.drainAdmissions();
     // Invalidate queued callbacks holding previews from the prior configuration.
     this.rawSession = null;
+    this.repository = null;
+    this.journals = [];
     this.session = null;
     this.modes = null;
     if (
@@ -234,7 +239,8 @@ export default class GitVaultSync extends Plugin {
     const storedModes: unknown = this.app.loadLocalStorage(modeKey);
     if (storedModes !== null && storedModes !== undefined)
       Object.assign(modes, parseModes(storedModes));
-    this.modes = await NativeModeStore.open(new FileJournalStore(files, installation, "modes"), modes);
+    const modeStore = new FileJournalStore(files, installation, "modes");
+    this.modes = await NativeModeStore.open(modeStore, modes);
     await this.transferRenamesOwned();
     const rawSession = new SyncSession({
       repository: owner.fence(repository),
@@ -247,6 +253,8 @@ export default class GitVaultSync extends Plugin {
     });
     owner.assertActive();
     this.rawSession = rawSession;
+    this.repository = repository;
+    this.journals = [store, modeStore];
     this.session = owner.queued(rawSession, () => this.rawSession === rawSession);
     const pendingChange = owner.pendingLocalChange();
     if (pendingChange !== null) {
@@ -289,6 +297,27 @@ export default class GitVaultSync extends Plugin {
         );
     }
   }
+  fileHistory(input: Parameters<GitHubRepository["history"]>[0]) {
+    return this.owner().run(async () => {
+      if (!this.repository || !this.session) throw new Error("Connect this vault to GitHub first.");
+      return this.repository.history(input);
+    });
+  }
+  compactRecovery() {
+    return this.owner().run(() => this.compactRecoveryOwned());
+  }
+  private async compactRecoveryOwned(): Promise<{ recordsRemoved: number; objectsRemoved: number }> {
+    const status = await this.rawSession?.status();
+    if (!status || status.kind !== "enrolled") throw new Error("Recovery cleanup requires a readable enrolled vault.");
+    const total = { recordsRemoved: 0, objectsRemoved: 0 };
+    for (const journal of this.journals) {
+      const result = await journal.compact();
+      total.recordsRemoved += result.recordsRemoved;
+      total.objectsRemoved += result.objectsRemoved;
+    }
+    this.lastCleanup = Date.now();
+    return total;
+  }
   private observeLocalChange(): Promise<unknown> {
     // This call must happen at observation time: the engine retires the active generation synchronously.
     const owner = this.owner();
@@ -326,6 +355,10 @@ export default class GitVaultSync extends Plugin {
       this.setStatus("Checking saved changes…");
       const outcome = await this.rawSession.sync();
       this.setStatus(describeOutcome(outcome));
+      if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
+        try { await this.compactRecoveryOwned(); }
+        catch (error) { this.setStatus(`Synced. Recovery cleanup paused: ${failure(error)}`); }
+      }
     });
   }
   async syncNow(): Promise<void> {
@@ -905,80 +938,83 @@ class ConfirmModal extends Modal {
   }
 }
 class RestoreModal extends Modal {
-  constructor(
-    app: App,
-    private plugin: GitVaultSync,
-  ) {
-    super(app);
-  }
+  private revision = 0;
+  private previewRevision = 0;
+  private closed = false;
+  constructor(app: App, private plugin: GitVaultSync) { super(app); }
+  onClose(): void { this.closed = true; this.revision++; }
   onOpen(): void {
     const el = this.contentEl;
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Restore from GitHub history" });
-    el.createEl("p", {
-      text: "Preview a file from an earlier commit. Restoring creates a local draft and then a new commit; it never rewinds the branch.",
-    });
-    let path = this.app.workspace.getActiveFile()?.path ?? "",
-      commit = "";
-    new Setting(el)
-      .setName("File path")
-      .addText((t) => t.setValue(path).onChange((v) => (path = v)));
-    new Setting(el)
-      .setName("Historical commit")
-      .setDesc("Full commit SHA from your GitHub history.")
-      .addText((t) => t.onChange((v) => (commit = v.trim())));
+    el.createEl("h2", { text: "File history" });
+    el.createEl("p", { text: "Choose an earlier version. Restoring creates a new change and keeps your GitHub history." });
+    let path = this.app.workspace.getActiveFile()?.path ?? "";
+    const history = el.createDiv({ cls: "git-sync-history" });
     const output = el.createDiv();
-    new Setting(el).addButton((b) =>
-      b.setButtonText("Preview restore").onClick(async () => {
-        b.setDisabled(true);
+    const current = (revision: number) => !this.closed && revision === this.revision;
+    const previewVersion = async (filePath: string, commit: string, revision: number) => {
+      const selection = ++this.previewRevision;
+      output.empty();
+      const session = this.plugin.session;
+      if (!session) { output.createEl("p", { text: "Connect this vault to GitHub first." }); return; }
+      try {
+        const preview = await session.previewRestore({ path: filePath, commit });
+        if (!current(revision) || selection !== this.previewRevision) return;
+        if (preview.kind !== "preview") throw new Error(`Cannot preview this version: ${preview.kind}`);
         output.empty();
-        try {
-          const preview = await this.plugin.session?.previewRestore({
-            path,
-            commit,
-          });
-          if (preview?.kind !== "preview")
-            throw new Error(
-              `Cannot preview restore: ${preview?.kind ?? "not enrolled"}`,
-            );
-          output.createEl("pre", {
-            text: entryPreview(preview.historical),
-            cls: "git-sync-preview",
-          });
-          new Setting(output).addButton((confirm) =>
-            confirm
-              .setButtonText("Restore as a new draft")
-              .setCta()
-              .onClick(async () => {
-                confirm.setDisabled(true);
-                try {
-                  const outcome = await this.plugin.session?.restore({
-                    token: preview.token,
-                    path,
-                    commit,
-                  });
-                  if (
-                    outcome?.kind !== "restored" &&
-                    outcome?.kind !== "unchanged"
-                  )
-                    throw new Error(
-                      `Restore held: ${outcome?.kind ?? "not enrolled"}`,
-                    );
-                  this.close();
-                  await this.plugin.syncNow();
-                } catch (error) {
-                  new Notice(failure(error), 12000);
-                  confirm.setDisabled(false);
-                }
-              }),
-          );
-        } catch (error) {
-          output.createEl("p", { text: failure(error) });
-        } finally {
-          b.setDisabled(false);
+        output.createEl("h3", { text: "Selected version" });
+        output.createEl("pre", { text: entryPreview(preview.historical), cls: "git-sync-preview" });
+        new Setting(output).addButton(button => button.setButtonText("Restore this version").setCta().onClick(async () => {
+          button.setDisabled(true);
+          try {
+            if (!current(revision) || selection !== this.previewRevision || this.plugin.session !== session) throw new Error("The vault or selection changed. Browse history again.");
+            const outcome = await session.restore({ token: preview.token, path: filePath, commit });
+            if (outcome.kind !== "restored" && outcome.kind !== "unchanged") throw new Error(`Restore needs a fresh preview: ${outcome.kind}`);
+            this.close();
+            await this.plugin.syncNow();
+          } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
+        }));
+      } catch (error) { if (current(revision) && selection === this.previewRevision) output.createEl("p", { text: failure(error) }); }
+    };
+    const load = async (filePath: string, revision: number, at?: string, page = 1): Promise<void> => {
+      try {
+        const result = await this.plugin.fileHistory({ path: filePath, at, page });
+        if (!current(revision)) return;
+        if (page === 1) history.empty();
+        for (const version of result.entries) {
+          new Setting(history)
+            .setName(version.message.split("\n")[0] || "Saved version")
+            .setDesc(`${new Date(version.date).toLocaleString()} · ${version.author}`)
+            .addButton(button => button.setButtonText("Preview").onClick(async () => {
+              button.setDisabled(true);
+              await previewVersion(filePath, version.commit, revision);
+              button.setDisabled(false);
+            }));
         }
-      }),
-    );
+        if (page === 1 && result.entries.length === 0) history.createEl("p", { text: "No committed versions for this path. For a renamed file, search its earlier path too." });
+        if (result.nextPage !== null) {
+          const nextPage = result.nextPage;
+          const more = new Setting(history).addButton(button => button.setButtonText("Older versions").onClick(async () => {
+            button.setDisabled(true);
+            await load(filePath, revision, result.at, nextPage);
+            more.settingEl.remove();
+          }));
+        }
+      } catch (error) { if (current(revision)) history.createEl("p", { text: failure(error) }); }
+    };
+    const controls = new Setting(el).setName("File path").setDesc("You can also enter the path of a deleted note.")
+      .addText(text => text.setValue(path).setPlaceholder("Notes/My note.md").onChange(value => {
+        path = value; this.revision++; history.empty(); output.empty();
+      }))
+      .addButton(button => button.setButtonText("Browse history").setCta().onClick(async () => {
+        const revision = ++this.revision;
+        history.empty(); output.empty(); history.createEl("p", { text: "Loading versions…" });
+        button.setDisabled(true);
+        await load(path, revision);
+        button.setDisabled(false);
+      }));
+    el.insertBefore(controls.settingEl, history);
+    if (path) void load(path, ++this.revision);
   }
 }
 class RecoveryModal extends Modal {
@@ -999,6 +1035,16 @@ class RecoveryModal extends Modal {
     el.createEl("p", {
       text: "Captured drafts and preimages stay on this device. Export creates a separate hidden folder and does not overwrite notes.",
     });
+    new Setting(el).setName("Clean up unused storage")
+      .setDesc("Remove superseded journal records and unreferenced copies. Listed recovery versions and pending work stay available. Also runs automatically after successful sync.")
+      .addButton(button => button.setButtonText("Clean up").onClick(async () => {
+        button.setDisabled(true);
+        try {
+          const result = await this.plugin.compactRecovery();
+          new Notice(`Removed ${result.recordsRemoved} old journal records and ${result.objectsRemoved} unused copies.`);
+        } catch (error) { new Notice(failure(error), 12000); }
+        finally { button.setDisabled(false); }
+      }));
     try {
       const records = await this.plugin.session?.listRecovery();
       if (!Array.isArray(records)) {

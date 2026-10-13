@@ -9,6 +9,11 @@ export interface GitHubRequest {
 }
 export interface GitHubResponse { status: number; headers: Record<string, string>; json: unknown }
 export interface GitHubTransport { request(request: GitHubRequest): Promise<GitHubResponse> }
+export interface FileHistoryPage {
+  at: string;
+  entries: { commit: string; message: string; author: string; date: string }[];
+  nextPage: number | null;
+}
 export interface GitHubRepositoryOptions {
   owner: string;
   name: string;
@@ -239,6 +244,25 @@ export class GitHubRepository implements Repository {
     const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
     return { id, owner, name, branch: this.options.branch };
+  }
+  async history(input: { path: string; at?: string; page?: number }): Promise<FileHistoryPage> {
+    if (!input.path || !visible(input.path)) throw new GitHubError("Choose a visible vault file for history");
+    const page = input.page ?? 1;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || (page > 1 && !input.at))
+      throw new GitHubError("Invalid history page");
+    const pinned = input.at === undefined ? undefined : oid(input.at);
+    await this.identity();
+    const at = pinned ?? await this.headOid();
+    const query = new URLSearchParams({ sha: at, path: input.path, per_page: "30", page: String(page) });
+    const rows = list(await this.rest(`/commits?${query}`));
+    if (rows.length > 30) throw new GitHubError("Oversized history page");
+    const entries = rows.map(value => {
+      const row = record(value), commit = record(row.commit), author = record(commit.author);
+      const date = string(author.date);
+      if (!Number.isFinite(Date.parse(date))) throw new GitHubError("Invalid history date");
+      return { commit: oid(row.sha), message: string(commit.message).slice(0, 4000), author: string(author.name).slice(0, 256), date };
+    });
+    return { at, entries, nextPage: entries.length === 30 ? page + 1 : null };
   }
   private async headOid(): Promise<string> {
     let ref: Record<string, unknown>;

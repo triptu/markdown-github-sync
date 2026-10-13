@@ -8,6 +8,7 @@ export interface JournalFiles {
   write(path: string, data: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   list(path: string): Promise<{ files: string[]; folders: string[] }>;
+  remove?(path: string): Promise<void>;
 }
 const root = ".git-vault-sync";
 const hex = (bytes: ArrayBuffer) =>
@@ -162,6 +163,43 @@ export class FileJournalStore implements DurableStore {
   }
   save(state: unknown): Promise<void> {
     return serialize(this.files, this.directory, () => this.append(state));
+  }
+  compact(): Promise<{ recordsRemoved: number; objectsRemoved: number }> {
+    return serialize(this.files, this.directory, async () => {
+      if (!this.files.remove) throw new Error("This storage adapter does not support recovery cleanup.");
+      if (!this.loaded) await this.loadRecord();
+      await this.assertHead();
+      const records = await this.records();
+      const retained = records.slice(0, 8);
+      const live = new Set<string>();
+      const references = (value: unknown): void => {
+        if (Array.isArray(value)) { for (const item of value) references(item); return; }
+        if (!isObject(value)) return;
+        if (typeof value.journalBlob === "string" && Object.keys(value).length === 1) {
+          live.add(value.journalBlob);
+          return;
+        }
+        for (const item of Object.values(value)) references(item);
+      };
+      for (const record of retained) {
+        const text = await this.files.read(record.path);
+        if (await digest(text) !== record.hash) throw new Error("Recovery record checksum failed. Cleanup stopped.");
+        const state: unknown = JSON.parse(text);
+        await this.unpack(state);
+        references(state);
+      }
+      await this.assertHead();
+      let recordsRemoved = 0, objectsRemoved = 0;
+      // Remove obsolete records first: an interruption may leave extra objects, never dangling references.
+      for (const record of records.slice(8)) { await this.files.remove(record.path); recordsRemoved++; }
+      for (const path of (await this.files.list(`${this.directory}/objects`)).files) {
+        const match = /^([a-f0-9]{64})\.json$/.exec(path.slice(`${this.directory}/objects/`.length));
+        if (path.startsWith(`${this.directory}/objects/`) && match && !live.has(match[1])) {
+          await this.files.remove(path); objectsRemoved++;
+        }
+      }
+      return { recordsRemoved, objectsRemoved };
+    });
   }
   private async assertHead(): Promise<void> {
     const latest = (await this.records())[0];
