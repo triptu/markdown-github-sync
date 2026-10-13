@@ -3,17 +3,29 @@
 import type { Changes, Entry, Snapshot } from "./contracts";
 import { dictionary, digestText, entryFromText, entryText, foldPath, isSyncablePath, sameEntry } from "./codec";
 
-export type ChoiceKind = "mine" | "remote" | "both" | "edit";
-/** A user decision. `edit` carries the exact replacement content. */
-export type Choice = { kind: "mine" } | { kind: "remote" } | { kind: "both" } | { kind: "edit"; entry: Entry };
+export type ChoiceKind = "mine" | "remote" | "both" | "edit" | "expected" | "next" | "found";
+/**
+ * A user decision. `edit` carries the exact replacement content. `expected`,
+ * `next` and `found` pick a version recorded by a native hold.
+ */
+export type Choice =
+  | { kind: "mine" }
+  | { kind: "remote" }
+  | { kind: "both" }
+  | { kind: "edit"; entry: Entry }
+  | { kind: "expected" }
+  | { kind: "next" }
+  | { kind: "found" };
 
 export type VersionConflictKind =
   | "content" // both sides edited, not safely mergeable
   | "add-add" // both sides created the path with different content
   | "local-deleted-remote-edited"
   | "local-edited-remote-deleted"
-  | "local-deletion" // only this device removed it: needs review
-  | "remote-deletion"; // only GitHub removed it: needs review
+  /** Retired: emitted only by format /2 and parsed for migration. One-sided deletions are automatic. */
+  | "local-deletion"
+  /** Retired: see `local-deletion`. */
+  | "remote-deletion";
 
 /** A decision tied to exact versions; `id` changes whenever any version changes. */
 export interface VersionConflict {
@@ -35,15 +47,56 @@ export interface CollisionConflict {
   paths: string[];
 }
 
-export type Conflict = VersionConflict | CollisionConflict;
+/**
+ * One confirmation for a plan deleting at least `bulkThreshold(base)` paths
+ * originating on one side. `mine` keeps this device's side (local: publish the
+ * deletions; remote: keep and republish the files); `remote` keeps GitHub's.
+ * The id binds the guard scope (head and local manifest) and the exact path set.
+ */
+export interface BulkDeletionConflict {
+  kind: "bulk-deletion";
+  id: string;
+  direction: "local" | "remote";
+  paths: string[];
+  choices: ["mine", "remote"];
+}
+
+/** Durable evidence for one path from the vault's native transactions. */
+export interface NativeHold {
+  id: string;
+  kind: "interrupted" | "displaced";
+  expected: Entry | null;
+  next: Entry | null;
+  found: Entry | null;
+}
+
+/**
+ * A path held by native evidence: never merged or resolved automatically. The
+ * id binds every version, so any later change asks again.
+ */
+export interface NativeConflict {
+  kind: "interrupted-write" | "displaced-write";
+  id: string;
+  path: string;
+  base: Entry | null;
+  /** The current live bytes. */
+  local: Entry | null;
+  remote: Entry | null;
+  expected: Entry | null;
+  next: Entry | null;
+  found: Entry | null;
+  choices: ChoiceKind[];
+}
+
+export type Conflict = VersionConflict | CollisionConflict | BulkDeletionConflict | NativeConflict;
 
 /** One guarded local mutation: replace `expected` (null = absent) by `next` (null = delete). */
 export interface ApplyStep {
   path: string;
   expected: Entry | null;
   next: Entry | null;
-  /** Reviewed mutations retain their original merge base for fresh review after revocation. */
-  consent: { kind: "automatic" } | { kind: "reviewed"; base: Entry | null };
+  /** Conflict id when the step implements a user decision; consent is the exact (expected, next) pair. */
+  decision: string | null;
 }
 
 export interface ReconcileInput {
@@ -51,8 +104,12 @@ export interface ReconcileInput {
   local: Snapshot;
   remote: Snapshot;
   decisions: Readonly<Record<string, Choice>>;
-  /** Bind conflict IDs to a particular head and review generation. */
+  /** Optionally binds version-conflict IDs to a scope; by default they bind to exact versions only. */
   reviewScope?: string;
+  /** Binds bulk-deletion IDs; callers pass the head and local manifest identity. */
+  guardScope?: string;
+  /** Native holds by path. Held paths are excluded from automatic planning. */
+  holds?: Readonly<Record<string, NativeHold>>;
 }
 
 export type Plan =
@@ -67,7 +124,9 @@ export type Plan =
       /** Paths combined automatically by the text merge. */
       merged: string[];
       /** Every resolved conflict, for the operation record. */
-      resolved: VersionConflict[];
+      resolved: Array<VersionConflict | BulkDeletionConflict | NativeConflict>;
+      /** Undecided native holds; their paths keep GitHub's version and are not touched locally. */
+      held: NativeConflict[];
     };
 
 const CHOICES: Record<VersionConflictKind, ChoiceKind[]> = {
@@ -83,6 +142,33 @@ export function choicesFor(kind: VersionConflictKind): ChoiceKind[] {
   return CHOICES[kind];
 }
 
+/** Deleting at least this many paths from one side in one plan needs one confirmation. */
+export function bulkThreshold(baseCount: number): number {
+  return Math.max(25, Math.ceil(baseCount * 0.2));
+}
+
+/**
+ * Unique pure renames on one side: the side deleted `from` and added `to` with
+ * exactly `from`'s base bytes, and no other deleted or added path shares them.
+ */
+function pureRenames(base: Snapshot, side: Snapshot, other: Snapshot): Map<string, string> {
+  const deleted = new Map<string, string[]>();
+  const added = new Map<string, string[]>();
+  const key = (entry: Entry) => `${entry.mode}:${entry.oid}`;
+  for (const [path, entry] of Object.entries(base)) {
+    if (!Object.hasOwn(side, path)) deleted.set(key(entry), [...(deleted.get(key(entry)) ?? []), path]);
+  }
+  for (const [path, entry] of Object.entries(side)) {
+    if (!Object.hasOwn(base, path) && !Object.hasOwn(other, path)) added.set(key(entry), [...(added.get(key(entry)) ?? []), path]);
+  }
+  const renames = new Map<string, string>();
+  for (const [version, from] of deleted) {
+    const to = added.get(version);
+    if (from.length === 1 && to?.length === 1) renames.set(from[0]!, to[0]!);
+  }
+  return renames;
+}
+
 export async function reconcile(input: ReconcileInput): Promise<Plan> {
   const base = dictionary(Object.entries(input.base));
   const local = dictionary(Object.entries(input.local));
@@ -92,8 +178,26 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   const occupied = new Set(paths.map(foldPath));
   const target: Snapshot = dictionary();
   const unresolved: Conflict[] = [];
-  const resolved: VersionConflict[] = [];
+  const resolved: Array<VersionConflict | BulkDeletionConflict | NativeConflict> = [];
   const merged: string[] = [];
+  const decided = new Map<string, string>();
+  const holds = dictionary(Object.entries(input.holds ?? {}));
+  const held: NativeConflict[] = [];
+  const untouched = new Set<string>();
+  // Pure rename on one side against an edit of the old path on the other: the
+  // edit moves to the new name. Anything ambiguous stays an ordinary conflict.
+  const moved = new Map<string, Entry | null>();
+  for (const [side, other, sideIsLocal] of [[local, remote, true], [remote, local, false]] as const) {
+    for (const [from, to] of pureRenames(base, side, other)) {
+      const edited = other[from];
+      if (!edited || sameEntry(edited, base[from]) || Object.hasOwn(base, to) || moved.has(from) || moved.has(to) || holds[from] || holds[to]) continue;
+      // The renaming side holds base bytes at `to`; the editing side's version wins there.
+      if (!sameEntry(sideIsLocal ? local[to] : remote[to], base[from])) continue;
+      moved.set(from, null);
+      moved.set(to, edited);
+    }
+  }
+  const automaticDeletions = { local: [] as string[], remote: [] as string[] };
 
   for (const path of paths) {
     const b = base[path] ?? null;
@@ -102,13 +206,31 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
     let kind: VersionConflictKind | null = null;
     let result: Entry | null = null;
 
-    if (sameEntry(l, r)) result = l;
+    const hold = holds[path];
+    if (hold) {
+      const conflict = await nativeConflict(path, hold, b, l, r);
+      const choice = decisions[conflict.id];
+      if (!choice || !conflict.choices.includes(choice.kind)) {
+        held.push(conflict);
+        untouched.add(path);
+        if (r) target[path] = r;
+        continue;
+      }
+      resolved.push(conflict);
+      decided.set(path, conflict.id);
+      const chosen = choice.kind === "mine" ? l : choice.kind === "remote" ? r : choice.kind === "expected" ? hold.expected
+        : choice.kind === "next" ? hold.next : choice.kind === "found" ? hold.found : choice.kind === "edit" ? choice.entry : null;
+      if (chosen) target[path] = chosen;
+      continue;
+    }
+    if (moved.has(path)) result = moved.get(path) ?? null;
+    else if (sameEntry(l, r)) result = l;
     else if (sameEntry(l, b)) {
-      if (r) result = r;
-      else kind = "remote-deletion";
+      result = r;
+      if (!r) automaticDeletions.remote.push(path);
     } else if (sameEntry(r, b)) {
-      if (l) result = l;
-      else kind = "local-deletion";
+      result = l;
+      if (!l) automaticDeletions.local.push(path);
     } else if (!l) kind = "local-deleted-remote-edited";
     else if (!r) kind = "local-edited-remote-deleted";
     else if (!b) kind = "add-add";
@@ -126,19 +248,48 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
         continue;
       }
       resolved.push(conflict);
+      decided.set(path, conflict.id);
       if (choice.kind === "mine") result = l;
       else if (choice.kind === "remote") result = r;
       else if (choice.kind === "edit") result = choice.entry;
       else {
         // "both": GitHub's version keeps the path; this device's moves aside.
         result = r;
-        if (conflict.sibling && l) target[conflict.sibling] = l;
+        if (conflict.sibling && l) {
+          target[conflict.sibling] = l;
+          decided.set(conflict.sibling, conflict.id);
+        }
       }
     }
     if (result) target[path] = result;
   }
 
-  if (unresolved.length > 0) return { kind: "needs-decision", conflicts: unresolved, merged };
+  // Deletions whose exact bytes reappear at a new path on the same side are moves.
+  const relocated = (side: Snapshot) => new Set(Object.entries(side).filter(([path]) => !Object.hasOwn(base, path)).map(([, entry]) => `${entry.mode}:${entry.oid}`));
+  const threshold = bulkThreshold(Object.keys(base).length);
+  for (const direction of ["local", "remote"] as const) {
+    const additions = relocated(direction === "local" ? local : remote);
+    const deleted = automaticDeletions[direction].filter((path) => !additions.has(`${base[path]!.mode}:${base[path]!.oid}`));
+    if (deleted.length < threshold) continue;
+    const pathsDeleted = automaticDeletions[direction];
+    const id = await digestText(JSON.stringify(["bulk-deletion/1", input.guardScope ?? "", direction, pathsDeleted.map((path) => [path, base[path]!.mode, base[path]!.oid])]));
+    const conflict: BulkDeletionConflict = { kind: "bulk-deletion", id, direction, paths: pathsDeleted, choices: ["mine", "remote"] };
+    const choice = decisions[id];
+    if (!choice || (choice.kind !== "mine" && choice.kind !== "remote")) {
+      unresolved.push(conflict);
+      continue;
+    }
+    resolved.push(conflict);
+    for (const path of pathsDeleted) {
+      decided.set(path, id);
+      // Keeping the non-deleting side restores its bytes (equal to the base).
+      const keep = direction === "local" ? (choice.kind === "remote" ? remote[path] : null) : (choice.kind === "mine" ? local[path] : null);
+      if (keep) target[path] = keep;
+      else delete target[path];
+    }
+  }
+
+  if (unresolved.length > 0) return { kind: "needs-decision", conflicts: [...unresolved, ...held], merged };
 
   const collisions = await findCollisions(target);
   if (collisions.length > 0) return { kind: "needs-decision", conflicts: collisions, merged };
@@ -149,19 +300,24 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   }
   const incoming: ApplyStep[] = [];
   for (const path of new Set([...Object.keys(local), ...Object.keys(target)])) {
-    if (!sameEntry(local[path], target[path])) {
-      const conflict = resolved.find((item) => item.path === path || item.sibling === path);
-      incoming.push({
-        path,
-        expected: local[path] ?? null,
-        next: target[path] ?? null,
-        consent: conflict
-          ? { kind: "reviewed", base: conflict.path === path ? conflict.base : null }
-          : { kind: "automatic" },
-      });
+    if (!untouched.has(path) && !sameEntry(local[path], target[path])) {
+      incoming.push({ path, expected: local[path] ?? null, next: target[path] ?? null, decision: decided.get(path) ?? null });
     }
   }
-  return { kind: "ready", target, outgoing, incoming: orderSteps(incoming), merged, resolved };
+  return { kind: "ready", target, outgoing, incoming: orderSteps(incoming), merged, resolved, held };
+}
+
+const NATIVE_CHOICES: ChoiceKind[] = ["mine", "expected", "next", "found", "remote", "edit"];
+
+export function nativeChoices(hold: { found: object | null }): ChoiceKind[] {
+  return NATIVE_CHOICES.filter((choice) => choice !== "found" || hold.found !== null);
+}
+
+async function nativeConflict(path: string, hold: NativeHold, base: Entry | null, local: Entry | null, remote: Entry | null): Promise<NativeConflict> {
+  const version = (entry: Entry | null) => (entry ? `${entry.mode}:${entry.oid}` : "absent");
+  const kind = hold.kind === "interrupted" ? "interrupted-write" : "displaced-write";
+  const id = await digestText(JSON.stringify(["native/1", hold.id, kind, path, ...[base, local, remote, hold.expected, hold.next, hold.found].map(version)]));
+  return { kind, id, path, base, local, remote, expected: hold.expected, next: hold.next, found: hold.found, choices: nativeChoices(hold) };
 }
 
 async function versionConflict(
@@ -171,7 +327,7 @@ async function versionConflict(
 ): Promise<VersionConflict> {
   const { kind, path, base, local, remote } = input;
   const version = (entry: Entry | null) => (entry ? `${entry.mode}:${entry.oid}` : "absent");
-  const id = await digestText(JSON.stringify(["conflict/2", reviewScope, kind, path, version(base), version(local), version(remote)]));
+  const id = await digestText(JSON.stringify(["conflict/3", reviewScope, kind, path, version(base), version(local), version(remote)]));
   // "Keep both" is offered only when its sibling name is free on every side.
   const proposed = local && remote ? siblingPath(path, local.oid) : null;
   const sibling = proposed && isSyncablePath(proposed) && !occupied.has(foldPath(proposed)) ? proposed : null;

@@ -1,7 +1,8 @@
 // SyncSession: the single owner of synchronization state for one vault.
-// Durable transactions run one at a time; vault events are visible immediately.
-// Publication and local mutation require a durable recovery save first.
-import type { CommitSnapshot, DurableStore, Entry, FileMode, LocalVault, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+// Durable transactions run one at a time. Publication follows the
+// per-installation ledger protocol; local mutation is compare-and-swap against
+// exact captured versions, so vault events only schedule work.
+import type { CommitSnapshot, DurableStore, Entry, FileMode, LocalVault, NativeIssue, Repository, RepositoryIdentity, Snapshot } from "./contracts";
 import {
   IntegrityError,
   decodeBase64,
@@ -19,8 +20,8 @@ import {
   verifySnapshot,
 } from "./codec";
 import type { Manifest, Ref } from "./codec";
-import { reconcile } from "./reconcile";
-import type { Choice, Conflict } from "./reconcile";
+import { nativeChoices, reconcile } from "./reconcile";
+import type { Choice, Conflict, NativeHold } from "./reconcile";
 import { CorruptStateError, STATE_FORMAT, parseState, referencedBlobs } from "./state";
 import type {
   ApplyOperation,
@@ -41,6 +42,9 @@ export interface SessionPorts {
   /** Shown in commit messages. */
   deviceName?: string;
   now?: () => Date;
+  /** Backoff between cancelled publication rounds; injectable for tests. */
+  delay?: (ms: number) => Promise<void>;
+  random?: () => number;
 }
 
 /** Unpinned recovery records (bytes known to be in GitHub history) kept for convenience. */
@@ -59,8 +63,11 @@ export type SyncOutcome =
   | { kind: "needs-decision"; conflicts: Conflict[]; merged: string[] }
   /** Commit `commit` is partly applied; the listed paths need `keepLocal` or a manual change. */
   | { kind: "blocked"; commit: string; steps: BlockedStep[] }
-  | { kind: "rejected"; message: string }
+  /** Cancelled publications lost to other devices in every round of this sync; the scheduler retries. */
   | { kind: "contended" }
+  /** A dispatched publication awaits a decisive ledger read (GitHub unreachable); the next sync resumes it. */
+  | { kind: "settling"; operationId: string }
+  /** A /2 publication sent without a ledger, held until reachable or reviewed. */
   | { kind: "publication-unknown"; operationId: string; parent: string; candidate: string; head: string };
 
 export type EnrollmentAction =
@@ -89,7 +96,15 @@ export type EnrollOutcome =
   | { kind: "stale"; preview: EnrollmentPreview }
   | { kind: "enrolled"; commit: string };
 
-export type ChoiceInput = { kind: "mine" } | { kind: "remote" } | { kind: "both" } | { kind: "edit"; data: string };
+export type ChoiceInput =
+  | { kind: "mine" }
+  | { kind: "remote" }
+  | { kind: "both" }
+  | { kind: "edit"; data: string }
+  /** Native holds only: pick the transaction's preimage, intent or the unexpected bytes. */
+  | { kind: "expected" }
+  | { kind: "next" }
+  | { kind: "found" };
 export type DecisionOutcome = Unavailable | { kind: "recorded" } | { kind: "stale" } | { kind: "invalid"; reason: string };
 
 export interface RestorePreview {
@@ -125,10 +140,16 @@ export interface PublicationRecoveryPreview {
   headFiles: Snapshot;
   localFiles: Snapshot;
 }
-export type PublicationRecoveryRefusal = Unavailable | { kind: "missing" } | { kind: "reachable"; candidate: string } | { kind: "paused"; pause: Pause };
+export type PublicationRecoveryRefusal =
+  | Unavailable
+  | { kind: "missing" }
+  | { kind: "reachable"; candidate: string }
+  | { kind: "paused"; pause: Pause }
+  /** The ledger protocol settles this publication automatically; no review applies. */
+  | { kind: "settling" };
 export type PublicationRecoveryOutcome = PublicationRecoveryRefusal | { kind: "stale" } | { kind: "released"; pause: Pause };
 
-export type Phase = "idle" | "local-changes" | "needs-decision" | "publication-unknown" | "applying" | "blocked" | "paused";
+export type Phase = "idle" | "local-changes" | "needs-decision" | "publication-unknown" | "settling" | "applying" | "blocked" | "paused";
 
 export interface PendingChange {
   path: string;
@@ -164,7 +185,19 @@ export interface RecoverySummary {
 
 type Loaded = Unavailable | { kind: "enrolled"; state: StoredState };
 type Applied = { kind: "complete"; commit: string; carried: string[] } | { kind: "blocked"; outcome: SyncOutcome };
-type Settled = { kind: "published"; operation: ApplyOperation } | { kind: "held"; outcome: SyncOutcome };
+type Settlement = { kind: "accepted"; operation: ApplyOperation } | { kind: "cancelled" } | { kind: "held"; outcome: SyncOutcome };
+type Cancelled = { kind: "cancelled" };
+
+/** Ledger reads per settlement call before returning `settling`. */
+const SETTLE_ROUNDS = 4;
+/** Cancelled publications reconciled again within one `sync()`. */
+const RECONCILE_ROUNDS = 3;
+const LEDGER_PAUSES: ReadonlySet<PauseReason> = new Set(["ledger-diverged", "duplicate-installation"]);
+
+/** The vault adapter returned a capture that cannot be a real vault state (for example unmounted storage). */
+export class VaultCaptureError extends Error {
+  override name = "VaultCaptureError";
+}
 
 export class SyncSession {
   readonly #repository: Repository;
@@ -172,13 +205,11 @@ export class SyncSession {
   readonly #store: DurableStore;
   readonly #deviceName: string;
   readonly #now: () => Date;
+  readonly #delay: (ms: number) => Promise<void>;
+  readonly #random: () => number;
   #queue: Promise<unknown> = Promise.resolve();
-  // Per-state generations track events consumed by an active transaction. Only
-  // a successful save advances the generation trusted by subsequent loads.
-  #localGeneration = 0;
-  #durableGeneration = 0;
-  readonly #stateGenerations = new WeakMap<StoredState, number>();
   readonly #previewSession = crypto.randomUUID();
+  #holdPass = false;
 
   constructor(ports: SessionPorts) {
     this.#repository = ports.repository;
@@ -186,6 +217,8 @@ export class SyncSession {
     this.#store = ports.store;
     this.#deviceName = ports.deviceName ?? "Obsidian";
     this.#now = ports.now ?? (() => new Date());
+    this.#delay = ports.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.#random = ports.random ?? Math.random;
   }
 
   // ---- Public API --------------------------------------------------------
@@ -200,14 +233,15 @@ export class SyncSession {
     return this.#exclusive(() => this.#status(true));
   }
 
-  /** Call immediately for each observed vault event; await the result for durable invalidation. */
+  /**
+   * Compatibility hook for vault events. Events only schedule synchronization:
+   * consent is bound to exact versions and checked by compare-and-swap, so an
+   * event (including the echo of this engine's own writes) changes no state.
+   */
   notifyLocalChange(): Promise<Unavailable | { kind: "invalidated" }> {
-    ++this.#localGeneration;
     return this.#exclusive(async () => {
       const loaded = await this.#load();
-      if (loaded.kind !== "enrolled") return loaded;
-      await this.#save(loaded.state);
-      return { kind: "invalidated" };
+      return loaded.kind === "enrolled" ? { kind: "invalidated" } : loaded;
     });
   }
 
@@ -221,31 +255,39 @@ export class SyncSession {
     });
   }
 
-  /** Binds this vault to the repository head shown in the confirmed preview. Mutates no vault files. */
+  /**
+   * Binds this vault to the repository head shown in the confirmed preview and
+   * anchors the device ledger at its current value. Mutates no vault files.
+   */
   enroll(input: { token: string }): Promise<EnrollOutcome> {
     return this.#exclusive(async () => {
-      const generation = this.#localGeneration;
       const loaded = await this.#load();
       if (loaded.kind === "corrupt") return loaded;
       const prior = loaded.kind === "enrolled" ? loaded.state : null;
       if (prior && (!prior.pause || prior.operation)) return { kind: "already-enrolled" };
       const survey = await this.#survey(prior);
-      if (generation !== this.#localGeneration || survey.preview.token !== input.token) return { kind: "stale", preview: survey.preview };
+      if (survey.preview.token !== input.token) return { kind: "stale", preview: survey.preview };
+      // Adopting the observed value is safe: an older request of this device can
+      // only land while the ledger still equals its own anchor, and any landing
+      // after this point makes the next settlement fail closed as divergence.
+      const anchor = await this.#readLedgerValue();
       const state: StoredState = {
         format: STATE_FORMAT,
-        observation: "settled",
         repository: survey.preview.repository,
+        ledger: { ref: this.#repository.ledgerRef(), anchor },
         base: commitState(survey.head),
         carry: survey.carry,
         operation: null,
         pause: null,
         review: null,
         decisions: dictionary(),
+        // Native evidence outlives re-enrollment: it may be the only copy of an edit.
+        holds: dictionary(Object.entries(prior?.holds ?? {})),
+        unacknowledged: prior?.unacknowledged ?? [],
         recovery: prior?.recovery ?? [],
         blobs: dictionary(Object.entries(prior?.blobs ?? {})),
         counter: prior?.counter ?? 0,
       };
-      this.#stateGenerations.set(state, generation);
       // Every carried version is a local draft, so the record also pins its bytes.
       this.#record(state, "enrollment", survey.drafts);
       await this.#save(state);
@@ -258,46 +300,79 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
+      await this.#recoverNative(state);
       const identity = await this.#repository.identity();
+      const sameRepository = sameIdentity(identity, state.repository);
       if (state.pause) {
-        if (state.pause.reason !== "repository-changed" || !state.operation || !sameIdentity(identity, state.repository)) return { kind: "paused", pause: state.pause };
+        if (state.pause.reason !== "repository-changed" || !state.operation || !sameRepository) {
+          // Finishing an accepted commit locally needs no remote write, so a ledger hold allows it.
+          if (sameRepository && LEDGER_PAUSES.has(state.pause.reason) && state.operation?.kind === "apply") {
+            const pause = state.pause;
+            const applied = await this.#resumeApply(state, state.operation);
+            if (applied.kind === "blocked") return applied.outcome;
+            return { kind: "paused", pause };
+          }
+          return { kind: "paused", pause: state.pause };
+        }
         state.pause = null;
         await this.#save(state);
       }
-      if (!sameIdentity(identity, state.repository)) {
+      if (!sameRepository) {
         return this.#pause(state, "repository-changed", `Expected ${describe(state.repository)}, found ${describe(identity)}`);
       }
+      const bound = await this.#bindLedger(state);
+      if (bound) return bound;
       let published = false;
+      let cancellations = 0;
       const carried = new Set<string>();
-      if (state.operation) {
-        const resumed = await this.#resume(state);
-        if (resumed.kind === "held") return resumed.outcome;
-        published ||= resumed.published;
-        resumed.carried.forEach((path) => carried.add(path));
+      for (;;) {
+        let cancelled = false;
+        if (state.operation) {
+          const resumed = await this.#resume(state);
+          if (resumed.kind === "held") return resumed.outcome;
+          if (resumed.kind === "cancelled") cancelled = true;
+          else {
+            published ||= resumed.published;
+            resumed.carried.forEach((path) => carried.add(path));
+          }
+        }
+        const outcome: SyncOutcome | Cancelled = cancelled ? { kind: "cancelled" } : await this.#transact(state);
+        if (outcome.kind === "cancelled") {
+          // Another publication won the branch. Our seal is final, so reconcile
+          // against the winner, with a short jittered pause between rounds.
+          if (++cancellations >= RECONCILE_ROUNDS) return { kind: "contended" };
+          await this.#delay(1000 + Math.floor(this.#random() * 3000));
+          continue;
+        }
+        if (outcome.kind === "synced") {
+          outcome.carried.forEach((path) => carried.add(path));
+          return { ...outcome, published: outcome.published || published, carried: [...carried].sort() };
+        }
+        if (outcome.kind === "up-to-date" && (published || carried.size > 0)) {
+          return { kind: "synced", commit: outcome.commit, published, carried: [...carried].sort() };
+        }
+        return outcome;
       }
-      const outcome = await this.#transact(state);
-      if (outcome.kind === "synced") {
-        outcome.carried.forEach((path) => carried.add(path));
-        return { ...outcome, published: outcome.published || published, carried: [...carried].sort() };
-      }
-      if (outcome.kind === "up-to-date" && (published || carried.size > 0)) {
-        return { kind: "synced", commit: outcome.commit, published, carried: [...carried].sort() };
-      }
-      return outcome;
     });
   }
 
-  /** Records a decision for a conflict from the latest review. Applied by the next `sync` only if versions are unchanged. */
+  /** Records a decision for a conflict from the latest review. Applied by a later `sync` only while its exact versions persist. */
   resolve(input: { conflictId: string; choice: ChoiceInput }): Promise<DecisionOutcome> {
     return this.#exclusive(async () => {
-      const generation = this.#localGeneration;
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
       const conflict = state.review?.conflicts.find((item) => item.id === input.conflictId);
-      if (!conflict || generation !== this.#localGeneration) return { kind: "stale" };
+      if (!conflict) return { kind: "stale" };
       if (conflict.kind === "collision") return { kind: "invalid", reason: "Rename one of the colliding files, then sync again" };
-      if (!conflict.choices.includes(input.choice.kind)) {
+      if (conflict.kind === "bulk-deletion") {
+        if (input.choice.kind !== "mine" && input.choice.kind !== "remote") return { kind: "invalid", reason: "Choose to keep this device's or GitHub's side of the deletion" };
+        state.decisions[conflict.id] = { kind: input.choice.kind };
+        await this.#save(state);
+        return { kind: "recorded" };
+      }
+      const available = isNativeConflict(conflict) ? nativeChoices(conflict) : conflict.choices;
+      if (!available.includes(input.choice.kind)) {
         return { kind: "invalid", reason: `${input.choice.kind} is not available for ${conflict.kind}` };
       }
       if (input.choice.kind === "edit") {
@@ -307,7 +382,7 @@ export class SyncSession {
         } catch {
           return { kind: "invalid", reason: "Edited content is not valid base64" };
         }
-        const mode: FileMode = conflict.local?.mode ?? conflict.remote?.mode ?? "100644";
+        const mode: FileMode = conflict.local?.mode ?? conflict.remote?.mode ?? ("next" in conflict ? conflict.next?.mode ?? conflict.expected?.mode : undefined) ?? "100644";
         const entry = await entryFromBytes(bytes, mode);
         this.#record(state, "conflict-edit", dictionary([[conflict.path, entry]]));
         state.decisions[conflict.id] = { kind: "edit", entry: toRef(entry) };
@@ -315,10 +390,6 @@ export class SyncSession {
         state.decisions[conflict.id] = { kind: input.choice.kind };
       }
       await this.#save(state);
-      if (generation !== this.#localGeneration) {
-        await this.#save(state);
-        return { kind: "stale" };
-      }
       return { kind: "recorded" };
     });
   }
@@ -354,24 +425,23 @@ export class SyncSession {
   /** Writes the reviewed historical version into the vault as a local draft; `sync` publishes it as a new commit. */
   restore(input: { token: string; path: string; commit: string }): Promise<RestoreOutcome> {
     return this.#exclusive(async () => {
-      const generation = this.#localGeneration;
       const ready = await this.#loadIdle();
       if (ready.kind !== "ready") return ready.outcome;
       const { state } = ready;
+      await this.#recoverNative(state);
+      if (state.holds[input.path]) return { kind: "stale", preview: null };
       const preview = await this.#restorePreview(state, input);
       if (preview.kind !== "preview") return preview;
-      if (generation !== this.#localGeneration || preview.token !== input.token) return { kind: "stale", preview };
+      if (preview.token !== input.token) return { kind: "stale", preview };
       if (sameEntry(preview.current, preview.historical)) return { kind: "unchanged" };
-      // Invalidate before the write: a lost apply response must not leave an
-      // approval valid across a recreation and subsequent deletion.
-      this.#invalidateReview(state);
-      this.#record(state, "restore", preview.current ? { [preview.path]: preview.current } : {});
+      this.#record(state, "restore", preview.current ? dictionary([[preview.path, preview.current]]) : dictionary());
       this.#record(state, "restore", dictionary([[preview.path, preview.historical]]));
       await this.#save(state);
-      if (generation !== this.#localGeneration) return { kind: "stale", preview: null };
+      // The write is a compare-and-swap against the previewed bytes.
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
       if (result.kind === "applied") return { kind: "restored" };
       if (result.kind === "blocked") return { kind: "blocked", reason: result.reason };
+      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], preview.path);
       return { kind: "stale", preview: null };
     });
   }
@@ -408,7 +478,7 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
-      if (state.operation?.recoveryId === input.id || (state.operation?.incoming.kind === "captured" && state.operation.incoming.recoveryId === input.id)) return { kind: "in-use" };
+      if (state.operation && (state.operation.recoveryId === input.id || state.operation.incomingRecoveryId === input.id)) return { kind: "in-use" };
       const before = state.recovery.length;
       state.recovery = state.recovery.filter((record) => record.id !== input.id);
       if (state.recovery.length === before) return { kind: "missing" };
@@ -417,7 +487,11 @@ export class SyncSession {
     });
   }
 
-  /** Review abandonment of a held candidate. This never asserts nonpublication. */
+  /**
+   * Review abandonment of a held candidate: a legacy /2 publication sent
+   * without a ledger, or a publication held by ledger divergence. This never
+   * asserts nonpublication and never cancels a request already sent.
+   */
   previewPublicationRecovery(): Promise<PublicationRecoveryPreview | PublicationRecoveryRefusal> {
     return this.#exclusive(async () => {
       const loaded = await this.#load();
@@ -426,44 +500,55 @@ export class SyncSession {
     });
   }
 
-  /** Archive the reviewed candidate and live drafts, then require re-enrollment. No publication or vault writes. */
-  recoverPublication(input: { token: string }): Promise<PublicationRecoveryOutcome> {
+  /**
+   * Archive the reviewed candidate and live drafts, then require re-enrollment.
+   * `discard` (default) makes the captured local versions the origins, so
+   * re-enrollment adopts GitHub's head; `republish` keeps the old checkpoint,
+   * so re-enrollment offers the local drafts as uploads. No publication or
+   * vault writes happen here.
+   */
+  recoverPublication(input: { token: string; choice?: "discard" | "republish" }): Promise<PublicationRecoveryOutcome> {
     return this.#exclusive(async () => {
-      const generation = this.#localGeneration;
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
       const preview = await this.#publicationRecoveryPreview(state);
       if (preview.kind !== "preview") return preview;
-      if (generation !== this.#localGeneration || preview.token !== input.token) return { kind: "stale" };
+      if (preview.token !== input.token) return { kind: "stale" };
+      const operation = state.operation;
+      const legacy = operation?.kind === "publish" && operation.publication.phase === "legacy";
       this.#record(state, "publication-recovery", preview.candidateFiles);
       this.#record(state, "publication-recovery", preview.localFiles);
-      // Reviewed abandonment makes the captured local versions the origins;
-      // re-enrollment then offers the live head as updates/deletions, never replay.
-      state.carry = dictionary();
-      for (const path of new Set([...Object.keys(state.base.files), ...Object.keys(preview.localFiles), ...Object.keys(preview.headFiles)])) {
-        const entry = preview.localFiles[path];
-        state.carry[path] = entry ? toRef(entry) : null;
+      if (input.choice !== "republish") {
+        state.carry = dictionary();
+        for (const path of new Set([...Object.keys(state.base.files), ...Object.keys(preview.localFiles), ...Object.keys(preview.headFiles)])) {
+          const entry = preview.localFiles[path];
+          state.carry[path] = entry ? toRef(entry) : null;
+        }
       }
       state.operation = null;
       state.review = null;
       state.decisions = dictionary();
-      state.pause = { reason: "history-rewritten", detail: `Abandoned unresolved candidate ${preview.candidate} after review; re-enroll against the current head` };
+      const sent = legacy
+        ? "Its request was sent without a ledger and cannot be cancelled: if GitHub still applies it while the branch is at its parent, it appears later as an ordinary remote change"
+        : "Re-enrollment anchors this device to the ledger value it then observes";
+      state.pause = { reason: "history-rewritten", detail: `Archived unresolved candidate ${preview.candidate} after review. ${sent}. Re-enroll against the current head` };
       await this.#save(state);
       return { kind: "released", pause: state.pause };
     });
   }
 
   async #publicationRecoveryPreview(state: StoredState): Promise<PublicationRecoveryPreview | PublicationRecoveryRefusal> {
-    const generation = this.#localGeneration;
     const operation = state.operation;
     if (operation?.kind !== "publish") return { kind: "missing" };
+    const legacy = operation.publication.phase === "legacy";
+    if (!legacy && !(state.pause && LEDGER_PAUSES.has(state.pause.reason))) return { kind: "settling" };
     const identity = await this.#repository.identity();
     if (!sameIdentity(identity, state.repository)) {
       return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before reviewing publication recovery" } };
     }
-    const head = await this.#readHead(state);
-    if (head.oid === operation.candidate.commit || await this.#repository.isAncestor(operation.candidate.commit, head.oid)) {
+    const head = await this.#readHead();
+    if (legacy && (head.oid === operation.candidate.commit || await this.#repository.isAncestor(operation.candidate.commit, head.oid))) {
       return { kind: "reachable", candidate: operation.candidate.commit };
     }
     const candidate = await this.#repository.readCommit(operation.candidate.commit);
@@ -472,41 +557,49 @@ export class SyncSession {
       throw new IntegrityError("Recovery candidate differs from the durable operation");
     }
     const localFiles = await this.#capture(state, "recovery local capture");
-    const token = await digestText(JSON.stringify(["publication-recovery/2", this.#previewSession, generation, identity, operation, head.oid, toManifest(localFiles)]));
+    const token = await digestText(JSON.stringify(["publication-recovery/3", this.#previewSession, identity, operation, head.oid, sortedManifest(localFiles)]));
     return { kind: "preview", token, operationId: operation.id, parent: operation.parent, candidate: candidate.oid, head: head.oid, candidateFiles, headFiles: head.files, localFiles };
   }
 
   // ---- Synchronization ---------------------------------------------------
 
-  async #transact(state: StoredState): Promise<SyncOutcome> {
-    const head = await this.#readHead(state);
+  async #transact(state: StoredState): Promise<SyncOutcome | Cancelled> {
+    const head = await this.#readHead();
     if (head.oid !== state.base.commit && !(await this.#repository.isAncestor(state.base.commit, head.oid))) {
+      // One confirmation (re-enrollment) for a genuine rewrite. Accepted work is never replayed.
       return this.#pause(state, "history-rewritten", `Checkpoint ${state.base.commit} is not an ancestor of head ${head.oid}`);
     }
-    this.#observeLocalEvents(state);
-    const generation = this.#localGeneration;
     const hadReview = state.review !== null || Object.keys(state.decisions).length > 0;
     const local = await this.#capture(state, "local capture");
+    this.#guardCapture(state, local);
     const hadPrototypeBaseline = Object.hasOwn(state.base.files, "__proto__");
     const base = await this.#effectiveBase(state, local, head);
     if (base.kind === "paused") return base.outcome;
-    if (generation !== this.#localGeneration) return this.#restartReview(state);
-    if (!state.review || state.review.head !== head.oid || !sameManifest(state.review.local, local)) {
-      this.#invalidateReview(state);
-      state.review = { head: head.oid, scope: this.#nextId(state, "review"), local: toManifest(local), conflicts: [] };
-    }
-    const reviewScope = `${head.oid}:${state.review.scope}`;
-    const unresolved = await reconcile({ base: base.files, local, remote: head.files, decisions: dictionary(), reviewScope });
-    if (generation !== this.#localGeneration) return this.#restartReview(state);
-    const conflicts = unresolved.kind === "needs-decision" ? unresolved.conflicts : [];
+    const guardScope = await digestText(JSON.stringify(["guard/1", head.oid, sortedManifest(local)]));
+    const holds = nativeHolds(state);
+    const unresolved = await reconcile({ base: base.files, local, remote: head.files, decisions: dictionary(), guardScope, holds });
+    const conflicts = unresolved.kind === "needs-decision" ? unresolved.conflicts : unresolved.held;
+    // Decisions survive only while their exact conflict (versions, or guard scope) still exists.
     const validIds = new Set(conflicts.map((item) => item.id));
     for (const id of Object.keys(state.decisions)) if (!validIds.has(id)) delete state.decisions[id];
-    if (conflicts.length === 0) state.review = null;
-    else state.review.conflicts = conflicts.map((item) => this.#storeConflict(state, item));
     const plan = Object.keys(state.decisions).length > 0
-      ? await reconcile({ base: base.files, local, remote: head.files, decisions: choices(state), reviewScope })
+      ? await reconcile({ base: base.files, local, remote: head.files, decisions: choices(state), guardScope, holds })
       : unresolved;
-    if (generation !== this.#localGeneration) return this.#restartReview(state);
+    const reviewed = [...conflicts];
+    const later = plan.kind === "needs-decision" ? plan.conflicts : plan.held;
+    for (const item of later) if (!validIds.has(item.id)) reviewed.push(item);
+    // A decided hold whose chosen version is already live is released now; the
+    // release is durable with the save that follows on every path below.
+    let released = false;
+    if (plan.kind === "ready") {
+      for (const item of plan.resolved) {
+        if ((item.kind === "interrupted-write" || item.kind === "displaced-write") && sameEntry(local[item.path], plan.target[item.path])) {
+          delete state.holds[item.path];
+          released = true;
+        }
+      }
+    }
+    state.review = reviewed.length > 0 ? { head: head.oid, conflicts: reviewed.map((item) => this.#storeConflict(state, item)) } : null;
 
     if (plan.kind === "needs-decision") {
       await this.#save(state);
@@ -514,8 +607,10 @@ export class SyncSession {
     }
 
     const outgoing = Object.keys(plan.outgoing).length;
+    const held = plan.held;
     if (outgoing === 0 && plan.incoming.length === 0) {
       const settled =
+        !released &&
         head.oid === state.base.commit &&
         Object.keys(state.carry).length === 0 &&
         !hadReview &&
@@ -525,9 +620,15 @@ export class SyncSession {
       if (!settled) {
         state.base = commitState(head);
         state.carry = dictionary();
-        state.review = null;
-        state.decisions = dictionary();
+        if (held.length === 0) {
+          state.review = null;
+          state.decisions = dictionary();
+        }
         await this.#save(state);
+      }
+      if (held.length > 0) {
+        await this.#save(state);
+        return { kind: "needs-decision", conflicts: held, merged: plan.merged };
       }
       return { kind: "up-to-date", commit: head.oid };
     }
@@ -540,21 +641,15 @@ export class SyncSession {
     const recoveryId = this.#record(state, "sync", drafts);
     const incomingFiles: Snapshot = dictionary();
     for (const step of plan.incoming) if (step.next) incomingFiles[step.path] = step.next;
-    const incoming = { kind: "captured", recoveryId: this.#record(state, "incoming", incomingFiles) } satisfies ApplyOperation["incoming"];
-    const steps: StoredStep[] = plan.incoming.map((step) => {
-      const consent = step.consent;
-      if (consent.kind === "reviewed" && consent.base) state.blobs[consent.base.oid] = consent.base.data;
-      return {
-        path: step.path,
-        expected: step.expected && toRef(step.expected),
-        next: step.next && toRef(step.next),
-        status: "pending",
-        reason: null,
-        consent: consent.kind === "reviewed"
-          ? { kind: "reviewed", base: consent.base && toRef(consent.base) }
-          : { kind: "automatic" },
-      };
-    });
+    const incomingRecoveryId = this.#record(state, "incoming", incomingFiles);
+    const steps: StoredStep[] = plan.incoming.map((step) => ({
+      path: step.path,
+      expected: step.expected && toRef(step.expected),
+      next: step.next && toRef(step.next),
+      status: "pending",
+      decision: step.decision,
+      reason: null,
+    }));
 
     if (outgoing === 0) {
       const operation: ApplyOperation = {
@@ -562,52 +657,63 @@ export class SyncSession {
         id: this.#nextId(state, "apply"),
         target: { commit: head.oid, tree: head.treeOid, files: toManifest(head.files) },
         steps,
-        approval: { kind: "valid", local: toManifest(local) },
         recoveryId,
-        incoming,
+        incomingRecoveryId,
+        replan: false,
       };
       state.operation = operation;
       await this.#save(state);
-      if (generation !== this.#localGeneration) return this.#restartReview(state);
-      return this.#finish(state, operation, local, head.files, false);
+      return this.#withHolds(state, await this.#finish(state, operation, local, head.files, false));
     }
 
-    const candidate = await this.#repository.prepare(head, plan.outgoing, this.#message(outgoing));
+    const id = `${this.#nextId(state, "publish")}-${crypto.randomUUID()}`;
+    const anchor = state.ledger.anchor;
+    const candidate = await this.#repository.prepare(head, plan.outgoing, this.#message(outgoing), { anchor, operation: id });
     if (!isOid(candidate.oid) || !isOid(candidate.treeOid) || candidate.oid === head.oid || !sameManifest(candidate.files, plan.target)) {
       throw new IntegrityError("Prepared commit does not contain exactly the planned files");
     }
-    if (generation !== this.#localGeneration) return this.#restartReview(state);
+    if (!isOid(candidate.receipt) || [candidate.oid, head.oid, anchor].includes(candidate.receipt)) {
+      throw new IntegrityError("Prepared receipt is not a distinct commit");
+    }
     const operation: PublishOperation = {
       kind: "publish",
-      id: this.#nextId(state, "publish"),
+      id,
       parent: head.oid,
       candidate: { commit: candidate.oid, tree: candidate.treeOid },
+      receipt: candidate.receipt,
+      anchor,
+      publication: { phase: "dispatched" },
       target: toManifest(plan.target),
       steps,
-      approval: { kind: "valid", local: toManifest(local) },
       recoveryId,
-      incoming,
+      incomingRecoveryId,
     };
+    // The receipt identity is durable before the first and only dispatch.
     state.operation = operation;
     await this.#save(state);
-
-    if (generation !== this.#localGeneration) return this.#restartReview(state);
-    const result = await this.#repository.publish(head.oid, candidate.oid);
-    if (result.kind === "accepted") {
-      return this.#finish(state, await this.#promote(state, operation), local, plan.target, true);
-    }
-    // Never trust a non-acceptance blindly: the branch is the authority.
-    const settled = await this.#settle(state, operation);
+    const ack = await this.#repository
+      .publish({ parent: head.oid, candidate: candidate.oid, anchor, receipt: candidate.receipt })
+      .catch(() => "unconfirmed" as const);
+    const settled = ack === "acknowledged" ? await this.#accept(state, operation) : await this.#settle(state, operation);
     if (settled.kind === "held") return settled.outcome;
-    return this.#finish(state, settled.operation, local, plan.target, true);
+    if (settled.kind === "cancelled") return settled;
+    return this.#withHolds(state, await this.#finish(state, settled.operation, local, plan.target, true));
   }
 
-  /** Only called before dispatch: the recorded candidate has never been sent. */
-  async #restartReview(state: StoredState): Promise<SyncOutcome> {
-    state.operation = null;
-    this.#observeLocalEvents(state);
-    await this.#save(state);
-    return this.#transact(state);
+  /**
+   * Undecided native holds keep the sync asking for decisions after other
+   * paths progressed. A hold ingested during this operation is surfaced by
+   * one more reconcile pass, which never touches held paths.
+   */
+  async #withHolds(state: StoredState, outcome: SyncOutcome): Promise<SyncOutcome> {
+    if (outcome.kind !== "synced" || Object.keys(state.holds).length === 0 || this.#holdPass) return outcome;
+    this.#holdPass = true;
+    try {
+      const next = await this.#transact(state);
+      return next.kind === "cancelled" || next.kind === "up-to-date" ? outcome : next;
+    } finally {
+      this.#holdPass = false;
+    }
   }
 
   async #finish(
@@ -623,40 +729,118 @@ export class SyncSession {
   }
 
   /** Continues a persisted operation after a restart, error or block. */
-  async #resume(state: StoredState): Promise<{ kind: "held"; outcome: SyncOutcome } | { kind: "continue"; published: boolean; carried: string[] }> {
+  async #resume(state: StoredState): Promise<{ kind: "held"; outcome: SyncOutcome } | Cancelled | { kind: "continue"; published: boolean; carried: string[] }> {
     let operation = state.operation;
     if (!operation) return { kind: "continue", published: false, carried: [] };
     let published = false;
     if (operation.kind === "publish") {
       const settled = await this.#settle(state, operation);
-      if (settled.kind === "held") return { kind: "held", outcome: settled.outcome };
+      if (settled.kind !== "accepted") return settled;
       operation = settled.operation;
       published = true;
     }
+    const applied = await this.#resumeApply(state, operation);
+    if (applied.kind === "blocked") return { kind: "held", outcome: applied.outcome };
+    return { kind: "continue", published, carried: applied.carried };
+  }
+
+  async #resumeApply(state: StoredState, operation: ApplyOperation): Promise<Applied> {
     const target = await this.#repository.readCommit(operation.target.commit);
     const files = await verifySnapshot(target.files, "target commit");
     if (target.oid !== operation.target.commit || target.treeOid !== operation.target.tree || !sameManifest(files, operation.target.files)) {
       throw new IntegrityError(`Commit ${operation.target.commit} does not match the recorded operation`);
     }
-    if (operation.incoming.kind === "legacy") {
-      const incomingFiles: Snapshot = dictionary();
-      for (const step of operation.steps) if (step.next) incomingFiles[step.path] = files[step.path]!;
-      operation.incoming = { kind: "captured", recoveryId: this.#record(state, "incoming", incomingFiles) };
-      await this.#save(state);
-    }
     const local = await this.#capture(state, "local capture");
-    const applied = await this.#applySteps(state, operation, local, files);
-    if (applied.kind === "blocked") return { kind: "held", outcome: applied.outcome };
-    return { kind: "continue", published, carried: applied.carried };
+    this.#guardCapture(state, local);
+    if (operation.replan) {
+      const planned = await this.#replan(state, operation, local, { oid: target.oid, treeOid: target.treeOid, files });
+      if (planned) return { kind: "blocked", outcome: planned };
+    }
+    return this.#applySteps(state, operation, local, files);
   }
 
   /**
-   * Decides a recorded candidate's fate from the branch alone. A candidate
-   * reachable from the head was published, even if later commits reverted it;
-   * it is applied, never re-published.
+   * Migrated /2 operations: replace their consent-bearing steps by exact
+   * compare-and-swap steps from the effective base to the accepted target.
+   * Any path whose bytes differ from that base is carried, never written.
    */
-  async #settle(state: StoredState, operation: PublishOperation): Promise<Settled> {
-    const head = await this.#readHead(state);
+  async #replan(state: StoredState, operation: ApplyOperation, local: Snapshot, target: CommitSnapshot): Promise<SyncOutcome | null> {
+    const base = await this.#effectiveBase(state, local, target);
+    if (base.kind === "paused") return base.outcome;
+    const preimages: Snapshot = dictionary();
+    const incoming: Snapshot = dictionary();
+    const steps: StoredStep[] = [];
+    for (const path of [...new Set([...Object.keys(local), ...Object.keys(target.files)])].sort()) {
+      const current = local[path] ?? null;
+      const next = target.files[path] ?? null;
+      if (sameEntry(current, next)) continue;
+      const expected = base.files[path] ?? null;
+      if (expected) preimages[path] = expected;
+      if (next) incoming[path] = next;
+      steps.push({ path, expected: expected && toRef(expected), next: next && toRef(next), status: sameEntry(current, expected) ? "pending" : "changed", decision: null, reason: null });
+    }
+    operation.recoveryId = this.#record(state, "migration", preimages);
+    operation.incomingRecoveryId = this.#record(state, "incoming", incoming);
+    operation.steps = steps;
+    operation.replan = false;
+    await this.#save(state);
+    return null;
+  }
+
+  /**
+   * The ledger state machine. Only the ledger value decides: the receipt means
+   * accepted, our seal means cancelled forever, the anchor means undecided and
+   * is raced by the one durable seal. Anything else fails closed.
+   */
+  async #settle(state: StoredState, operation: PublishOperation): Promise<Settlement> {
+    if (operation.publication.phase === "legacy") return this.#settleLegacy(state, operation);
+    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id } };
+    for (let round = 0; round < SETTLE_ROUNDS; round++) {
+      let value: string | null;
+      try {
+        value = await this.#readLedgerValue();
+      } catch (error) {
+        if (retryable(error)) throw error;
+        return settling;
+      }
+      if (value === operation.receipt) return this.#accept(state, operation);
+      if (operation.publication.phase === "sealing" && value === operation.publication.seal) return this.#cancel(state, operation, operation.publication.seal);
+      if (value !== operation.anchor) {
+        // An older ledger value can only be a stale read or an out-of-contract
+        // rewind. Read once more before failing closed.
+        if (round === 0 && value !== null && operation.anchor !== null) {
+          const older = await this.#ancestry(value, operation.anchor);
+          if (older === null) return settling;
+          if (older) {
+            await this.#delay(1000);
+            continue;
+          }
+        }
+        return this.#diverged(state, operation, value);
+      }
+      if (operation.publication.phase !== "sealing") {
+        let seal: string;
+        try {
+          seal = await this.#repository.createSeal({ anchor: operation.anchor, parent: operation.parent, operation: operation.id });
+        } catch (error) {
+          if (retryable(error)) throw error;
+          return settling;
+        }
+        if (!isOid(seal) || [operation.receipt, operation.anchor, operation.parent, operation.candidate.commit].includes(seal)) {
+          throw new IntegrityError("Created seal is not a distinct commit");
+        }
+        // The seal identity is durable before its first dispatch and reused for every retry.
+        operation.publication = { phase: "sealing", seal };
+        await this.#save(state);
+      }
+      await this.#repository.seal({ anchor: operation.anchor, seal: operation.publication.seal }).catch(() => undefined);
+    }
+    return settling;
+  }
+
+  /** /2 publications carried no ledger update: only branch reachability can settle them. */
+  async #settleLegacy(state: StoredState, operation: PublishOperation): Promise<Settlement> {
+    const head = await this.#readHead();
     const candidate = operation.candidate.commit;
     let published = head.oid === candidate;
     if (!published) {
@@ -666,27 +850,91 @@ export class SyncSession {
         published = false;
       }
     }
-    if (published) {
-      return { kind: "published", operation: await this.#promote(state, operation) };
-    }
-    // A missing candidate can have landed and then been removed by a rewind.
-    // Neither an unchanged parent nor a sibling descendant proves nonpublication.
+    if (published) return this.#accept(state, operation);
+    // Absence proves nothing, and a v3 seal cannot fence this request.
     return { kind: "held", outcome: { kind: "publication-unknown", operationId: operation.id, parent: operation.parent, candidate, head: head.oid } };
   }
 
-  async #promote(state: StoredState, operation: PublishOperation): Promise<ApplyOperation> {
+  async #accept(state: StoredState, operation: PublishOperation): Promise<Settlement> {
     const promoted: ApplyOperation = {
       kind: "apply",
       id: operation.id,
       target: { ...operation.candidate, files: operation.target },
       steps: operation.steps,
-      approval: operation.approval,
       recoveryId: operation.recoveryId,
-      incoming: operation.incoming,
+      incomingRecoveryId: operation.incomingRecoveryId,
+      replan: operation.publication.phase === "legacy",
     };
+    if (operation.receipt !== null) state.ledger.anchor = operation.receipt;
     state.operation = promoted;
     await this.#save(state);
-    return promoted;
+    return { kind: "accepted", operation: promoted };
+  }
+
+  /** A publication never wrote the vault, so cancellation only moves the anchor. */
+  async #cancel(state: StoredState, operation: PublishOperation, seal: string): Promise<Settlement> {
+    if (state.operation !== operation) throw new IntegrityError("Cancelled a publication that is not current");
+    state.ledger.anchor = seal;
+    state.operation = null;
+    await this.#save(state);
+    return { kind: "cancelled" };
+  }
+
+  async #diverged(state: StoredState, operation: PublishOperation, value: string | null): Promise<Settlement> {
+    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id } };
+    if (value !== null && operation.receipt !== null) {
+      const accepted = await this.#ancestry(operation.receipt, value);
+      if (accepted === null) return settling;
+      if (accepted) {
+        await this.#accept(state, operation);
+        return { kind: "held", outcome: await this.#pause(state, "duplicate-installation", `Ledger ${state.ledger.ref} advanced past this device's receipt ${operation.receipt}; another installation is writing it`) };
+      }
+      if (operation.publication.phase === "sealing") {
+        const seal = operation.publication.seal;
+        const cancelled = await this.#ancestry(seal, value);
+        if (cancelled === null) return settling;
+        if (cancelled) {
+          await this.#cancel(state, operation, seal);
+          return { kind: "held", outcome: await this.#pause(state, "duplicate-installation", `Ledger ${state.ledger.ref} advanced past this device's seal ${seal}; another installation is writing it`) };
+        }
+      }
+    }
+    const found = value ?? "absent";
+    return { kind: "held", outcome: await this.#pause(state, "ledger-diverged", `Ledger ${state.ledger.ref} is ${found}, expected ${operation.anchor ?? "absent"}; review publication recovery`) };
+  }
+
+  /** Binds a migrated /2 state to this installation's ledger, which must not exist yet. */
+  async #bindLedger(state: StoredState): Promise<SyncOutcome | null> {
+    const ref = this.#repository.ledgerRef();
+    if (state.ledger.ref === null) {
+      if (await this.#readLedgerValue() !== null) {
+        return this.#pause(state, "duplicate-installation", `Ledger ${ref} already exists before this vault's first ledger publication; this device identity may be shared`);
+      }
+      state.ledger.ref = ref;
+      await this.#save(state);
+      return null;
+    }
+    if (state.ledger.ref !== ref) {
+      return this.#pause(state, "duplicate-installation", `This journal belongs to ${state.ledger.ref}, not ${ref}`);
+    }
+    return null;
+  }
+
+  async #readLedgerValue(): Promise<string | null> {
+    const read = await this.#repository.readLedger();
+    if (read.kind === "absent") return null;
+    if (!isOid(read.value)) throw new IntegrityError("Ledger value is not an object ID");
+    return read.value;
+  }
+
+  /** Ancestry with `null` for an inconclusive lookup. */
+  async #ancestry(ancestor: string, descendant: string): Promise<boolean | null> {
+    try {
+      return await this.#repository.isAncestor(ancestor, descendant);
+    } catch (error) {
+      if (retryable(error)) throw error;
+      return null;
+    }
   }
 
   /**
@@ -697,49 +945,30 @@ export class SyncSession {
   async #applySteps(state: StoredState, operation: ApplyOperation, local: Snapshot, files: Snapshot): Promise<Applied> {
     for (const step of operation.steps) {
       if (step.status !== "pending" && step.status !== "blocked") continue;
-      this.#observeLocalEvents(state);
       const current = local[step.path] ?? null;
       if (sameEntry(current, step.next)) {
         markStep(step, "applied");
         continue;
       }
-      if (step.consent.kind === "reviewed" && operation.approval.kind === "revoked") {
-        markStep(step, "revoked");
-        continue;
-      }
-      if (!sameEntry(current, step.expected)) {
+      // A held path is written only to implement the decision on that hold.
+      if (!sameEntry(current, step.expected) || (state.holds[step.path] && step.decision === null)) {
         markStep(step, "changed");
         continue;
       }
       const next = step.next ? files[step.path] : null;
       if (step.next && !sameEntry(next, step.next)) throw new IntegrityError(`Missing target content for ${step.path}`);
-      await this.#beginObservation(state);
-      // Saving the attempt can itself receive a forwarded event.
-      this.#observeLocalEvents(state);
-      if (step.consent.kind === "reviewed" && operation.approval.kind === "revoked") {
-        markStep(step, "revoked");
-        await this.#endObservation(state);
-        continue;
-      }
       const result = await this.#vault.apply(step.path, current, next ?? null);
       if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
       else markStep(step, result.kind);
-      if (result.kind === "changed") {
-        // A failed CAS observes a local change even without a forwarded event.
-        // The durable pending observation already fences a lost result save.
-        this.#invalidateReview(state);
+      if (result.kind === "applied" && step.decision !== null && state.holds[step.path]) {
+        // The exact compare-and-swap made the chosen version live; release with this save.
+        delete state.holds[step.path];
       }
-      // Account for our own completed write when comparing later captures.
-      if (result.kind === "applied" && operation.approval.kind === "valid") {
-        if (step.next) operation.approval.local[step.path] = step.next;
-        else delete operation.approval.local[step.path];
-      }
-      // Record the result and our own write before another observation starts.
-      await this.#endObservation(state);
+      if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], step.path);
+      else await this.#save(state);
     }
 
     // Preserve every observed newer draft even while another step remains blocked.
-    // The capture settles any consent observation; completion pins carry origins below.
     const recaptured = await this.#capture(state, "post-application capture", false);
     const blocked = operation.steps.filter((step) => step.status === "blocked");
     if (blocked.length > 0) {
@@ -759,8 +988,7 @@ export class SyncSession {
     const newer: Snapshot = dictionary();
     const carry: Record<string, Ref | null> = dictionary();
     for (const step of operation.steps) {
-      if (step.status === "revoked" && step.consent.kind === "reviewed") carry[step.path] = step.consent.base;
-      else if (step.status === "changed") carry[step.path] = step.expected;
+      if (step.status === "changed" || step.status === "interrupted") carry[step.path] = step.expected;
       else if (step.status === "kept") {
         carry[step.path] = step.next;
         const entry = files[step.path];
@@ -770,9 +998,7 @@ export class SyncSession {
     const stepsByPath = new Map(operation.steps.map((step) => [step.path, step]));
     for (const path of new Set([...Object.keys(local), ...Object.keys(recaptured), ...stepsByPath.keys()])) {
       const step = stepsByPath.get(path);
-      const expected = step?.status === "revoked" && step.consent.kind === "reviewed"
-        ? step.consent.base
-        : step?.status === "changed" ? step.expected : step ? step.next : local[path];
+      const expected = step?.status === "changed" || step?.status === "interrupted" ? step.expected : step ? step.next : local[path];
       if (!sameEntry(recaptured[path], expected) || Object.hasOwn(carry, path)) {
         if (!Object.hasOwn(carry, path)) carry[path] = expected ? toRef(expected) : null;
         const draft = recaptured[path];
@@ -804,6 +1030,58 @@ export class SyncSession {
     state.decisions = dictionary();
     await this.#save(state);
     return { kind: "complete", commit: operation.target.commit, carried: Object.keys(carry).sort() };
+  }
+
+  /** Ingests every unacknowledged native issue before the first capture; acknowledges only after a durable save. */
+  async #recoverNative(state: StoredState): Promise<void> {
+    if (!this.#vault.recover) return;
+    await this.#ingest(state, await this.#vault.recover());
+  }
+
+  /**
+   * Verifies issues, pins every version in recovery, merges them into durable
+   * per-path holds and saves; then acknowledges every ingested id. Idempotent:
+   * an id already held or awaiting acknowledgement is not ingested twice.
+   */
+  async #ingest(state: StoredState, issues: NativeIssue[], requiredPath?: string): Promise<void> {
+    const known = new Set([...state.unacknowledged, ...Object.values(state.holds).flatMap((item) => item.ids)]);
+    let changed = false;
+    for (const issue of issues) {
+      const at = `native issue ${typeof issue?.id === "string" ? issue.id : "?"}`;
+      if (typeof issue !== "object" || issue === null || typeof issue.id !== "string" || issue.id.length === 0 || issue.id.length > 256) throw new IntegrityError(`${at}: malformed id`);
+      if (!isSyncablePath(issue.path) || (requiredPath !== undefined && issue.path !== requiredPath)) throw new IntegrityError(`${at}: unexpected path`);
+      if (issue.kind !== "interrupted" && issue.kind !== "displaced") throw new IntegrityError(`${at}: unknown kind`);
+      const verify = async (entry: Entry | null, label: string) => (entry === null ? null : verifyEntry(`${at} ${label}`, entry));
+      const expected = await verify(issue.expected, "expected");
+      const next = await verify(issue.next, "next");
+      const found = await verify(issue.found, "found");
+      if (known.has(issue.id)) continue;
+      known.add(issue.id);
+      for (const entry of [expected, next, found]) if (entry) this.#record(state, "native", dictionary([[issue.path, entry]]));
+      const prior = state.holds[issue.path];
+      state.holds[issue.path] = prior
+        ? { ...prior, ids: [...prior.ids, issue.id], kind: prior.kind === "interrupted" || issue.kind === "interrupted" ? "interrupted" : "displaced", found: found && toRef(found) }
+        : { ids: [issue.id], kind: issue.kind, expected: expected && toRef(expected), next: next && toRef(next), found: found && toRef(found) };
+      state.unacknowledged.push(issue.id);
+      changed = true;
+    }
+    if (changed || requiredPath !== undefined) await this.#save(state);
+    if (state.unacknowledged.length === 0 || !this.#vault.acknowledgeRecovery) return;
+    try {
+      await this.#vault.acknowledgeRecovery([...state.unacknowledged]);
+    } catch {
+      return; // The ids stay unacknowledged and are retried; ingestion is idempotent.
+    }
+    state.unacknowledged = [];
+    await this.#save(state);
+  }
+
+  /** An empty capture against a non-empty checkpoint is storage loss, never a plan. */
+  #guardCapture(state: StoredState, local: Snapshot): void {
+    const expected = Object.keys(effectiveManifest(state)).length;
+    if (Object.keys(local).length === 0 && expected > 0) {
+      throw new VaultCaptureError(`The vault reads as empty while ${expected} synchronized files are expected; storage may be unavailable, so nothing was planned`);
+    }
   }
 
   /** Verify the immutable checkpoint, then materialize checkpoint plus carry. */
@@ -849,9 +1127,8 @@ export class SyncSession {
     carry: Record<string, Ref | null>;
     drafts: Snapshot;
   }> {
-    const generation = this.#localGeneration;
     const repository = await this.#repository.identity();
-    const head = await this.#readHead(prior);
+    const head = await this.#readHead();
     const local = await this.#capture(prior, "local capture");
     if (prior) {
       const checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
@@ -897,9 +1174,8 @@ export class SyncSession {
     }
     const token = await digestText(
       JSON.stringify([
-        "enroll/2",
+        "enroll/3",
         this.#previewSession,
-        generation,
         repository,
         head.oid,
         prior?.base.commit ?? null,
@@ -918,7 +1194,6 @@ export class SyncSession {
   // ---- Restore -----------------------------------------------------------
 
   async #restorePreview(state: StoredState, input: { path: string; commit: string }): Promise<RestorePreview | RestoreRefusal> {
-    const generation = this.#localGeneration;
     if (!isSyncablePath(input.path)) return { kind: "invalid-path" };
     if (!isOid(input.commit)) return { kind: "not-in-history" };
     if (input.commit !== state.base.commit && !(await this.#repository.isAncestor(input.commit, state.base.commit))) {
@@ -932,7 +1207,7 @@ export class SyncSession {
     const local = await this.#capture(state, "local capture");
     const current = local[input.path] ?? null;
     const token = await digestText(
-      JSON.stringify(["restore/2", this.#previewSession, generation, input.path, input.commit, historical.oid, historical.mode, current?.oid ?? null, current?.mode ?? null]),
+      JSON.stringify(["restore/3", this.#previewSession, input.path, input.commit, historical.oid, historical.mode, current?.oid ?? null, current?.mode ?? null]),
     );
     return { kind: "preview", token, path: input.path, commit: input.commit, historical, current };
   }
@@ -972,7 +1247,7 @@ export class SyncSession {
     const phase: Phase = state.pause
       ? "paused"
       : operation?.kind === "publish"
-        ? "publication-unknown"
+        ? operation.publication.phase === "legacy" ? "publication-unknown" : "settling"
         : operation
           ? blocked.length > 0
             ? "blocked"
@@ -998,38 +1273,10 @@ export class SyncSession {
 
   // ---- Persistence -------------------------------------------------------
 
-  #observeLocalEvents(state: StoredState): boolean {
-    if ((this.#stateGenerations.get(state) ?? this.#durableGeneration) === this.#localGeneration) return false;
-    this.#invalidateReview(state);
-    this.#stateGenerations.set(state, this.#localGeneration);
-    return true;
-  }
-
-  #invalidateReview(state: StoredState): boolean {
-    const revoked = state.operation?.approval.kind === "valid";
-    if (revoked && state.operation) state.operation.approval = { kind: "revoked" };
-    if (!state.review && Object.keys(state.decisions).length === 0) return revoked;
-    const priorDrafts: Manifest = dictionary();
-    for (const conflict of state.review?.conflicts ?? []) {
-      if (conflict.kind !== "collision" && conflict.local) priorDrafts[conflict.path] = conflict.local;
-    }
-    this.#record(state, "sync", materialize(state, priorDrafts));
-    state.review = null;
-    state.decisions = dictionary();
-    return true;
-  }
-
-  /** All enrolled captures archive drafts and retire approvals before an API can return early. */
+  /** Archives every local draft not already pinned before an API can return early. */
   async #capture(state: StoredState | null, label: string, persist = true): Promise<Snapshot> {
-    if (state) await this.#beginObservation(state);
-    const observed = state ? this.#observeLocalEvents(state) : false;
     const local = await verifySnapshot(await this.#vault.capture(), label);
     if (!state) return local;
-    let changed = this.#observeLocalEvents(state) || observed;
-    if ((state.review && !sameManifest(state.review.local, local)) ||
-        (state.operation?.approval.kind === "valid" && !sameManifest(state.operation.approval.local, local))) {
-      changed = this.#invalidateReview(state) || changed;
-    }
     const base = effectiveManifest(state);
     const drafts: Snapshot = dictionary();
     // Records may hold different versions at the same path; use all pinned
@@ -1039,21 +1286,8 @@ export class SyncSession {
     }
     const counter = state.counter;
     this.#record(state, "sync", drafts);
-    if (state.observation === "pending") await this.#endObservation(state);
-    else if (persist && (changed || state.counter !== counter)) await this.#save(state);
+    if (persist && state.counter !== counter) await this.#save(state);
     return local;
-  }
-
-  /** Persist uncertainty before calling a port that can disprove live consent. */
-  async #beginObservation(state: StoredState): Promise<void> {
-    if (!state.review && state.operation?.approval.kind !== "valid") return;
-    state.observation = "pending";
-    await this.#save(state);
-  }
-
-  async #endObservation(state: StoredState): Promise<void> {
-    state.observation = "settled";
-    await this.#save(state);
   }
 
   #exclusive<T>(task: () => Promise<T>): Promise<T> {
@@ -1066,12 +1300,7 @@ export class SyncSession {
     const raw = await this.#store.load();
     if (raw === undefined || raw === null) return { kind: "unenrolled" };
     try {
-      const state = await parseState(raw);
-      this.#stateGenerations.set(state, this.#durableGeneration);
-      const observed = this.#observeLocalEvents(state);
-      if (state.observation === "pending") await this.#endObservation(state);
-      else if (observed) await this.#save(state);
-      return { kind: "enrolled", state };
+      return { kind: "enrolled", state: await parseState(raw) };
     } catch (error) {
       if (error instanceof CorruptStateError) return { kind: "corrupt", detail: error.message };
       throw error;
@@ -1079,9 +1308,7 @@ export class SyncSession {
   }
 
   async #save(state: StoredState): Promise<void> {
-    this.#observeLocalEvents(state);
-    const generation = this.#stateGenerations.get(state) ?? this.#durableGeneration;
-    const active = new Set([state.operation?.recoveryId, state.operation?.incoming.kind === "captured" ? state.operation.incoming.recoveryId : null]);
+    const active = new Set([state.operation?.recoveryId, state.operation?.incomingRecoveryId]);
     const disposable = state.recovery.filter((record) => !record.pinned && !active.has(record.id));
     const drop = new Set(disposable.slice(0, Math.max(0, disposable.length - RETAINED_RECOVERY)).map((record) => record.id));
     state.recovery = state.recovery.filter((record) => !drop.has(record.id));
@@ -1092,13 +1319,10 @@ export class SyncSession {
     copy.carry = dictionary(Object.entries(copy.carry));
     copy.decisions = dictionary(Object.entries(copy.decisions));
     copy.blobs = dictionary(Object.entries(copy.blobs));
-    if (copy.review) copy.review.local = toManifest(copy.review.local);
-    if (copy.operation?.approval.kind === "valid") copy.operation.approval.local = toManifest(copy.operation.approval.local);
     if (copy.operation?.kind === "publish") copy.operation.target = toManifest(copy.operation.target);
     else if (copy.operation) copy.operation.target.files = toManifest(copy.operation.target.files);
     for (const record of copy.recovery) record.files = toManifest(record.files);
     await this.#store.save(copy);
-    this.#durableGeneration = generation;
   }
 
   async #pause(state: StoredState, reason: PauseReason, detail: string): Promise<SyncOutcome> {
@@ -1107,19 +1331,10 @@ export class SyncSession {
     return { kind: "paused", pause: state.pause };
   }
 
-  async #readHead(state: StoredState | null = null): Promise<CommitSnapshot> {
-    if (state) await this.#beginObservation(state);
+  async #readHead(): Promise<CommitSnapshot> {
     const head = await this.#repository.head();
     if (!isOid(head.oid) || !isOid(head.treeOid)) throw new IntegrityError("Repository head has malformed object IDs");
-    const verified = { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(head.files, "remote head") };
-    if (state) {
-      // A candidate we just published is an expected head transition.
-      const expectedHead = state.operation?.kind === "publish" ? state.operation.candidate.commit
-        : state.operation?.kind === "apply" ? state.operation.target.commit : state.review?.head;
-      if (expectedHead && expectedHead !== head.oid) this.#invalidateReview(state);
-      if (state.observation === "pending") await this.#endObservation(state);
-    }
-    return verified;
+    return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(head.files, "remote head") };
   }
 
   /** Adds an immutable recovery record, reusing an identical pinned one. Returns its id. */
@@ -1142,11 +1357,19 @@ export class SyncSession {
 
   #storeConflict(state: StoredState, conflict: Conflict): StoredConflict {
     if (conflict.kind === "collision") return { kind: "collision", id: conflict.id, paths: conflict.paths };
+    if (conflict.kind === "bulk-deletion") return { kind: "bulk-deletion", id: conflict.id, direction: conflict.direction, paths: conflict.paths };
     const keep = (entry: Entry | null): Ref | null => {
       if (!entry) return null;
       state.blobs[entry.oid] = entry.data;
       return toRef(entry);
     };
+    if (isNativeConflict(conflict)) {
+      return {
+        kind: conflict.kind, id: conflict.id, path: conflict.path,
+        base: keep(conflict.base), local: keep(conflict.local), remote: keep(conflict.remote),
+        expected: keep(conflict.expected), next: keep(conflict.next), found: keep(conflict.found),
+      };
+    }
     return {
       kind: conflict.kind,
       id: conflict.id,
@@ -1189,6 +1412,27 @@ function effectiveManifest(state: StoredState): Manifest {
   return refs;
 }
 
+function sortedManifest(files: Snapshot | Manifest): Array<[string, string, string]> {
+  return Object.entries(files).map(([path, entry]): [string, string, string] => [path, entry.mode, entry.oid]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function retryable(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "retryAt" in error && typeof error.retryAt === "number" && Number.isFinite(error.retryAt);
+}
+
+function isNativeConflict<T extends { kind: string }>(conflict: T): conflict is Extract<T, { kind: "interrupted-write" | "displaced-write" }> {
+  return conflict.kind === "interrupted-write" || conflict.kind === "displaced-write";
+}
+
+function nativeHolds(state: StoredState): Record<string, NativeHold> {
+  const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid]! } : null);
+  const holds: Record<string, NativeHold> = dictionary();
+  for (const [path, item] of Object.entries(state.holds)) {
+    holds[path] = { id: item.ids.join(","), kind: item.kind, expected: entry(item.expected), next: entry(item.next), found: entry(item.found) };
+  }
+  return holds;
+}
+
 function choices(state: StoredState): Record<string, Choice> {
   const result: Record<string, Choice> = dictionary();
   for (const [id, decision] of Object.entries(state.decisions)) {
@@ -1206,7 +1450,16 @@ function materialize(state: StoredState, files: Manifest): Snapshot {
 
 function restoreConflict(state: StoredState, conflict: StoredConflict): Conflict {
   if (conflict.kind === "collision") return conflict;
+  if (conflict.kind === "bulk-deletion") return { ...conflict, choices: ["mine", "remote"] };
   const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid]! } : null);
+  if (isNativeConflict(conflict)) {
+    return {
+      ...conflict,
+      base: entry(conflict.base), local: entry(conflict.local), remote: entry(conflict.remote),
+      expected: entry(conflict.expected), next: entry(conflict.next), found: entry(conflict.found),
+      choices: nativeChoices(conflict),
+    };
+  }
   return { ...conflict, base: entry(conflict.base), local: entry(conflict.local), remote: entry(conflict.remote) };
 }
 

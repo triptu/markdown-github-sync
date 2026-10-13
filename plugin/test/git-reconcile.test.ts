@@ -20,8 +20,8 @@ test("keep both is offered only when the generated sibling fits the path limit",
     assert.equal(siblingPath(path, local[path]!.oid).length, siblingLength);
     const plan = await reconcile({ base, local, remote, decisions: {} });
     assert.ok(plan.kind === "needs-decision");
-    const conflict = plan.conflicts[0]!;
-    assert.ok(conflict.kind !== "collision");
+    const conflict = plan.conflicts[0] as VersionConflict;
+    assert.equal(conflict.kind, "content");
     assert.equal(conflict.choices.includes("both"), siblingLength === 4096);
     assert.equal(conflict.sibling !== null, siblingLength === 4096);
     if (conflict.sibling) {
@@ -81,20 +81,20 @@ test("independent changes on both sides combine; only differences move", async (
   assert.deepEqual(Object.keys(plan.target).sort(), ["a.md", "b.md", "c.md", "img.png", "new.md"]);
 });
 
-test("every deletion, delete/edit and add/add needs a decision tied to exact versions", async () => {
+// Changed guarantee (v3): one-sided deletions are automatic like edits; only
+// delete/edit and add/add remain decisions tied to exact versions.
+test("one-sided deletions are automatic; delete/edit and add/add need a decision tied to exact versions", async () => {
   const base = await snapshot({ "gone-here.md": "x", "gone-there.md": "y", "del-edit.md": "1", "edit-del.md": "1" });
   const local = await snapshot({ "gone-there.md": "y", "edit-del.md": "2", "both.md": "mine" });
   const remote = await snapshot({ "gone-here.md": "x", "del-edit.md": "2", "both.md": "theirs" });
   const plan = await reconcile({ base, local, remote, decisions: {} });
   assert.equal(plan.kind, "needs-decision");
   if (plan.kind !== "needs-decision") return;
-  const kinds = Object.fromEntries(plan.conflicts.map((item) => [item.kind === "collision" ? "" : item.path, item.kind]));
+  const kinds = Object.fromEntries((plan.conflicts as VersionConflict[]).map((item) => [item.path, item.kind]));
   assert.deepEqual(kinds, {
     "both.md": "add-add",
     "del-edit.md": "local-deleted-remote-edited",
     "edit-del.md": "local-edited-remote-deleted",
-    "gone-here.md": "local-deletion",
-    "gone-there.md": "remote-deletion",
   });
 
   const conflicts = plan.conflicts as VersionConflict[];
@@ -103,8 +103,6 @@ test("every deletion, delete/edit and add/add needs a decision tied to exact ver
     [id("both.md")]: { kind: "both" },
     [id("del-edit.md")]: { kind: "remote" },
     [id("edit-del.md")]: { kind: "edit", entry: await entryFromText("edited") },
-    [id("gone-here.md")]: { kind: "mine" },
-    [id("gone-there.md")]: { kind: "remote" },
   };
   const resolved = await reconcile({ base, local, remote, decisions });
   assert.equal(resolved.kind, "ready");
@@ -118,8 +116,8 @@ test("every deletion, delete/edit and add/add needs a decision tied to exact ver
     "edit-del.md": "edited",
   });
   assert.deepEqual(Object.keys(resolved.outgoing).sort(), ["edit-del.md", "gone-here.md", sibling].sort());
-  const deletions = resolved.incoming.filter((step) => !step.next).map((step) => step.path);
-  assert.deepEqual(deletions, ["gone-there.md"]);
+  const deletions = resolved.incoming.filter((step) => !step.next).map((step) => [step.path, step.decision]);
+  assert.deepEqual(deletions, [["gone-there.md", null]], "the one-sided remote deletion is an automatic step");
   assert.equal(resolved.incoming.at(-1)!.path, "gone-there.md", "deletions run last");
 
   // A changed version produces a new id: the old decision no longer applies.
@@ -127,6 +125,74 @@ test("every deletion, delete/edit and add/add needs a decision tied to exact ver
   const again = await reconcile({ base, local, remote: moved, decisions });
   assert.equal(again.kind, "needs-decision");
   if (again.kind === "needs-decision") assert.deepEqual(again.conflicts.map((item) => item.kind), ["add-add"]);
+});
+
+for (const side of ["local", "remote"] as const) {
+  test(`a pure ${side} rename against an edit of the old path moves the edit automatically`, async () => {
+    const base = await snapshot({ "old.md": "body", "other.md": "o" });
+    const renamed = await snapshot({ "new.md": "body", "other.md": "o" });
+    const edited = await snapshot({ "old.md": "body edited", "other.md": "o" });
+    const local = side === "local" ? renamed : edited;
+    const remote = side === "local" ? edited : renamed;
+    const plan = await reconcile({ base, local, remote, decisions: {} });
+    assert.ok(plan.kind === "ready", JSON.stringify(plan));
+    assert.deepEqual(Object.fromEntries(Object.entries(plan.target).map(([path, entry]) => [path, entryText(entry)])), { "new.md": "body edited", "other.md": "o" });
+    assert.ok(plan.incoming.every((step) => step.decision === null));
+    const incoming = Object.fromEntries(plan.incoming.map((step) => [step.path, step.next ? entryText(step.next) : null]));
+    assert.deepEqual(incoming, side === "local" ? { "new.md": "body edited" } : { "new.md": "body edited", "old.md": null });
+    assert.deepEqual(Object.keys(plan.outgoing).sort(), side === "local" ? ["new.md", "old.md"] : ["new.md"]);
+  });
+}
+
+test("ambiguous renames against an edit stay ordinary conflicts", async () => {
+  const base = await snapshot({ "a.md": "same", "b.md": "same" });
+  // Two deleted paths share the moved bytes: which one moved is unknowable.
+  const local = await snapshot({ "c.md": "same" });
+  const remote = await snapshot({ "a.md": "edited", "b.md": "same" });
+  const plan = await reconcile({ base, local, remote, decisions: {} });
+  assert.ok(plan.kind === "needs-decision");
+  assert.deepEqual((plan.conflicts as VersionConflict[]).map((item) => [item.path, item.kind]), [["a.md", "local-deleted-remote-edited"]]);
+});
+
+for (const direction of ["local", "remote"] as const) {
+  test(`deleting at least max(25, 20%) of base paths from the ${direction} side needs exactly one confirmation`, async () => {
+    const names = Array.from({ length: 125 }, (_, index) => `n${String(index).padStart(3, "0")}.md`);
+    const base = await snapshot(Object.fromEntries(names.map((name) => [name, `body ${name}`])));
+    const survivors = (count: number) => Object.fromEntries(Object.entries(base).slice(count));
+    // 24 deletions out of 125 is below max(25, ceil(25)) = 25 and stays automatic.
+    for (const [count, guarded] of [[24, false], [25, true]] as const) {
+      const shrunk = survivors(count);
+      const local = direction === "local" ? shrunk : base;
+      const remote = direction === "local" ? base : shrunk;
+      const plan = await reconcile({ base, local, remote, decisions: {}, guardScope: "head:local" });
+      if (!guarded) {
+        assert.equal(plan.kind, "ready");
+        continue;
+      }
+      assert.ok(plan.kind === "needs-decision");
+      assert.equal(plan.conflicts.length, 1);
+      const conflict = plan.conflicts[0]!;
+      assert.ok(conflict.kind === "bulk-deletion" && conflict.direction === direction && conflict.paths.length === 25);
+      const proceed = await reconcile({ base, local, remote, guardScope: "head:local", decisions: { [conflict.id]: { kind: direction === "local" ? "mine" : "remote" } } });
+      assert.ok(proceed.kind === "ready");
+      assert.equal(Object.keys(proceed.target).length, 100);
+      if (direction === "remote") assert.ok(proceed.incoming.every((step) => step.next === null && step.decision === conflict.id));
+      const restore = await reconcile({ base, local, remote, guardScope: "head:local", decisions: { [conflict.id]: { kind: direction === "local" ? "remote" : "mine" } } });
+      assert.ok(restore.kind === "ready");
+      assert.equal(Object.keys(restore.target).length, 125, "keeping the other side restores every file");
+      const rescoped = await reconcile({ base, local, remote, guardScope: "head2:local", decisions: { [conflict.id]: { kind: "mine" } } });
+      assert.ok(rescoped.kind === "needs-decision" && rescoped.conflicts[0]!.id !== conflict.id, "the confirmation binds head and local manifest");
+    }
+  });
+}
+
+test("moving a whole folder is not a bulk deletion", async () => {
+  const names = Array.from({ length: 40 }, (_, index) => `old/n${index}.md`);
+  const base = await snapshot(Object.fromEntries(names.map((name) => [name, `body ${name}`])));
+  const local = await snapshot(Object.fromEntries(names.map((name) => [name.replace("old/", "new/"), `body ${name}`])));
+  const plan = await reconcile({ base, local, remote: base, decisions: {} });
+  assert.ok(plan.kind === "ready");
+  assert.equal(Object.values(plan.outgoing).filter((entry) => entry === null).length, 40);
 });
 
 test("case-insensitive collisions are reported instead of materialized", async () => {
@@ -147,12 +213,9 @@ test("case-insensitive collisions are reported instead of materialized", async (
     remote: await snapshot({ "A.md": "x" }),
     decisions: {},
   });
-  assert.equal(renamed.kind, "needs-decision", "the deletion half still needs review");
-  if (renamed.kind !== "needs-decision") return;
-  const accept = { [renamed.conflicts[0]!.id]: { kind: "remote" } as const };
-  const ready = await reconcile({ base, local: base, remote: await snapshot({ "A.md": "x" }), decisions: accept });
-  assert.equal(ready.kind, "ready");
-  if (ready.kind === "ready") assert.deepEqual(ready.incoming.map((step) => [step.path, step.next ? "write" : "delete"]), [["a.md", "delete"], ["A.md", "write"]]);
+  // v3: the remote rename is automatic (delete + create).
+  assert.equal(renamed.kind, "ready");
+  if (renamed.kind === "ready") assert.deepEqual(renamed.incoming.map((step) => [step.path, step.next ? "write" : "delete"]), [["a.md", "delete"], ["A.md", "write"]]);
 });
 
 test("keep both is withheld when the sibling name is already taken", async () => {
@@ -182,12 +245,12 @@ test("prototype-key additions, updates and deletions use only own file entries",
     assert.equal(plan.target[path]?.oid, entry.oid);
     assert.equal(plan.outgoing[path]?.oid, entry.oid);
     const deletion = await reconcile({ base: local, local: {}, remote: local, decisions: {} });
-    assert.ok(deletion.kind === "needs-decision" && deletion.conflicts[0]?.kind === "local-deletion", path);
+    assert.ok(deletion.kind === "ready" && Object.hasOwn(deletion.outgoing, path) && deletion.outgoing[path] === null, path);
   }
 });
 
-test("a decision is valid only within its head and review generation", async () => {
-  const versions = { base: await snapshot({ "n.md": "base" }), local: {}, remote: await snapshot({ "n.md": "base" }) };
+test("a decision is valid only within an optional review scope", async () => {
+  const versions = { base: await snapshot({ "n.md": "base" }), local: await snapshot({ "n.md": "local" }), remote: await snapshot({ "n.md": "remote" }) };
   const first = await reconcile({ ...versions, decisions: {}, reviewScope: "head1:generation1" });
   assert.ok(first.kind === "needs-decision");
   const conflict = first.conflicts[0]!;
@@ -200,22 +263,19 @@ test("a decision is valid only within its head and review generation", async () 
   }
 });
 
-test("incoming steps distinguish automatic updates from reviewed replacements and retain conflict origins", async () => {
+test("incoming steps name the decision they implement; automatic steps name none", async () => {
   const base = await snapshot({ "automatic.md": "old", "conflict.md": "base", "gone.md": "delete me" });
   const local = await snapshot({ "automatic.md": "old", "conflict.md": "local", "gone.md": "delete me" });
   const remote = await snapshot({ "automatic.md": "new", "conflict.md": "remote" });
   const review = await reconcile({ base, local, remote, decisions: {} });
   assert.ok(review.kind === "needs-decision");
-  const decisions: Record<string, Choice> = {};
-  for (const item of review.conflicts) {
-    assert.ok(item.kind !== "collision");
-    decisions[item.id] = { kind: item.path === "conflict.md" ? "both" : "remote" };
-  }
-  const plan = await reconcile({ base, local, remote, decisions });
+  assert.equal(review.conflicts.length, 1);
+  const conflict = review.conflicts[0]!;
+  const plan = await reconcile({ base, local, remote, decisions: { [conflict.id]: { kind: "both" } } });
   assert.ok(plan.kind === "ready");
-  assert.deepEqual(plan.incoming.find((step) => step.path === "automatic.md")?.consent, { kind: "automatic" });
-  assert.deepEqual(plan.incoming.find((step) => step.path === "conflict.md")?.consent, { kind: "reviewed", base: base["conflict.md"] });
-  assert.deepEqual(plan.incoming.find((step) => step.path === "gone.md")?.consent, { kind: "reviewed", base: base["gone.md"] });
+  assert.equal(plan.incoming.find((step) => step.path === "automatic.md")?.decision, null);
+  assert.equal(plan.incoming.find((step) => step.path === "gone.md")?.decision, null);
+  assert.equal(plan.incoming.find((step) => step.path === "conflict.md")?.decision, conflict.id);
   const sibling = siblingPath("conflict.md", local["conflict.md"]!.oid);
-  assert.deepEqual(plan.incoming.find((step) => step.path === sibling)?.consent, { kind: "reviewed", base: null });
+  assert.equal(plan.incoming.find((step) => step.path === sibling)?.decision, conflict.id);
 });

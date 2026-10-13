@@ -1,4 +1,4 @@
-import type { Changes, CommitSnapshot, Entry, PublishResult, Repository, RepositoryIdentity, Snapshot } from "./contracts";
+import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, Repository, RepositoryIdentity, Snapshot } from "./contracts";
 
 export interface GitHubRequest {
   url: string;
@@ -20,6 +20,12 @@ export interface GitHubRepositoryOptions {
   branch: string;
   transport: GitHubTransport;
   token: () => Promise<string>;
+  /**
+   * Stable per-installation identity (canonical lowercase UUID), naming the
+   * ledger ref `refs/vault-sync/devices/<installation>`. Required: there is no
+   * default, because two devices sharing a ledger would void its guarantees.
+   */
+  installation: string;
   /** Injectable clock for rate-limit scheduling. */
   now?: () => number;
 }
@@ -33,6 +39,10 @@ const SNAPSHOT_LIMIT = 128 * 1024 * 1024;
 const CACHE_LIMIT = 128 * 1024 * 1024;
 const CACHE_OBJECT_LIMIT = 4096;
 const ENCODED_LIMIT = 4 * Math.ceil(FILE_LIMIT / 3);
+const INSTALLATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ZERO_OID = "0".repeat(40);
+const UPDATE_REFS = "mutation Publish($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }";
+const READ_LEDGER = "query Ledger($id: ID!, $ref: String!) { node(id: $id) { ... on Repository { ref(qualifiedName: $ref) { prefix name target { oid } } } } }";
 const encoder = new TextEncoder();
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new GitHubError("Malformed GitHub object");
@@ -46,6 +56,10 @@ function oid(value: unknown): string {
   const result = string(value);
   if (!/^[0-9a-f]{40}$/.test(result)) throw new GitHubError("Invalid Git object identity");
   return result;
+}
+function label(value: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(value)) throw new GitHubError("Invalid operation label");
+  return value;
 }
 function list(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new GitHubError("Malformed GitHub list");
@@ -173,11 +187,14 @@ async function verifyTree(items: TreeItem[], root: string): Promise<void> {
 export class GitHubRepository implements Repository {
   private readonly base: string;
   private readonly now: () => number;
+  private readonly ledger: string;
   private readonly cache = new Map<string, { object: CachedObject; cost: number }>();
   private cacheCost = 0;
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
+    if (typeof options.installation !== "string" || !INSTALLATION.test(options.installation)) throw new GitHubError("Invalid installation identity");
+    this.ledger = `refs/vault-sync/devices/${options.installation}`;
     this.base = `https://api.github.com/repos/${encodeURIComponent(options.owner)}/${encodeURIComponent(options.name)}`;
     this.now = options.now ?? Date.now;
   }
@@ -358,7 +375,10 @@ export class GitHubRepository implements Repository {
     if (mergeBase === ancestor) throw new GitHubError("Inconsistent GitHub ancestry result");
     return false;
   }
-  async prepare(parent: CommitSnapshot, changes: Changes, message: string): Promise<CommitSnapshot> {
+  ledgerRef(): string { return this.ledger; }
+  async prepare(parent: CommitSnapshot, changes: Changes, message: string, ledger: { anchor: string | null; operation: string }): Promise<PreparedPublication> {
+    const anchor = ledger.anchor === null ? null : oid(ledger.anchor);
+    const operation = label(ledger.operation);
     const value = await this.getCommit(parent.oid);
     if (value.treeOid !== parent.treeOid) throw new GitHubError("Parent tree identity mismatch");
     const items = await this.tree(value.treeOid);
@@ -401,41 +421,69 @@ export class GitHubRepository implements Repository {
     const excluded = (entries: TreeItem[]) => new Map(entries.filter(i => !visible(i.path)).map(i => [i.path, `${i.mode}:${i.type}:${i.sha}`]));
     if (!sameMap(excluded(items), excluded(candidateItems))) throw new GitHubError("Prepared tree changed excluded repository paths");
     if (!sameMap(expected, terminals(candidateItems))) throw new GitHubError("Prepared tree does not preserve requested and excluded paths");
-    const created = commit(await this.rest("/git/commits", "POST", { message, tree: treeOid, parents: [value.oid] }));
-    if (created.treeOid !== treeOid || created.parents.length !== 1 || created.parents[0] !== value.oid) throw new GitHubError("Created commit parent or tree mismatch");
-    const reread = await this.getCommit(created.oid, true);
-    if (reread.treeOid !== treeOid || reread.parents.length !== 1 || reread.parents[0] !== value.oid) throw new GitHubError("Prepared commit identity mismatch");
-    return { oid: created.oid, treeOid, files };
+    const created = await this.createCommit(message, treeOid, [value.oid]);
+    // The receipt keeps every candidate reachable from the ledger, even after a branch rewind.
+    const receiptMessage = `vault-sync receipt/1\n\nop: ${operation}\ninstallation: ${this.options.installation}\nparent: ${value.oid}\ncandidate: ${created}\nstatus: accepted\n`;
+    const receipt = await this.createCommit(receiptMessage, treeOid, anchor === null ? [created] : [anchor, created]);
+    return { oid: created, treeOid, files, receipt };
   }
-  async publish(expectedHead: string, candidate: string): Promise<PublishResult> {
-    oid(expectedHead); oid(candidate);
-    const prepared = await this.getCommit(candidate);
-    if (prepared.parents.length !== 1 || prepared.parents[0] !== expectedHead || candidate === expectedHead) throw new GitHubError("Candidate must have exactly the expected head as parent");
+  async createSeal(input: { anchor: string | null; parent: string; operation: string }): Promise<string> {
+    const anchor = input.anchor === null ? null : oid(input.anchor);
+    const operation = label(input.operation);
+    const parent = await this.getCommit(input.parent);
+    const message = `vault-sync seal/1\n\nop: ${operation}\ninstallation: ${this.options.installation}\nparent: ${parent.oid}\nstatus: cancelled\n`;
+    return this.createCommit(message, parent.treeOid, anchor === null ? [] : [anchor]);
+  }
+  /** Creates a commit and independently rereads it; returns its identity. */
+  private async createCommit(message: string, tree: string, parents: string[]): Promise<string> {
+    const created = commit(await this.rest("/git/commits", "POST", { message, tree, parents }));
+    const same = (value: Commit) => value.treeOid === tree && value.parents.length === parents.length && value.parents.every((item, index) => item === parents[index]);
+    if (!same(created)) throw new GitHubError("Created commit parent or tree mismatch");
+    if (!same(await this.getCommit(created.oid, true))) throw new GitHubError("Prepared commit identity mismatch");
+    return created.oid;
+  }
+  private async updateRefs(updates: { name: string; beforeOid: string; afterOid: string }[], clientMutationId: string): Promise<"acknowledged" | "unconfirmed"> {
     const identity = await this.identity();
-    let rejected = false;
-    try {
-      const response = record((await this.request("https://api.github.com/graphql", "POST", {
-        query: "mutation Publish($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
-        variables: { input: { repositoryId: identity.id, clientMutationId: candidate, refUpdates: [{ name: `refs/heads/${this.options.branch}`, beforeOid: expectedHead, afterOid: candidate, force: false }] } }
-      })).json);
-      if (response.errors !== undefined && list(response.errors).length > 0) rejected = true;
-      else {
-        const mutation = record(record(response.data).updateRefs);
-        if (mutation.clientMutationId !== candidate) throw new GitHubError("Malformed publication acknowledgment");
-        return { kind: "accepted" };
-      }
-    } catch (error) {
-      if (error instanceof GitHubError && error.retryAt !== undefined) throw error;
-      rejected = error instanceof GitHubError && error.status !== undefined && error.status >= 400 && error.status < 500;
-    }
-    try {
-      const current = await this.headOid();
-      if (current === candidate || await this.isAncestor(candidate, current)) return { kind: "accepted" };
-      if (current !== expectedHead) return { kind: "head-moved" };
-      return rejected ? { kind: "rejected", message: "GitHub rejected exact ref publication" } : { kind: "unknown" };
-    } catch (error) {
-      if (error instanceof GitHubError && error.retryAt !== undefined) throw error;
-      return { kind: "unknown" };
-    }
+    const response = record((await this.request("https://api.github.com/graphql", "POST", {
+      query: UPDATE_REFS,
+      variables: { input: { repositoryId: identity.id, clientMutationId, refUpdates: updates.map(update => ({ ...update, force: false })) } },
+    })).json);
+    // Errors carry no typed verdict (a stale CAS is a generic error), so they prove nothing.
+    if (response.errors !== undefined) return "unconfirmed";
+    const data = response.data;
+    if (typeof data !== "object" || data === null || !("updateRefs" in data)) return "unconfirmed";
+    const mutation = data.updateRefs;
+    return typeof mutation === "object" && mutation !== null && "clientMutationId" in mutation && mutation.clientMutationId === clientMutationId ? "acknowledged" : "unconfirmed";
+  }
+  async publish(input: { parent: string; candidate: string; anchor: string | null; receipt: string }): Promise<"acknowledged" | "unconfirmed"> {
+    const parent = oid(input.parent), candidate = oid(input.candidate), receipt = oid(input.receipt);
+    const anchor = input.anchor === null ? null : oid(input.anchor);
+    const prepared = await this.getCommit(candidate);
+    if (prepared.parents.length !== 1 || prepared.parents[0] !== parent || candidate === parent) throw new GitHubError("Candidate must have exactly the expected head as parent");
+    const proof = await this.getCommit(receipt);
+    const parents = anchor === null ? [candidate] : [anchor, candidate];
+    if (proof.treeOid !== prepared.treeOid || proof.parents.length !== parents.length || proof.parents.some((item, index) => item !== parents[index])) throw new GitHubError("Receipt must record exactly the anchor and candidate");
+    return this.updateRefs([
+      { name: `refs/heads/${this.options.branch}`, beforeOid: parent, afterOid: candidate },
+      { name: this.ledger, beforeOid: anchor ?? ZERO_OID, afterOid: receipt },
+    ], receipt);
+  }
+  async seal(input: { anchor: string | null; seal: string }): Promise<void> {
+    const seal = oid(input.seal), anchor = input.anchor === null ? null : oid(input.anchor);
+    const value = await this.getCommit(seal);
+    if (value.parents.length !== (anchor === null ? 0 : 1) || (anchor !== null && value.parents[0] !== anchor)) throw new GitHubError("Seal must extend exactly the anchor");
+    await this.updateRefs([{ name: this.ledger, beforeOid: anchor ?? ZERO_OID, afterOid: seal }], seal);
+  }
+  /** GraphQL POST: never served from an HTTP cache. Any malformed answer throws rather than claiming absence. */
+  async readLedger(): Promise<LedgerRead> {
+    const identity = await this.identity();
+    const response = record((await this.request("https://api.github.com/graphql", "POST", { query: READ_LEDGER, variables: { id: identity.id, ref: this.ledger } })).json);
+    if (response.errors !== undefined) throw new GitHubError("GitHub ledger read failed");
+    const node = record(record(response.data).node);
+    if (!("ref" in node)) throw new GitHubError("Malformed ledger read");
+    if (node.ref === null) return { kind: "absent" };
+    const ref = record(node.ref);
+    if (`${string(ref.prefix)}${string(ref.name)}` !== this.ledger) throw new GitHubError("Ledger read returned another ref");
+    return { kind: "present", value: oid(record(ref.target).oid) };
   }
 }

@@ -6,8 +6,10 @@ import type {
   CommitSnapshot,
   DurableStore,
   Entry,
+  LedgerRead,
   LocalVault,
-  PublishResult,
+  NativeIssue,
+  PreparedPublication,
   Repository,
   RepositoryIdentity,
   Snapshot,
@@ -24,20 +26,49 @@ export type Fault = "before" | "after" | null;
 interface CommitObject {
   oid: string;
   tree: string;
+  /** First parent; ledger receipts also name the candidate as a second parent. */
   parent: string | null;
+  parents: string[];
   files: Snapshot; // full tree, including excluded paths
+  /** Set for device-ledger objects. */
+  ledger?: "receipt" | "seal";
 }
 
-/** A GitHub-like branch: immutable commits, exact-head conditional publication. */
-export class MemoryRepository implements Repository {
+export type PublishFault =
+  /** Request lost before delivery (thrown). */
+  | "before"
+  /** Applied atomically, response lost (thrown). */
+  | "after"
+  /** Applied atomically, then a generic GraphQL error. */
+  | "error-after"
+  /** Held in `delayed` and delivered only by `deliver()`; the caller sees a thrown loss. */
+  | "delay"
+  /** Generic error without effect. */
+  | "reject"
+  | null;
+
+const BRANCH = "refs/heads/main";
+
+/**
+ * A GitHub-like repository: immutable commits, a branch, per-installation
+ * ledger refs, and atomic multi-ref compare-and-swap with fault injection.
+ */
+export class MemoryRepository {
   readonly commits = new Map<string, CommitObject>();
   branchHead: string;
+  readonly refs = new Map<string, string>();
   identityValue: RepositoryIdentity = { id: "R_1", owner: "me", name: "vault", branch: "main" };
-  /** `after` = ref moves but the response is lost (thrown); `lost` = ref moves, result "unknown". */
-  publishFault: "before" | "after" | "lost" | "head-moved-lie" | "reject" | null = null;
+  publishFault: PublishFault = null;
+  sealFault: PublishFault = null;
+  /** One-shot faults consumed per call before falling back to the standing fault. */
+  publishQueue: PublishFault[] = [];
+  sealQueue: PublishFault[] = [];
   prepareFault: Fault = null;
   headFault = false;
   ancestorFault = false;
+  ledgerFault = false;
+  /** Requests in flight: delivering one runs its atomic CAS now. */
+  delayed: Array<{ label: string; deliver: () => boolean }> = [];
   calls: string[] = [];
   private sequence = 0;
 
@@ -47,23 +78,62 @@ export class MemoryRepository implements Repository {
   }
 
   static async create(files: Snapshot): Promise<MemoryRepository> {
-    const root = await MemoryRepository.object(files, null, 0);
+    const root = await MemoryRepository.object(files, [], 0);
     return new MemoryRepository(root);
   }
 
-  private static async object(files: Snapshot, parent: string | null, sequence: number): Promise<CommitObject> {
+  private static async object(files: Snapshot, parents: string[], sequence: number, label = ""): Promise<CommitObject> {
     const manifest = Object.entries(files)
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([path, entry]) => [path, entry.mode, entry.oid]);
     const tree = await digestText(JSON.stringify(manifest));
-    const oid = await digestText(JSON.stringify([tree, parent, sequence]));
-    return { oid, tree, parent, files: { ...files } };
+    const oid = await digestText(JSON.stringify([tree, parents, sequence, label]));
+    return { oid, tree, parent: parents[0] ?? null, parents, files: { ...files } };
   }
 
   private view(commit: CommitObject): CommitSnapshot {
     const files: Snapshot = {};
     for (const [path, entry] of Object.entries(commit.files)) if (!isExcludedPath(path)) files[path] = { ...entry };
     return { oid: commit.oid, treeOid: commit.tree, files };
+  }
+
+  /** A per-installation port sharing this repository; patches on the shared object still apply. */
+  device(installation: string): Repository {
+    const ledger = `refs/vault-sync/devices/${installation}`;
+    return {
+      identity: () => this.identity(),
+      head: () => this.head(),
+      readCommit: (oid) => this.readCommit(oid),
+      isAncestor: (a, b) => this.isAncestor(a, b),
+      ledgerRef: () => ledger,
+      prepare: (parent, changes, message, input) => this.prepare(parent, changes, message, input),
+      createSeal: (input) => this.createSeal(input),
+      publish: (input) => this.publish(input, ledger),
+      seal: (input) => this.seal(input, ledger),
+      readLedger: () => this.readLedger(ledger),
+    };
+  }
+
+  ledger(installation: string): string | undefined {
+    return this.refs.get(`refs/vault-sync/devices/${installation}`);
+  }
+
+  /** Atomic multi-ref CAS (`null` = absent), like GraphQL updateRefs with force:false. */
+  updateRefs(updates: Array<{ name: string; before: string | null; after: string }>): boolean {
+    const current = (name: string) => (name === BRANCH ? this.branchHead : this.refs.get(name) ?? null);
+    if (updates.some((update) => current(update.name) !== update.before)) return false;
+    for (const update of updates) {
+      if (update.name === BRANCH) this.branchHead = update.after;
+      else this.refs.set(update.name, update.after);
+    }
+    return true;
+  }
+
+  /** Delivers every delayed request in order; returns their CAS results. */
+  deliver(): boolean[] {
+    const pending = this.delayed;
+    this.delayed = [];
+    return pending.map((item) => item.deliver());
   }
 
   /** Another client's ordinary commit on top of the current head. */
@@ -74,7 +144,7 @@ export class MemoryRepository implements Repository {
       if (entry) files[path] = entry;
       else delete files[path];
     }
-    const commit = await MemoryRepository.object(files, parent.oid, ++this.sequence);
+    const commit = await MemoryRepository.object(files, [parent.oid], ++this.sequence);
     this.commits.set(commit.oid, commit);
     this.branchHead = commit.oid;
     return commit.oid;
@@ -82,9 +152,16 @@ export class MemoryRepository implements Repository {
 
   /** Force-moves the branch (history rewrite). */
   async forceReset(files: Snapshot): Promise<string> {
-    const commit = await MemoryRepository.object(files, null, ++this.sequence);
+    const commit = await MemoryRepository.object(files, [], ++this.sequence);
     this.commits.set(commit.oid, commit);
     this.branchHead = commit.oid;
+    return commit.oid;
+  }
+
+  /** An unrelated commit object (for out-of-contract ledger tampering). */
+  async orphan(label: string): Promise<string> {
+    const commit = await MemoryRepository.object({}, [], ++this.sequence, label);
+    this.commits.set(commit.oid, commit);
     return commit.oid;
   }
 
@@ -116,15 +193,19 @@ export class MemoryRepository implements Repository {
   async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
     this.calls.push("isAncestor");
     if (this.ancestorFault) throw new Crash("ancestry unavailable");
-    let cursor: string | null = descendant;
-    while (cursor) {
+    const seen = new Set<string>();
+    const queue = [descendant];
+    while (queue.length > 0) {
+      const cursor = queue.pop()!;
       if (cursor === ancestor) return true;
-      cursor = this.commits.get(cursor)?.parent ?? null;
+      if (seen.has(cursor)) continue;
+      seen.add(cursor);
+      queue.push(...(this.commits.get(cursor)?.parents ?? []));
     }
     return false;
   }
 
-  async prepare(parent: CommitSnapshot, changes: Changes, _message: string): Promise<CommitSnapshot> {
+  async prepare(parent: CommitSnapshot, changes: Changes, _message: string, ledger: { anchor: string | null; operation: string }): Promise<PreparedPublication> {
     this.calls.push("prepare");
     if (this.prepareFault === "before") throw new Crash("prepare failed");
     const base = this.commits.get(parent.oid)!;
@@ -133,26 +214,53 @@ export class MemoryRepository implements Repository {
       if (entry) files[path] = entry;
       else delete files[path];
     }
-    const commit = await MemoryRepository.object(files, parent.oid, ++this.sequence);
+    const commit = await MemoryRepository.object(files, [parent.oid], ++this.sequence);
     this.commits.set(commit.oid, commit);
+    const receipt = await MemoryRepository.object(files, ledger.anchor ? [ledger.anchor, commit.oid] : [commit.oid], ++this.sequence, `receipt ${ledger.operation}`);
+    this.commits.set(receipt.oid, { ...receipt, ledger: "receipt" });
     if (this.prepareFault === "after") throw new Crash("prepare response lost");
-    return this.view(commit);
+    return { ...this.view(commit), receipt: receipt.oid };
   }
 
-  async publish(expectedHead: string, candidate: string): Promise<PublishResult> {
-    this.calls.push("publish");
-    const fault = this.publishFault;
-    if (fault === "before") throw new Crash("publish request failed");
-    if (fault === "reject") return { kind: "rejected", message: "protected branch" };
-    if (this.branchHead !== expectedHead) return { kind: "head-moved" };
-    if (fault === "head-moved-lie") {
-      this.branchHead = candidate;
-      return { kind: "head-moved" };
+  async createSeal(input: { anchor: string | null; parent: string; operation: string }): Promise<string> {
+    this.calls.push("createSeal");
+    const parent = this.commits.get(input.parent)!;
+    const seal = await MemoryRepository.object(parent.files, input.anchor ? [input.anchor] : [], ++this.sequence, `seal ${input.operation}`);
+    this.commits.set(seal.oid, { ...seal, ledger: "seal" });
+    return seal.oid;
+  }
+
+  private dispatch(fault: PublishFault, label: string, attempt: () => boolean): "acknowledged" | "unconfirmed" {
+    if (fault === "before") throw new Crash(`${label} request lost`);
+    if (fault === "reject") return "unconfirmed";
+    if (fault === "delay") {
+      this.delayed.push({ label, deliver: attempt });
+      throw new Crash(`${label} response lost; request still in flight`);
     }
-    this.branchHead = candidate;
-    if (fault === "after") throw new Crash("publish response lost");
-    if (fault === "lost") return { kind: "unknown" };
-    return { kind: "accepted" };
+    const landed = attempt();
+    if (fault === "after") throw new Crash(`${label} response lost`);
+    if (fault === "error-after") return "unconfirmed";
+    return landed ? "acknowledged" : "unconfirmed";
+  }
+
+  async publish(input: { parent: string; candidate: string; anchor: string | null; receipt: string }, ledger = "refs/vault-sync/devices/A"): Promise<"acknowledged" | "unconfirmed"> {
+    this.calls.push("publish");
+    return this.dispatch(this.publishQueue.length > 0 ? this.publishQueue.shift()! : this.publishFault, "publish", () => this.updateRefs([
+      { name: BRANCH, before: input.parent, after: input.candidate },
+      { name: ledger, before: input.anchor, after: input.receipt },
+    ]));
+  }
+
+  async seal(input: { anchor: string | null; seal: string }, ledger = "refs/vault-sync/devices/A"): Promise<void> {
+    this.calls.push("seal");
+    this.dispatch(this.sealQueue.length > 0 ? this.sealQueue.shift()! : this.sealFault, "seal", () => this.updateRefs([{ name: ledger, before: input.anchor, after: input.seal }]));
+  }
+
+  async readLedger(ledger = "refs/vault-sync/devices/A"): Promise<LedgerRead> {
+    this.calls.push("readLedger");
+    if (this.ledgerFault) throw new Crash("ledger unavailable");
+    const value = this.refs.get(ledger);
+    return value === undefined ? { kind: "absent" } : { kind: "present", value };
   }
 }
 
@@ -168,6 +276,17 @@ export class MemoryVault implements LocalVault {
   applied: string[] = [];
   /** Total apply calls, for targeting faults. */
   applyCalls = 0;
+  /** Native evidence returned by `recover` until acknowledged. */
+  issues: NativeIssue[] = [];
+  acknowledged: string[] = [];
+  acknowledgeFault = false;
+  /**
+   * The next apply to `path` models a native transaction outcome: `interrupted`
+   * leaves `bytes` (a torn write) at the path; `displaced` installs the intent
+   * and moves `bytes` into the hold. `crash` loses the apply response.
+   */
+  native: { path: string; kind: "interrupted" | "displaced"; bytes: Entry | null; crash?: boolean } | null = null;
+  private issueSequence = 0;
 
   constructor(initial: Snapshot = {}) {
     for (const [path, entry] of Object.entries(initial)) this.files.set(path, entry);
@@ -184,11 +303,31 @@ export class MemoryVault implements LocalVault {
     const current = this.files.get(path) ?? null;
     if (!sameEntry(current, expected)) return { kind: "changed" };
     if (this.blockBinary && current && !path.endsWith(".md")) return { kind: "blocked", reason: "binary replacement/deletion is unsupported" };
+    const native = this.native;
+    if (native && native.path === path) {
+      this.native = null;
+      const landed = native.kind === "interrupted" ? native.bytes : next;
+      if (landed) this.files.set(path, landed);
+      else this.files.delete(path);
+      const issue: NativeIssue = { id: `issue-${++this.issueSequence}`, path, kind: native.kind, expected, next, found: native.bytes };
+      this.issues.push(issue);
+      if (native.crash) throw new Crash(`apply ${path} died mid-transaction`);
+      return { kind: native.kind, issue };
+    }
     if (next) this.files.set(path, next);
     else this.files.delete(path);
     this.applied.push(path);
     if (this.applyFault?.at === count && this.applyFault.when === "after") throw new Crash(`apply ${path} response lost`);
     return { kind: "applied" };
+  }
+
+  async recover(): Promise<NativeIssue[]> {
+    return this.issues.filter((issue) => !this.acknowledged.includes(issue.id));
+  }
+
+  async acknowledgeRecovery(ids: string[]): Promise<void> {
+    if (this.acknowledgeFault) throw new Crash("acknowledgement failed");
+    this.acknowledged.push(...ids.filter((id) => !this.acknowledged.includes(id)));
   }
 
   text(path: string): string | null {
