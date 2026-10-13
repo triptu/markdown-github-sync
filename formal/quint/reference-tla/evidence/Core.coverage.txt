@@ -1,0 +1,18 @@
+# Core action coverage (TLC -coverage 1): action: distinct-states:transitions
+<Adopt>: 0:0
+<ApplyFile>: 142279:349378
+<Crash>: 135:6549
+<ExternalPublish>: 2225:15058
+<Finish>: 41860:89770
+<GoQuiescent>: 0:0
+<Init>: 1:1
+<LoseResponse>: 77:866
+<Process>: 11290:35278
+<PublishResolved>: 8545:14656
+<Receive>: 20882:46595
+<Reconcile>: 1855:3697
+<Resolve>: 8521:14928
+<Rewind>: 0:0
+<Sync>: 26427:41378
+<Timeout>: 451:1289
+<UserSave>: 2182:17036

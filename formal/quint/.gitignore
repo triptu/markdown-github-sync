@@ -1,0 +1,6 @@
+node_modules/
+.tools/
+_generated/
+_apalache-out/
+
+!evidence/**/*.log
