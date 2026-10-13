@@ -787,12 +787,17 @@ export class SyncSession {
         incomingRecoveryId,
       };
       state.operation = operation;
+      // A live configuration restore can race an editor that still holds the
+      // pre-restore bytes, even when no reviewed apply left an earlier guard.
+      // Save the guard with the operation so a lost write response is covered.
+      await this.#ensureRestoreGuard(state, operation.step);
       await this.#save(state);
       // The write is a compare-and-swap against the previewed bytes.
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
       if (result.kind === "applied") {
         const guard = state.configurationGuards[preview.path];
         if (guard) {
+          guard.hostLifetimeId = this.#hostLifetimeId;
           guard.consent = { version: toRef(preview.historical), head: state.base.commit, scope: state.scope.digest };
         }
         state.operation = null;
@@ -1260,6 +1265,9 @@ export class SyncSession {
 
   async #resumeRestore(state: StoredState, operation: RestoreOperation): Promise<{ kind: "continue"; published: false; carried: string[] } | { kind: "held"; outcome: SyncOutcome }> {
     await this.#verifyRestoreOperation(state, operation);
+    // Older journals can contain a reviewed restore without a guard. Install
+    // one before any resumed write, including a write with a lost response.
+    if (await this.#ensureRestoreGuard(state, operation.step)) await this.#save(state);
     const local = await this.#capture(state, "restore resumption capture");
     const step = operation.step;
     const observed = this.#observeLocal(state, local, step.path);
@@ -1276,6 +1284,7 @@ export class SyncSession {
       return { kind: "continue", published: false, carried: [] };
     }
     let installed = sameEntry(current, step.next);
+    let writtenNow = false;
     if (!installed) {
       if (!step.next) throw new IntegrityError("Restore has no historical version");
       const next = materialize(state, dictionary([[step.path, step.next]]))[step.path];
@@ -1289,10 +1298,12 @@ export class SyncSession {
         await this.#ingest(state, [result.issue], { requiredPath: step.path });
       }
       installed = result.kind === "applied";
+      writtenNow = installed;
     }
     // Historical restore carries its own exact review. Keep that durable
     // authorization across the next sync, including a plugin reload.
     const guard = state.configurationGuards[step.path];
+    if (writtenNow && guard) guard.hostLifetimeId = this.#hostLifetimeId;
     if (installed && guard && step.next) {
       guard.consent = { version: step.next, head: state.base.commit, scope: state.scope.digest };
     }
@@ -1779,6 +1790,16 @@ export class SyncSession {
     state.configurationGuards[step.path] = { hostLifetimeId, applied: step.next, consent: null };
   }
 
+  async #ensureRestoreGuard(state: StoredState, step: StoredStep): Promise<boolean> {
+    if (state.configurationGuards[step.path]) return false;
+    if (state.scope.rules !== "config/1" || !(await this.#scopeFor(state.base.commit, "config/1")).isLive(step.path)) return false;
+    // Until the write lands, expected is the last version known to be on disk.
+    // A later observation of next can retire on a different host, while the
+    // writing host retains the guard through publication and stale flushes.
+    state.configurationGuards[step.path] = { hostLifetimeId: this.#hostLifetimeId, applied: step.expected, consent: null };
+    return true;
+  }
+
   /**
    * The only call that lets the vault mutate native recovery state; every
    * caller has already passed the identity, pause and installation fences.
@@ -1797,7 +1818,10 @@ export class SyncSession {
     const operation = state.operation;
     const replay: string[] = [];
     const configurationReplay: StoredStep[] = [];
+    const restoreReplay: StoredStep[] = [];
     const cancel: string[] = [];
+    const restoreScope = operation?.kind === "restore" && state.scope.rules === "config/1"
+      ? await this.#scopeFor(state.base.commit, "config/1") : null;
     for (const intent of pending) {
       const step = operation?.kind === "apply" || operation?.kind === "configuration" ? operation.steps.find((item) => item.path === intent.path) :
         operation?.kind === "restore" && operation.step.path === intent.path ? operation.step : undefined;
@@ -1811,6 +1835,24 @@ export class SyncSession {
         !this.#unreadable.some((item) => item.path === step.path);
       (authorized ? replay : cancel).push(intent.id);
       if (authorized && operation?.kind === "configuration" && step) configurationReplay.push(step);
+      if (authorized && operation?.kind === "restore" && step &&
+          (state.configurationGuards[step.path] || restoreScope?.isLive(step.path))) restoreReplay.push(step);
+    }
+    if (restoreReplay.length > 0) {
+      const local = await this.#capture(state, "native restore replay preimage", false);
+      let changed = false;
+      for (const step of restoreReplay) {
+        const observed = this.#observeLocal(state, local, step.path);
+        if (observed.kind === "known" && sameEntry(observed.entry, step.next)) continue;
+        if (await this.#ensureRestoreGuard(state, step)) changed = true;
+        const guard = state.configurationGuards[step.path];
+        if (guard && guard.hostLifetimeId !== this.#hostLifetimeId) {
+          guard.hostLifetimeId = this.#hostLifetimeId;
+          changed = true;
+        }
+      }
+      // Native recovery can install next before the resumed step sees it.
+      if (changed) await this.#save(state);
     }
     if (configurationReplay.length > 0) {
       // Recovery may install `next` before the resumed step observes it. Make
