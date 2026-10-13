@@ -1,201 +1,95 @@
-const scenarios = {
-  normal: {
-    titles: [
-      "Save the draft",
-      "Compare three versions",
-      "Create the shared version",
-      "Bring devices up to date",
+const situations = {
+  different: {
+    index: "01 / 05",
+    title: "Two devices edit different files",
+    intro: "The laptop changes one note; the phone changes another. Both start from the same committed version.",
+    verdict: "Both edits can join the history.",
+    steps: [
+      "Each saved edit is a draft on its own device.",
+      "The first accepted commit moves the branch; the next device compares that new head before publishing.",
+      "Sequential, independent edits converge. A truly simultaneous publication can pause for reviewed recovery."
     ],
-    copy: [
-      "Preserve the exact saved bytes before any remote changes arrive.",
-      "Base commit, local draft, and the latest GitHub snapshot.",
-      "Advance the branch only if its head still matches our plan.",
-      "Apply the committed snapshot while preserving any newer drafts.",
-    ],
-    states: [
-      "On this device",
-      "Ready to publish",
-      "Accepted on GitHub",
-      "Content synced",
-    ],
-    summary:
-      "The branch update is the publishing moment. Uploading files or saving a local note alone never counts as “synced.”",
+    footnote: "Automatic sync runs after saved edits, on foreground return, and periodically while Obsidian is open. “Sync now” is also available.",
+    caution: false
   },
   offline: {
-    titles: [
-      "Keep writing",
-      "Wait for connection",
-      "Previous commit stays shared",
-      "Other devices wait",
+    index: "02 / 05",
+    title: "You write without a connection",
+    intro: "Obsidian continues saving files locally. The last accepted GitHub commit remains the shared version.",
+    verdict: "The draft waits on this device.",
+    steps: [
+      "Your saved bytes and local checkpoint remain available while offline.",
+      "On reconnection, foreground sync compares the draft with the current GitHub head and prepares a commit if it is safe.",
+      "Other devices receive the edit only after GitHub accepts the commit. A suspended Android app does not promise background delivery."
     ],
-    copy: [
-      "Obsidian saves your note. The plugin preserves a local draft.",
-      "On reconnect, compare the draft with the latest committed version.",
-      "No connection means no new accepted commit on GitHub.",
-      "They keep their last committed version until publication succeeds.",
-    ],
-    states: [
-      "Saved locally",
-      "Waiting for connection",
-      "No new commit",
-      "Not yet shared",
-    ],
-    summary:
-      "Offline editing works. Your new draft exists only on this device until a GitHub commit is accepted. Phones may suspend Obsidian in the background.",
+    footnote: "The status must show content synced before relying on the change from another device.",
+    caution: true
   },
-  race: {
-    titles: [
-      "Two drafts, one base",
-      "First device publishes",
-      "Stale writer is rejected",
-      "Reconcile and retry",
+  conflict: {
+    index: "03 / 05",
+    title: "Both devices change the same file",
+    intro: "Two different drafts diverge from a common committed version of the same note.",
+    verdict: "Only this file needs a decision.",
+    steps: [
+      "The plugin retains the local draft and identifies the common and GitHub versions.",
+      "The conflict inbox previews the versions and lets you keep either, keep both, or edit merged Markdown.",
+      "A reviewed decision is checked against the current head before publication. Other independent files need no whole-vault choice."
     ],
-    copy: [
-      "The laptop and phone both prepare changes against commit A.",
-      "The laptop’s commit B is accepted first.",
-      "The phone expected A. It must not overwrite the now-current B.",
-      "Combine compatible changes or ask you to resolve a conflict.",
-    ],
-    states: [
-      "Laptop + phone",
-      "A becomes B",
-      "Expected A, found B",
-      "No blind overwrite",
-    ],
-    summary:
-      "An exact branch-head check protects publication. The losing device replans against the winning commit; it never forces its older plan onto the branch.",
+    footnote: "Existing binary replacement and incoming deletion can require a native hold or explicit review. The plugin does not text-merge attachments.",
+    caution: true
   },
-  missing: {
-    titles: [
-      "Folder looks empty",
-      "Treat absence as unknown",
-      "No deletion is published",
-      "Review or recover",
+  crash: {
+    index: "04 / 05",
+    title: "The app stops mid-sync",
+    intro: "A native write or GitHub publication can finish just as the process disappears.",
+    verdict: "Recovery follows durable evidence.",
+    steps: [
+      "Before an incoming replacement, the native journal pins the original bytes in a preimage hold.",
+      "For an uncertain upload, the per-installation ledger receipt or seal settles whether its candidate was accepted or cancelled.",
+      "On restart, the plugin resumes or pauses with recoverable bytes. It does not infer a deletion from a missing file or repeat an uncertain publication."
     ],
-    copy: [
-      "A mount, startup scan, or external tool may have hidden files.",
-      "Missing paths are not reliable evidence that you meant to delete.",
-      "Pause the batch instead of turning an empty scan into a commit.",
-      "Show affected paths and require an explicit deletion decision.",
-    ],
-    states: [
-      "Unexpected absence",
-      "Needs your review",
-      "Branch unchanged",
-      "Other devices safe",
-    ],
-    summary:
-      "Even deletion events are only candidates. V1 reviews all deletions and never lets an unexplained missing folder erase another device.",
+    footnote: "Current-bundle normal restart checks passed. Current-bundle process-kill boundary checks are still pending.",
+    caution: true
   },
-};
-document.querySelectorAll("[data-scenario]").forEach((button) =>
-  button.addEventListener("click", () => {
-    const data = scenarios[button.dataset.scenario];
-    document
-      .querySelectorAll("[data-scenario]")
-      .forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
-    for (let i = 0; i < 4; i++) {
-      document.getElementById("phase-title-" + i).textContent = data.titles[i];
-      document.getElementById("phase-copy-" + i).textContent = data.copy[i];
-      document.getElementById("phase-state-" + i).textContent = data.states[i];
-    }
-    document.getElementById("scenario-summary").textContent = data.summary;
-  }),
-);
-let choice = null,
-  revision = 0;
-const byId = (id) => document.getElementById(id);
-const confirm = byId("confirm-resolution"),
-  content = byId("result-content"),
-  edit = byId("edit-wrap"),
-  status = byId("resolution-status");
-const remoteText = () =>
-  `Meet on ${revision ? "Thursday" : "Wednesday"}.\nBring the sketches.`;
-function choose(value) {
-  choice = value;
-  document
-    .querySelectorAll("[data-choice]")
-    .forEach((b) =>
-      b.setAttribute("aria-pressed", String(b.dataset.choice === value)),
-    );
-  byId("result-heading").textContent =
-    value === "both" ? "TWO FILES WILL BE KEPT" : "RESULT PREVIEW";
-  byId("result-state").textContent = "Not published";
-  content.classList.remove("empty");
-  content.hidden = value === "edit";
-  edit.hidden = value !== "edit";
-  content.textContent =
-    value === "mine"
-      ? "Meet on Tuesday.\nBring the sketches."
-      : value === "remote"
-        ? remoteText()
-        : value === "both"
-          ? `Meeting.md\n  ${revision ? "Thursday" : "Wednesday"} version from GitHub\n\nMeeting (my version).md\n  Tuesday version from this device`
-          : "";
-  status.textContent =
-    "Both reviewed versions stay recoverable. The branch will be checked again before publication.";
-  confirm.disabled = false;
-  byId("resolver-badge").textContent = "Decision ready";
-  byId("reset-demo").hidden = false;
-}
-document
-  .querySelectorAll("[data-choice]")
-  .forEach((button) =>
-    button.addEventListener("click", () => choose(button.dataset.choice)),
-  );
-confirm.addEventListener("click", () => {
-  if (!choice) return;
-  if (choice === "edit") {
-    content.textContent = byId("merged-text").value;
-    content.hidden = false;
-    edit.hidden = true;
+  config: {
+    index: "05 / 05",
+    title: "You choose to include configuration",
+    intro: "Hidden Obsidian settings can affect a live workspace, so they cross a separate review boundary.",
+    verdict: "Scope changes require deliberate consent.",
+    steps: [
+      "A legacy visible-file enrollment stays in its existing mode until you review a configuration policy upgrade.",
+      "Incoming live configuration is deferred. New hidden local files need exact consent before they can publish.",
+      "Ignore rules and built-in protected paths are rechecked, while credentials, caches, and recovery state remain excluded."
+    ],
+    footnote: "The current Android run exercised legacy visible-file mode. Configuration UI and migration on Android remain acceptance work.",
+    caution: true
   }
-  byId("result-heading").textContent = "DEMO COMMIT ACCEPTED";
-  byId("result-state").textContent = "Simulation only";
-  byId("resolver-badge").textContent = "Resolved in demo";
-  status.textContent =
-    "The chosen result is now the simulated shared version. Any newer local edits remain a separate draft. No real files were changed.";
-  confirm.disabled = true;
-});
-byId("move-remote").addEventListener("click", () => {
-  revision = 1;
-  choice = null;
-  document
-    .querySelectorAll("[data-choice]")
-    .forEach((b) => b.setAttribute("aria-pressed", "false"));
-  byId("remote-day").textContent = "Thursday.";
-  byId("review-reference").textContent =
-    "New GitHub commit d7e8f9a — review again";
-  byId("result-heading").textContent = "PREVIOUS DECISION INVALIDATED";
-  byId("result-state").textContent = "Publication paused";
-  content.hidden = false;
-  edit.hidden = true;
-  content.classList.add("empty");
-  content.textContent =
-    "GitHub now says Thursday. Compare the updated version above and choose again.";
-  status.textContent =
-    "The remote version changed. A decision about the old version cannot authorize this write.";
-  byId("resolver-badge").textContent = "Review newer version";
-  confirm.disabled = true;
-  byId("reset-demo").hidden = false;
-});
-byId("reset-demo").addEventListener("click", () => {
-  choice = null;
-  revision = 0;
-  document
-    .querySelectorAll("[data-choice]")
-    .forEach((b) => b.setAttribute("aria-pressed", "false"));
-  byId("remote-day").textContent = "Wednesday.";
-  byId("review-reference").textContent = "Reviewing GitHub commit c4d5e6f";
-  byId("result-heading").textContent = "RESULT PREVIEW";
-  byId("result-state").textContent = "Choose a version above";
-  content.hidden = false;
-  edit.hidden = true;
-  content.classList.add("empty");
-  content.textContent =
-    "Your decision will appear here. Nothing is sent to GitHub.";
-  status.textContent = "No choice made. Your draft is unchanged.";
-  byId("resolver-badge").textContent = "1 decision needed";
-  confirm.disabled = true;
-  byId("reset-demo").hidden = true;
-});
+};
+
+const buttons = [...document.querySelectorAll("[data-scenario]")];
+const stage = document.querySelector(".scenario-stage");
+const ids = {
+  index: document.getElementById("scenario-index"),
+  title: document.getElementById("scenario-title"),
+  intro: document.getElementById("scenario-intro"),
+  verdict: document.getElementById("scenario-verdict"),
+  steps: [
+    document.getElementById("scenario-step-one"),
+    document.getElementById("scenario-step-two"),
+    document.getElementById("scenario-step-three")
+  ],
+  footnote: document.getElementById("scenario-footnote")
+};
+function show(key) {
+  const value = situations[key];
+  if (!value) return;
+  for (const button of buttons) button.setAttribute("aria-pressed", String(button.dataset.scenario === key));
+  ids.index.textContent = value.index;
+  ids.title.textContent = value.title;
+  ids.intro.textContent = value.intro;
+  ids.verdict.textContent = value.verdict;
+  value.steps.forEach((text, index) => { ids.steps[index].textContent = text; });
+  ids.footnote.textContent = value.footnote;
+  stage.classList.toggle("caution", value.caution);
+}
+for (const button of buttons) button.addEventListener("click", () => show(button.dataset.scenario));

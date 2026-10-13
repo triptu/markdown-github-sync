@@ -1,4 +1,6 @@
-# GitHub-native Obsidian sync — proposal
+# GitHub-native Obsidian sync — original proposal
+
+> **Implementation status (13 October 2026):** This document records the original design. The [current visual architecture and evidence page](architecture.html) describes the implemented GitHub-direct plugin. At `4da2def`, 405 root tests and TypeScript checking passed; 16 independent native cases also passed. The current Android bundle (`00e4fd325a596fc01f964e66c90e1744ebba74498d59f4a8cd189fbbf9929fb2`) passed normal automatic, restart, conflict, binary, deletion, and recovery checks on a synthetic vault. Configuration UI and migration, current-artifact process-kill checks, Fable composed review, and Quint review remain pending. This is not approval to replace the real vault or a production deployment.
 
 Status: design and isolated API experiments, 13 October 2026. Not a released plugin. The existing Cloudflare prototype is not approved for a real vault.
 

@@ -1,631 +1,88 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#f5f3eb" />
-    <title>One shared history — a GitHub sync proposal</title>
-    <link rel="stylesheet" href="assets/proposal.css" />
-  </head>
-  <body>
-    <svg
-      class="icon-defs"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      <defs>
-        <symbol id="arrow" viewBox="0 0 24 24">
-          <path d="M4 12h15m-6-6 6 6-6 6" />
-        </symbol>
-        <symbol id="branch" viewBox="0 0 24 24">
-          <circle cx="6" cy="5" r="2.5" />
-          <circle cx="18" cy="6" r="2.5" />
-          <circle cx="6" cy="19" r="2.5" />
-          <path d="M6 8v8m12-7c0 5-12 2-12 7" />
-        </symbol>
-        <symbol id="file" viewBox="0 0 24 24">
-          <path d="M14 3H5v18h14V8zm0 0v5h5M8 12h8M8 16h6" />
-        </symbol>
-        <symbol id="check" viewBox="0 0 24 24">
-          <path d="m5 12 4 4L19 6" />
-        </symbol>
-        <symbol id="laptop" viewBox="0 0 24 24">
-          <path d="M4 4h16v12H4zM2 20h20l-2-4H4z" />
-        </symbol>
-        <symbol id="phone" viewBox="0 0 24 24">
-          <rect x="6" y="2" width="12" height="20" rx="2" />
-          <path d="M10 5h4m-3 14h2" />
-        </symbol>
-        <symbol id="lock" viewBox="0 0 24 24">
-          <rect x="5" y="10" width="14" height="11" rx="2" />
-          <path d="M8 10V6a4 4 0 0 1 8 0v4m-4 5v2" />
-        </symbol>
-        <symbol id="external" viewBox="0 0 24 24">
-          <path d="M14 4h6v6m0-6L10 14M9 5H4v15h15v-5" />
-        </symbol>
-      </defs>
-    </svg>
-    <a class="skip" href="#main">Skip to proposal</a>
-    <header class="masthead wrap">
-      <a class="brand" href="#"
-        ><svg class="icon"><use href="#branch" /></svg
-        ><span
-          >Vault / <span class="brand-secondary">a sync proposal</span></span
-        ></a
-      >
-      <nav aria-label="Main navigation">
-        <a href="#architecture">Architecture</a
-        ><a href="#conflicts">Conflicts</a><a href="#evidence">Evidence</a>
-      </nav>
-      <a
-        class="source-link"
-        href="https://github.com/triptu/cloud-vault-sync/blob/main/docs/github-sync-proposal.md"
-        target="_blank"
-        rel="noopener"
-        >Read the spec <svg class="icon"><use href="#external" /></svg
-      ></a>
-    </header>
-    <main id="main">
-      <section class="hero wrap" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <h1 id="hero-title">
-            Your notes.<br />One shared<br /><em>history.</em>
-          </h1>
-          <p class="lead">
-            Write anywhere. Let the plugin turn your changes into GitHub
-            commits—and bring them to every device.
-          </p>
-          <p class="hero-detail">
-            A self-contained replacement for Obsidian Git. It connects directly
-            to your private repository, without a server or companion app.
-          </p>
-          <a class="button primary" href="#architecture"
-            >See how it works <svg class="icon"><use href="#arrow" /></svg
-          ></a>
-          <div class="proposal-note">
-            <span class="status-dot"></span> Proposed design · not installed in
-            your vault
-          </div>
-        </div>
-        <figure
-          class="hero-map"
-          aria-label="A laptop publishes a draft as a GitHub commit; a phone downloads only that accepted commit"
-        >
-          <div class="map-heading">
-            <span>The shared version lives on GitHub.</span
-            ><svg class="icon"><use href="#lock" /></svg>
-          </div>
-          <div class="network">
-            <div class="endpoint laptop">
-              <div class="device-label">
-                <svg class="icon"><use href="#laptop" /></svg> Your laptop
-              </div>
-              <div class="note-paper">
-                <span class="file-title"
-                  ><svg class="icon"><use href="#file" /></svg> Meeting.md</span
-                >
-                <p>Meet on <mark>Tuesday.</mark><br />Bring the sketches.</p>
-                <span class="draft-label">Saved locally</span>
-              </div>
-            </div>
-            <div class="wire wire-publish">
-              <span>publish</span><svg class="icon"><use href="#arrow" /></svg>
-            </div>
-            <div class="git-history">
-              <div class="repo-title">
-                <svg class="icon"><use href="#branch" /></svg
-                ><span>notes<small>private repository / main</small></span>
-              </div>
-              <div class="commit latest">
-                <i></i>
-                <div>
-                  <strong>Update meeting note</strong><code>b08f3a2</code
-                  ><span>Accepted commit</span>
-                </div>
-              </div>
-              <div class="commit">
-                <i></i>
-                <div><strong>Add sketches</strong><code>c7e9d10</code></div>
-              </div>
-              <div class="commit">
-                <i></i>
-                <div><strong>Earlier notes</strong><code>a12b6f4</code></div>
-              </div>
-              <div class="history-caption">
-                Every change has a place in history.
-              </div>
-            </div>
-            <div class="endpoint phone">
-              <div class="device-label">
-                <svg class="icon"><use href="#phone" /></svg> Your phone
-              </div>
-              <div class="phone-note">
-                <span>Meeting.md</span>
-                <p>Meet on Tuesday.<br />Bring the sketches.</p>
-                <span class="received"
-                  ><svg class="icon"><use href="#check" /></svg> From commit
-                  b08f3a2</span
-                >
-              </div>
-            </div>
-            <div class="wire wire-download">
-              <svg class="icon"><use href="#arrow" /></svg><span>download</span>
-            </div>
-          </div>
-          <figcaption>
-            Illustrative flow and commit IDs. Drafts stay local until a commit
-            is accepted.
-          </figcaption>
-        </figure>
-      </section>
-      <div class="inventory wrap">
-        <span>Designed around your actual vault</span>
-        <p><strong>577</strong> content files</p>
-        <p><strong>47.8 MB</strong> total content</p>
-        <p><strong>4.3 MB</strong> largest attachment</p>
-        <span class="inventory-note"
-          >Read-only inspection<br />Local checkout matched GitHub</span
-        >
-      </div>
-      <section id="architecture" class="section wrap">
-        <div class="section-intro">
-          <h2>A draft is yours.<br />A commit is shared.</h2>
-          <div>
-            <p>
-              The plugin compares what you last synced, what you changed, and
-              what’s now on GitHub. It publishes a new commit only when those
-              versions agree—or you resolve the difference.
-            </p>
-            <p class="muted">
-              The phone keeps your files and a recovery journal, and uses
-              GitHub’s API instead of maintaining a local Git database.
-            </p>
-          </div>
-        </div>
-        <div class="scenario-bar">
-          <span>Follow a situation</span>
-          <div class="scenario-controls" aria-label="Sync situation">
-            <button data-scenario="normal" aria-pressed="true">
-              An everyday edit</button
-            ><button data-scenario="offline" aria-pressed="false">
-              Offline writing</button
-            ><button data-scenario="race" aria-pressed="false">
-              Two devices at once</button
-            ><button data-scenario="missing" aria-pressed="false">
-              A missing folder
-            </button>
-          </div>
-        </div>
-        <div class="transaction" aria-live="polite">
-          <div class="phase">
-            <span class="phase-step">1 / CAPTURE</span>
-            <h3 id="phase-title-0">Save the draft</h3>
-            <p id="phase-copy-0">
-              Preserve the exact saved bytes before any remote changes arrive.
-            </p>
-            <span class="phase-state" id="phase-state-0">On this device</span>
-          </div>
-          <div class="phase">
-            <span class="phase-step">2 / RECONCILE</span>
-            <h3 id="phase-title-1">Compare three versions</h3>
-            <p id="phase-copy-1">
-              Base commit, local draft, and the latest GitHub snapshot.
-            </p>
-            <span class="phase-state" id="phase-state-1">Ready to publish</span>
-          </div>
-          <div class="phase phase-authority">
-            <span class="phase-step">3 / PUBLISH</span>
-            <h3 id="phase-title-2">Create the shared version</h3>
-            <p id="phase-copy-2">
-              Advance the branch only if its head still matches our plan.
-            </p>
-            <span class="phase-state" id="phase-state-2"
-              >Accepted on GitHub</span
-            >
-          </div>
-          <div class="phase">
-            <span class="phase-step">4 / APPLY</span>
-            <h3 id="phase-title-3">Bring devices up to date</h3>
-            <p id="phase-copy-3">
-              Apply the committed snapshot while preserving any newer drafts.
-            </p>
-            <span class="phase-state" id="phase-state-3">Content synced</span>
-          </div>
-        </div>
-        <div class="scenario-explanation">
-          <svg class="icon"><use href="#branch" /></svg>
-          <p id="scenario-summary">
-            The branch update is the publishing moment. Uploading files or
-            saving a local note alone never counts as “synced.”
-          </p>
-        </div>
-        <details class="technical">
-          <summary>Under the hood: one publication path</summary>
-          <div class="technical-body">
-            <p>
-              <code>blobs → tree → commit → conditional branch update</code>
-            </p>
-            <p>
-              REST uploads objects in bounded requests. GraphQL
-              <code>updateRefs(beforeOid)</code> advances the branch only from
-              the expected commit. A rejected or uncertain response triggers
-              reconciliation, never a force push. The pending commit ID is saved
-              before publication.
-            </p>
-            <a
-              href="https://docs.github.com/en/graphql/reference/git#updaterefs"
-              target="_blank"
-              rel="noopener"
-              >GitHub’s exact-head contract</a
-            >
-          </div>
-        </details>
-      </section>
-      <section id="conflicts" class="conflict-section">
-        <div class="wrap">
-          <div class="section-intro">
-            <h2>When edits disagree,<br />you get the final word.</h2>
-            <div>
-              <p>
-                Keep writing. Your note stays intact while the plugin holds the
-                conflicting batch. Review both versions, choose a result, and
-                publish a new commit.
-              </p>
-              <p class="muted">
-                Try the resolver below. It is a design simulation using a
-                synthetic note.
-              </p>
-            </div>
-          </div>
-          <div class="resolver">
-            <div class="resolver-top">
-              <div>
-                <svg class="icon"><use href="#file" /></svg
-                ><strong>Changes</strong
-                ><span class="resolver-badge" id="resolver-badge"
-                  >1 decision needed</span
-                >
-              </div>
-              <span class="demo-label">INTERACTIVE PROTOTYPE</span>
-            </div>
-            <div class="resolver-body">
-              <aside class="file-list">
-                <span>NEEDS YOUR DECISION</span>
-                <div class="selected-file">
-                  <svg class="icon"><use href="#file" /></svg>
-                  <div>Meeting.md<small>Edited on two devices</small></div>
-                  <span class="conflict-dot"></span>
-                </div>
-                <p>
-                  The common version said:<br /><strong
-                    >“Meet on Monday.”</strong
-                  >
-                </p>
-                <div class="safety-mini">
-                  <svg class="icon"><use href="#lock" /></svg>
-                  <p>Both versions remain recoverable after you choose.</p>
-                </div>
-              </aside>
-              <div class="resolve-main">
-                <div class="resolve-heading">
-                  <h3>Which version should we keep?</h3>
-                  <span id="review-reference"
-                    >Reviewing GitHub commit c4d5e6f</span
-                  >
-                </div>
-                <div class="diff-panes">
-                  <div class="diff-pane">
-                    <div class="diff-label">
-                      Your saved draft <span>LOCAL</span>
-                    </div>
-                    <div class="note-lines">
-                      <span class="line-number">1</span>
-                      <p>Meet on <span class="local-change">Tuesday.</span></p>
-                      <span class="line-number">2</span>
-                      <p>Bring the sketches.</p>
-                    </div>
-                  </div>
-                  <div class="diff-pane">
-                    <div class="diff-label">
-                      GitHub’s version <span>COMMITTED</span>
-                    </div>
-                    <div class="note-lines">
-                      <span class="line-number">1</span>
-                      <p>
-                        Meet on
-                        <span class="remote-change" id="remote-day"
-                          >Wednesday.</span
-                        >
-                      </p>
-                      <span class="line-number">2</span>
-                      <p>Bring the sketches.</p>
-                    </div>
-                  </div>
-                </div>
-                <div class="choice-buttons" aria-label="Conflict resolution">
-                  <button data-choice="mine" aria-pressed="false">
-                    Use mine</button
-                  ><button data-choice="remote" aria-pressed="false">
-                    Use GitHub</button
-                  ><button data-choice="both" aria-pressed="false">
-                    Keep both files</button
-                  ><button data-choice="edit" aria-pressed="false">
-                    Write a merged version
-                  </button>
-                </div>
-                <div class="result-preview">
-                  <div class="result-label">
-                    <span id="result-heading">RESULT PREVIEW</span
-                    ><span id="result-state">Choose a version above</span>
-                  </div>
-                  <div id="result-content" class="result-content empty">
-                    Your decision will appear here. Nothing is sent to GitHub.
-                  </div>
-                  <label id="edit-wrap" hidden
-                    ><span class="sr-only">Merged note contents</span
-                    ><textarea id="merged-text" rows="3">
-Meet on Tuesday or Wednesday.
-Bring the sketches.</textarea
-                    >
-                  </label>
-                </div>
-                <div class="resolve-footer">
-                  <p id="resolution-status" role="status">
-                    No choice made. Your draft is unchanged.
-                  </p>
-                  <button
-                    class="button primary"
-                    id="confirm-resolution"
-                    disabled
-                  >
-                    Confirm in demo
-                    <svg class="icon"><use href="#arrow" /></svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div class="demo-bottom">
-              <span>What if GitHub changes while you’re deciding?</span
-              ><button id="move-remote">
-                Simulate a newer commit
-                <svg class="icon"><use href="#arrow" /></svg></button
-              ><button id="reset-demo" hidden>Reset demo</button>
-            </div>
-          </div>
-          <div class="conflict-footnotes">
-            <p>
-              <strong>Attachments</strong>Keep mine, keep GitHub’s, or keep
-              both. Never text-merge a PDF or image.
-            </p>
-            <p>
-              <strong>Deletion vs. editing</strong>Ask before deleting or
-              resurrecting the note. Missing files are not deletion intent.
-            </p>
-            <p>
-              <strong>History</strong>Restore an old version as a new commit.
-              Never rewind everyone’s work.
-            </p>
-          </div>
-        </div>
-      </section>
-      <section id="decisions" class="section wrap">
-        <div class="section-intro">
-          <h2>Less infrastructure.<br />More deliberate safety.</h2>
-          <div>
-            <p>
-              Fable and Opus independently favored an API client. Cross-review
-              tightened the publication and recovery model. Their agreement is a
-              design input, not proof of safety.
-            </p>
-          </div>
-        </div>
-        <div class="options-table">
-          <div class="option-row table-head">
-            <span>Approach</span><span>What it buys us</span
-            ><span>The decision</span>
-          </div>
-          <div class="option-row chosen">
-            <div>
-              <span class="recommend-label"
-                ><svg class="icon"><use href="#check" /></svg> RECOMMENDED</span
-              >
-              <h3>GitHub API client</h3>
-            </div>
-            <p>
-              Real commits, bounded file uploads, exact publication checks. No
-              local <code>.git</code> database.
-            </p>
-            <p>
-              Smallest fit for your workflow. We still have to build safe local
-              recovery.
-            </p>
-          </div>
-          <div class="option-row">
-            <h3>Full Git in JavaScript</h3>
-            <p>
-              Offline commits, local history, and support for other Git hosts.
-            </p>
-            <p>
-              More packfile and memory work on phones. Obsidian Git already
-              takes this route.
-            </p>
-          </div>
-          <div class="option-row">
-            <h3>Cloudflare relay</h3>
-            <p>A service could provide notifications or custom queues later.</p>
-            <p>
-              Another system to operate. It does not remove the GitHub commit
-              requirement.
-            </p>
-          </div>
-        </div>
-        <div class="tradeoffs">
-          <h3>The tradeoffs, plainly.</h3>
-          <div>
-            <p>
-              Notes remain readable in your private GitHub repo, as they are
-              today. This gives up the previous prototype’s end-to-end
-              encryption.
-            </p>
-            <p>
-              One sync owner per active vault. Other Git clients can still use
-              separate checkouts. Phone syncing runs while Obsidian is active;
-              background delivery is not promised.
-            </p>
-            <p>
-              Content first. The 79 tracked Obsidian configuration files stay
-              untouched on GitHub; settings sync needs its own explicit scope.
-            </p>
-          </div>
-        </div>
-      </section>
-      <section id="evidence" class="evidence-section">
-        <div class="wrap">
-          <div class="section-intro">
-            <h2>Tested at the API.<br />Not yet trusted with your vault.</h2>
-            <div>
-              <p>
-                We created a private test repository containing only synthetic
-                files. Your real vault and current Obsidian Git installation
-                were left untouched.
-              </p>
-              <a
-                class="text-link"
-                href="https://github.com/your-name/vault-sync-test"
-                target="_blank"
-                rel="noopener"
-                >Inspect the experiment repo
-                <svg class="icon"><use href="#external" /></svg
-              ></a>
-            </div>
-          </div>
-          <div class="evidence-grid">
-            <div>
-              <h3>Observed in the lab</h3>
-              <ul class="proof-list">
-                <li>
-                  <svg class="icon"><use href="#check" /></svg>
-                  <div>
-                    <strong>Two simultaneous publishers</strong
-                    ><span
-                      >One candidate accepted; the stale candidate did not move
-                      the branch.</span
-                    >
-                  </div>
-                </li>
-                <li>
-                  <svg class="icon"><use href="#check" /></svg>
-                  <div>
-                    <strong>4.32 MB attachment round trip</strong
-                    ><span>The downloaded binary matched byte for byte.</span>
-                  </div>
-                </li>
-                <li>
-                  <svg class="icon"><use href="#check" /></svg>
-                  <div>
-                    <strong>Multi-file changes stay together</strong
-                    ><span
-                      >A 120-file commit and an atomic rename succeeded.</span
-                    >
-                  </div>
-                </li>
-                <li>
-                  <svg class="icon"><use href="#check" /></svg>
-                  <div>
-                    <strong>Object fidelity</strong
-                    ><span
-                      >Unicode, CRLF, BOM, and executable mode checked on the
-                      preferred API path.</span
-                    >
-                  </div>
-                </li>
-              </ul>
-            </div>
-            <div class="unproven">
-              <h3>The work that still matters</h3>
-              <p>
-                Native phone storage, crash recovery, editor races, and low-disk
-                behavior are not validated.
-              </p>
-              <p>
-                A journal does not make binary replacement atomic. We need a
-                demonstrated apply strategy before enabling those writes
-                automatically.
-              </p>
-              <p>
-                Fine-grained token permissions, repository rules, and mobile
-                memory limits still need testing.
-              </p>
-              <a
-                class="text-link"
-                href="https://github.com/triptu/cloud-vault-sync/blob/main/docs/github-sync-review.md"
-                target="_blank"
-                rel="noopener"
-                >Read the safety review
-                <svg class="icon"><use href="#external" /></svg
-              ></a>
-            </div>
-          </div>
-          <div class="rollout">
-            <h3>The path to replacing Obsidian Git</h3>
-            <ol>
-              <li>
-                <span>1</span><strong>Prove the primitives</strong>
-                <p>Native requests, secrets, storage, and app termination.</p>
-              </li>
-              <li>
-                <span>2</span><strong>Break the engine</strong>
-                <p>
-                  Inject crashes, stale state, lost responses, and conflicting
-                  edits.
-                </p>
-              </li>
-              <li>
-                <span>3</span><strong>Rehearse on two devices</strong>
-                <p>
-                  Dummy vaults, manual sync, conflict decisions, and restore.
-                </p>
-              </li>
-              <li>
-                <span>4</span><strong>Cut over carefully</strong>
-                <p>
-                  Preserve a rollback copy. Disable the old writer before the
-                  new one starts.
-                </p>
-              </li>
-            </ol>
-          </div>
-        </div>
-      </section>
-      <section class="closing wrap">
-        <svg class="icon closing-symbol"><use href="#branch" /></svg>
-        <h2>
-          One plugin.<br />Your repository.<br />A history you can inspect.
-        </h2>
-        <div>
-          <p>
-            The recommendation is ready. The next step is proving safe mobile
-            storage and file application—before building the replacement or
-            changing your vault.
-          </p>
-          <a
-            class="button primary"
-            href="https://github.com/triptu/cloud-vault-sync/blob/main/docs/github-sync-proposal.md"
-            target="_blank"
-            rel="noopener"
-            >Read the complete proposal
-            <svg class="icon"><use href="#external" /></svg
-          ></a>
-          <p class="small">
-            The earlier Cloudflare prototype is not safe for real-vault use.
-          </p>
-        </div>
-      </section>
-    </main>
-    <footer class="page-footer wrap">
-      <span>Vault / GitHub-native sync</span
-      ><span>Design proposal · 13 October 2026</span><a href="#">Back to top</a>
-    </footer>
-    <script src="assets/proposal.js"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f5f2e9">
+<meta name="description" content="An illustrated field guide to the GitHub-authoritative Obsidian sync plugin, its safety model, and current acceptance status.">
+<title>One shared history · GitHub Vault Sync</title>
+<link rel="stylesheet" href="assets/proposal.css" />
+
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to the architecture</a>
+<header class="site-header shell">
+  <a class="identity" href="#top" aria-label="GitHub Vault Sync, back to top"><span class="identity-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>GitHub Vault Sync</span></a>
+  <nav aria-label="On this page"><a href="#flow">How it behaves</a><a href="#architecture">Architecture</a><a href="#evidence">Evidence</a></nav>
+  <span class="edition">Architecture field guide <span aria-hidden="true">/</span> 13 Oct 2026</span>
+</header>
+<main id="main">
+<section class="hero shell" id="top" aria-labelledby="hero-title">
+  <div class="hero-copy">
+    <div class="hero-rule" aria-hidden="true"></div>
+    <h1 id="hero-title">One repository.<br>Every device.<br><em>One shared history.</em></h1>
+    <p class="lead">Obsidian saves on your device. The plugin publishes ordinary GitHub commits and brings accepted changes to your laptop and Android phone.</p>
+    <p class="intro-note">A saved note is a local draft until GitHub accepts its commit. This is a working beta for a separate test vault; final replacement acceptance is still in progress.</p>
+    <a class="text-link" href="#flow">Explore a sync situation <span aria-hidden="true">↗</span></a>
+  </div>
+  <div class="hero-art" role="img" aria-label="A laptop with a local draft and an Android phone connect directly to one private GitHub repository. Only an accepted GitHub commit is shared.">
+    <div class="art-topline"><span>YOUR DEVICES</span><span>DIRECT HTTPS · NO RELAY</span></div>
+    <div class="art-device art-laptop"><span class="device-top"><span class="device-symbol" aria-hidden="true"></span> Laptop</span><div class="note-sheet"><span>garden/Autumn.md</span><p>Gather the late seeds.<br><mark>Plant on Sunday.</mark></p><small>Saved locally · draft</small></div></div>
+    <div class="art-link art-link-one"><span>publish</span><b aria-hidden="true"></b></div>
+    <div class="art-repo"><span class="repo-overline">PRIVATE GITHUB REPOSITORY</span><strong>notes <span>/ main</span></strong><div class="history-line"><i aria-hidden="true"></i><span>Accepted commit</span><code>8e2c6a1</code></div><div class="history-line quiet"><i aria-hidden="true"></i><span>Earlier commit</span><code>5b1d0f4</code></div><div class="repo-foot">Committed files are the shared truth.</div></div>
+    <div class="art-link art-link-two"><b aria-hidden="true"></b><span>receive</span></div>
+    <div class="art-device art-phone"><span class="device-top"><span class="device-symbol" aria-hidden="true"></span> Android</span><div class="phone-screen"><span>Autumn.md</span><p>Gather the late seeds.<br>Plant on Sunday.</p><small>From commit 8e2c6a1</small></div></div>
+    <p class="art-caption">Illustrative paths and commit IDs. This is a diagram, not a live sync.</p>
+  </div>
+</section>
+<div class="truth-strip shell" aria-label="Current boundaries"><p><strong>GitHub commits</strong><span>shared authority</span></p><p><strong>Device drafts</strong><span>local until published</span></p><p><strong>Foreground sync</strong><span>Android may suspend in background</span></p><p><strong>No server</strong><span>plugin talks to GitHub directly</span></p></div>
+<section id="flow" class="section shell" aria-labelledby="flow-title">
+  <div class="section-heading"><h2 id="flow-title">What happens when you write?</h2><p>Choose a situation. The examples are synthetic; the rules describe the implemented design and its current limits.</p></div>
+  <div class="scenario-picker" role="group" aria-label="Choose a sync situation">
+    <button type="button" data-scenario="different" aria-pressed="true">Different files</button>
+    <button type="button" data-scenario="offline" aria-pressed="false">Offline</button>
+    <button type="button" data-scenario="conflict" aria-pressed="false">Same file</button>
+    <button type="button" data-scenario="crash" aria-pressed="false">Interrupted sync</button>
+    <button type="button" data-scenario="config" aria-pressed="false">Configuration</button>
+  </div>
+  <div class="scenario-stage" aria-live="polite" aria-atomic="true">
+    <div class="stage-lead"><span class="stage-index" id="scenario-index">01 / 05</span><h3 id="scenario-title">Two devices edit different files</h3><p id="scenario-intro">The laptop changes one note; the phone changes another. Both start from the same committed version.</p><div class="stage-verdict"><span class="verdict-dot" aria-hidden="true"></span><strong id="scenario-verdict">Both edits can join the history.</strong></div></div>
+    <ol class="stage-steps"><li><span>LOCAL</span><p id="scenario-step-one">Each saved edit is a draft on its own device.</p></li><li><span>GITHUB</span><p id="scenario-step-two">The first accepted commit moves the branch; the next device compares that new head before publishing.</p></li><li><span>OTHER DEVICES</span><p id="scenario-step-three">Sequential, independent edits converge. A truly simultaneous publication can pause for reviewed recovery.</p></li></ol>
+  </div>
+  <p class="scenario-footnote" id="scenario-footnote">Automatic sync runs after saved edits, on foreground return, and periodically while Obsidian is open. “Sync now” is also available.</p>
+</section>
+<section id="architecture" class="architecture-section" aria-labelledby="architecture-title"><div class="shell">
+  <div class="section-heading inverse"><h2 id="architecture-title">The branch says <em>what</em>.<br>The ledger says <em>whether</em>.</h2><p>One plugin runs inside Obsidian on each device. It has no local Git database and no Cloudflare service in the publication path.</p></div>
+  <div class="architecture-map" aria-label="The sync transaction from device to GitHub and back">
+    <div class="map-lane"><span class="map-number">1</span><h3>Capture a local draft</h3><p>The plugin reads eligible saved files against its last accepted checkpoint. A per-vault queue keeps one active writer in this Obsidian host.</p><span class="map-tag">DEVICE · LOCAL</span></div>
+    <div class="map-lane"><span class="map-number">2</span><h3>Prepare a candidate</h3><p>It compares base, draft, and current GitHub head. Immutable file objects, a tree, and a candidate commit are prepared before anything becomes shared.</p><span class="map-tag">GITHUB · UNPUBLISHED</span></div>
+    <div class="map-lane highlighted"><span class="map-number">3</span><h3>Publish atomically</h3><p>The branch moves only from the expected parent, together with this installation’s ledger receipt. A rival publisher cannot silently replace the accepted commit.</p><span class="map-tag">GITHUB · ACCEPTED</span></div>
+    <div class="map-lane"><span class="map-number">4</span><h3>Apply with recovery</h3><p>The receiving device protects original bytes in a native preimage hold, applies the accepted version, and advances its checkpoint only after accounting for each path.</p><span class="map-tag">DEVICE · RECOVERABLE</span></div>
+  </div>
+  <div class="ledger-explainer"><div class="ledger-graphic" aria-hidden="true"><span class="lg-branch">main</span><span class="lg-line"></span><span class="lg-commit">candidate</span><span class="lg-plus">+</span><span class="lg-receipt">receipt</span><span class="lg-line short"></span><span class="lg-ledger">device ledger</span></div><p><strong>Uncertain response?</strong> The client reads the ledger. A matching receipt means the candidate was accepted; its own seal means that attempt was cancelled. If the result cannot be established safely, sync pauses for review. It never blindly replays the old candidate.</p></div>
+</div></section>
+<section class="safety-section shell" aria-labelledby="safety-title">
+  <div class="section-heading"><h2 id="safety-title">Safety lives at each boundary.</h2><p>These are specific implementation mechanisms. They narrow failure modes; final device acceptance still matters.</p></div>
+  <div class="safety-rows">
+    <article><span class="safety-key">01 / Local writes</span><h3>Keep the bytes that came before.</h3><p>A native preimage hold and durable journal protect an existing file before replacement or deletion. Interrupted operations resume or remain held; recovery export preserves captured bytes.</p></article>
+    <article><span class="safety-key">02 / Ownership</span><h3>One active writer in this host.</h3><p>Queued operations fence retired plugin instances, local events, and stale previews. A separately copied installation identity triggers a duplicate-installation pause.</p></article>
+    <article><span class="safety-key">03 / Scope</span><h3>Only eligible paths enter the plan.</h3><p>Built-in private paths and recovery files stay out. Committed ignore rules are checked before reading excluded file bytes. Unreadable or unexpectedly missing content cannot stand in for deletion intent.</p></article>
+    <article><span class="safety-key">04 / Restore</span><h3>History returns as a draft.</h3><p>Pick a file and a GitHub commit, preview the historical version, then restore it locally. A later normal publication makes a new commit; the shared branch is not rewound.</p></article>
+  </div>
+</section>
+<section class="config-section" aria-labelledby="config-title"><div class="shell config-layout"><div><h2 id="config-title">Configuration takes a separate door.</h2><p>Notes and attachments are the ordinary sync path. Configuration needs an explicit scope upgrade and review. Existing configuration on GitHub stays preserved while outside scope.</p><p>New hidden configuration files need exact consent before publication. Incoming live configuration is deferred for review; a changed local version is compared again. Root ignore rules remain part of the safety boundary.</p></div><div class="config-gate"><div class="gate-row"><span class="gate-shape open" aria-hidden="true"></span><div><strong>Content</strong><small>Eligible saved notes and attachments</small></div><span>ordinary path</span></div><div class="gate-row"><span class="gate-shape" aria-hidden="true"></span><div><strong>Selected configuration</strong><small>Explicit upgrade, review, then consent</small></div><span>gated path</span></div><div class="gate-row"><span class="gate-shape blocked" aria-hidden="true"></span><div><strong>Credentials, caches, journals</strong><small>Protected even when nearby files are included</small></div><span>never sync</span></div><p class="gate-note">A .gitignore rule reduces scope; it cannot grant access to protected runtime state.</p></div></div></section>
+<section id="evidence" class="evidence-section shell" aria-labelledby="evidence-title"><div class="section-heading"><h2 id="evidence-title">What the evidence says today.</h2><p>Evidence is tied to a revision or build. Passing one layer does not approve the complete replacement.</p></div>
+  <div class="evidence-table" role="table" aria-label="Implementation and acceptance status"><div class="evidence-row evidence-head" role="row"><span role="columnheader">Layer</span><span role="columnheader">Observed</span><span role="columnheader">Status</span></div>
+    <div class="evidence-row" role="row"><strong role="cell">Root tests + TypeScript</strong><p role="cell">405 tests and <code>tsc</code> passed at <code>4da2def</code>.</p><span class="status complete" role="cell">Passed at revision</span></div>
+    <div class="evidence-row" role="row"><strong role="cell">Independent native cases</strong><p role="cell">16 cases passed in the current review work.</p><span class="status complete" role="cell">Passed in scope</span></div>
+    <div class="evidence-row" role="row"><strong role="cell">Android final artifact</strong><p role="cell">Current-bundle normal operation passed on SHA-256 <code class="hash">00e4fd325a596fc01f964e66c90e1744ebba74498d59f4a8cd189fbbf9929fb2</code>. Eight automatic-pair, seven restart, and 25 conflict/binary/deletion/recovery checks passed. Parent verification compared four exact files, deletion on both sides, no extra apply commit, and restored automatic syncing. Legacy visible-file mode only.</p><span class="status complete" role="cell">Normal flow passed</span></div>
+    <div class="evidence-row" role="row"><strong role="cell">Release gates</strong><p role="cell">Configuration UI and migration on Android and process-kill boundaries on the current artifact are still pending. The lab helper is disabled and the app stopped.</p><span class="status pending" role="cell">Acceptance pending</span></div>
+    <div class="evidence-row" role="row"><strong role="cell">Independent review</strong><p role="cell">Fable composed review and Quint review remain open. Existing Quint results are finite checks of separate models.</p><span class="status pending" role="cell">Review pending</span></div>
+  </div>
+  <div class="evidence-bottom"><p><strong>Release boundary.</strong> The plugin is implemented and exercised in test settings. Current-bundle configuration and process-kill acceptance plus composed review have not passed, so this page does not claim a full replacement ready for the real vault or a production deployment.</p><a href="verification/android-v2.md">Read prior Android evidence <span aria-hidden="true">↗</span></a></div>
+</section>
+</main>
+<footer class="site-footer shell"><div><strong>GitHub Vault Sync</strong><span>One shared history, with local recovery.</span></div><nav aria-label="Further reading"><a href="github-sync-proposal.md">Original proposal</a><a href="verification/quint.md">Finite model checks</a><a href="#top">Back to top ↑</a></nav></footer>
+<script src="assets/proposal.js"></script>
+</body>
 </html>
