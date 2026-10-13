@@ -7,7 +7,7 @@ const situations = {
     steps: [
       "Each saved edit is a draft on its own device.",
       "The first accepted commit moves the branch; the next device compares that new head before publishing.",
-      "Sequential, independent edits converge. A truly simultaneous publication can pause for reviewed recovery."
+      "If another device wins the publication race, the plugin settles its attempt and retries against the new head. Independent edits can converge without a conflict decision."
     ],
     footnote: "Automatic sync runs after saved edits, on foreground return, and periodically while Obsidian is open. “Sync now” is also available.",
     caution: false

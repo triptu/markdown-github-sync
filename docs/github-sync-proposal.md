@@ -1,6 +1,6 @@
 # GitHub-native Obsidian sync — original proposal
 
-> **Implementation status (14 October 2026):** This is the original design record. The [current visual architecture](architecture.html) reports build-specific acceptance and the retained configuration write failure. The plugin suite passed 474 tests and typechecking. The unchanged installed production bundle passed separate desktop, Android content, and Android configuration runs, 21 checks each. Release candidate `0.3.0-beta.1` is being prepared while independent assessment continues; the real vault has not been migrated.
+> **Implementation status (14 October 2026):** This is the original design record. The [current visual architecture](architecture.html) reports build-specific acceptance and the retained configuration write failure. The plugin suite passed 474 tests and typechecking. The unchanged installed production bundle passed separate desktop, Android content, and Android configuration runs, 21 checks each. Beta `0.3.0-beta.1` packages this build for staged cutover; the real vault has not been migrated.
 
 Status: design and isolated API experiments, 13 October 2026. Not a released plugin. The existing Cloudflare prototype is not approved for a real vault.
 
@@ -13,7 +13,7 @@ Status: design and isolated API experiments, 13 October 2026. Not a released plu
 - [Android configuration final acceptance](verification/android-v2.md): fresh run `194e2540-cbed-4ca6-8f5c-59f80905d4a3` passed [21/21 checks](verification/android-v2-configuration-final-result.json) on the unchanged production bundle. Root used the actual UI for consent, incoming apply, and guarded approval after a full restart; history restore used production APIs. [Independent readback](verification/android-v2-configuration-final-readback.json) checked four files: three notes matched exactly, while local configuration revision 3 intentionally remained guarded and GitHub retained reviewed revision 2.
 - **Retained storage failure:** run `d80bc1ab-fb61-4041-aa05-ffecf98951b9` failed safely before enrollment on a zero-byte recovery temporary write. The [failed result](verification/android-v2-configuration-current-first-result.json), ordinary successful retry, and fresh passing run remain separate evidence. The failure cause is unresolved; no integrity check was relaxed.
 
-These emulator runs do not establish physical-phone behavior, hardware power-loss durability, fine-grained-token authorization, or migration of the real vault. Independent release assessment is still underway.
+These emulator runs do not establish physical-phone behavior, hardware power-loss durability, fine-grained-token authorization, or migration of the real vault. The [release notes](releases/0.3.0-beta.1.md) retain the unresolved storage limitation and staged installation steps.
 
 ## Recommendation
 

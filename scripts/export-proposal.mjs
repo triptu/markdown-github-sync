@@ -24,7 +24,7 @@ const html = source
     () => `<script>${script}</script>`,
   )
   .replace(
-    /href="((?:verification\/)?[^"/]+\.md)"/g,
+    /href="((?:(?:verification|releases)\/)?[^"/]+\.(?:md|json|png))"/g,
     (_, path) => `href="https://github.com/triptu/cloud-vault-sync/blob/main/docs/${path}"`,
   );
 await mkdir(new URL("dist/", root), { recursive: true });

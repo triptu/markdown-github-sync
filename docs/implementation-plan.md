@@ -66,3 +66,12 @@ Android's configuration restart run preserved the stale local configuration acro
 Three editor probes exposed harness assumptions rather than proving the intended race. R1 could not open an extensionless hold as Markdown; R2 explicitly opened it but Obsidian closed the view; R3 observed that closure before the synthetic draft could save, before the second rename. Their failed results and host census remain in `docs/verification`. They are not native safety passes. A read-only assessment will identify the representative visible-editor test and retain the unsaved-buffer limitation.
 
 Final acceptance is being prepared for the installed production plugin on the isolated desktop profile and Android lab. No real-vault changes, competing-plugin removal, or finished replacement claim.
+
+
+## Final replacement beta checkpoint — 14 October 2026
+
+The 0.3.0-beta.1 package contains the self-contained GitHub replacement and uses the same production main.js (dc3984a2…d103) as the final desktop and Android content acceptance and Android configuration acceptance. Each run passed 21 checks, with separate final-byte readback. Root exercised configuration consent/application/guard approval and a saved Markdown edit through Android UI; desktop and history restore coverage is API-driven as recorded in the reports.
+
+The source review rounds for native index acknowledgement and restore consent closed. The authored formal specification is Quint only, with the existing reviewed finite model evidence retained. The final runtime suite passed 474 plugin tests, four legacy-server tests, both typechecks and build.
+
+Two emulator journal writes failed readback verification and stopped safely. Their unchanged-code retries and fresh passing runs do not erase the failures or prove their cause. The independent storage analysis found no reproduced plugin defect; the parent records its lower-storage attribution as unproven. This remains a beta limitation, along with physical-phone, hardware power-loss and fine-grained PAT acceptance. See docs/releases/0.3.0-beta.1.md for the package scope and cutover steps. The real vault/repository and existing plugin were not changed.

@@ -1,7 +1,7 @@
 {
   "id": "github-vault-sync",
   "name": "GitHub Vault Sync",
-  "version": "0.2.0-beta.1",
+  "version": "0.3.0-beta.1",
   "minAppVersion": "1.11.4",
   "description": "GitHub-authoritative note sync with explicit conflicts and local recovery.",
   "author": "Cloud Vault Sync contributors",

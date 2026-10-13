@@ -144,6 +144,10 @@ The original unrestricted deep TLA search is not claimed as reproduced: Core sto
 
 ## Integration
 
+**Current runtime checkpoint (14 October 2026):** the separate implementation suite passes 474 plugin tests and four retained server tests. Current-bundle desktop content, Android content, and Android configuration/restart/restore acceptance each passed 21 checks with independent final byte readback. See [desktop](desktop-v2.md), [Android](android-v2.md), [native index review](native-index-ack-review-r1.md), and [restore consent review](restore-consent-review-r7.md). The Android report preserves earlier failed runs, including an unresolved transient write-verification failure that stopped safely. These runtime results supersede the old pending-work descriptions below; they do not strengthen the formal models into implementation or hardware proofs.
+
+The following paragraphs record the earlier integration checkpoint, not current release gates.
+
 Integration update after the original formal run: root commit `1b74eab` wires native issue ingestion and includes the plugin-level torn-note regression. That regression holds the truncated note for a decision, leaves its GitHub version unchanged, permits unrelated edits to publish, and restores full bytes after an explicit choice. The root reported 254 passing plugin tests and four passing legacy server tests. Oversized native evidence, subsequent independent review, and actual platform crash acceptance remain open.
 
 The parent supplied `github-ledger-probe.json` with six live API successes. This worker read the result and probe source but did not rerun network experiments. That supports the selected API assumptions; it does not establish engine correctness or fine-grained PAT acceptance.
