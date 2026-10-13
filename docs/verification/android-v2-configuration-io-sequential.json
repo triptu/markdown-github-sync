@@ -1,0 +1,110 @@
+{
+  "result": {
+    "type": "object",
+    "value": {
+      "root": ".native-io-probe-e255fb6d-da94-4d00-8cae-148c9efcc900",
+      "results": [
+        {
+          "i": 0,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 1,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 2,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 3,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 4,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 5,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 6,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 7,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 8,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 9,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 10,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 11,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 12,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 13,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 14,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 15,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 16,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 17,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 18,
+          "length": 80,
+          "exact": true
+        },
+        {
+          "i": 19,
+          "length": 80,
+          "exact": true
+        }
+      ]
+    }
+  }
+}
