@@ -1,0 +1,104 @@
+attempt=1 exit=1
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /private/tmp/vault-sync-quint-scope-v2/formal/quint/_apalache-out/server/2026-10-13T23-51-31_9922600854603315317
+# APALACHE version: 0.62.1 | build: a321771                       I@23:51:31.678
+Starting checker server on port 56970...                          I@23:51:31.680
+The Apalache server is running on port 56970. Press Ctrl-C to stop.
+Oct 13, 2026 11:51:33 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@23:51:33.758
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.13.182134
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 14 and seed -5512810345590338108 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 13251] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/NegScopeNeighbor.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/NegScopeNeighbor.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/Integers.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/Sequences.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/FiniteSets.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/TLC.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/Apalache.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/Variants.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/_TLCTrace.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/Naturals.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/tlc-489054812845740759/TLCExt.tla (jar:file:~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module NegScopeNeighbor
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module NegScopeNeighbor
+Starting... (2026-10-13 23:51:34)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 23:51:34.
+Error: Invariant q_inv is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+NegScopeNeighbor_scopeHandoff_s = [ oldHold |-> TRUE,
+  replacement |-> FALSE,
+  malformedNeighbor |-> FALSE,
+  engineRecord |-> FALSE,
+  superseded |-> FALSE,
+  acknowledged |-> FALSE,
+  origin |-> -1,
+  recovered |-> FALSE,
+  clean |-> FALSE,
+  crashed |-> FALSE,
+  badAck |-> FALSE,
+  badRetirement |-> FALSE,
+  badOrigin |-> FALSE,
+  quiet |-> FALSE ]
+
+State 2: <NegScopeNeighbor_scopeHandoff_mixedRecovery line 40, col 3 to line 49, col 7 of module NegScopeNeighbor>
+NegScopeNeighbor_scopeHandoff_s = [ oldHold |-> TRUE,
+  replacement |-> TRUE,
+  malformedNeighbor |-> TRUE,
+  engineRecord |-> FALSE,
+  superseded |-> FALSE,
+  acknowledged |-> FALSE,
+  origin |-> -1,
+  recovered |-> TRUE,
+  clean |-> FALSE,
+  crashed |-> FALSE,
+  badAck |-> FALSE,
+  badRetirement |-> FALSE,
+  badOrigin |-> FALSE,
+  quiet |-> FALSE ]
+
+State 3: <NegScopeNeighbor_scopeHandoff_isolateNeighbor line 55, col 3 to line 75, col 7 of module NegScopeNeighbor>
+NegScopeNeighbor_scopeHandoff_s = [ oldHold |-> TRUE,
+  replacement |-> FALSE,
+  malformedNeighbor |-> FALSE,
+  engineRecord |-> FALSE,
+  superseded |-> FALSE,
+  acknowledged |-> FALSE,
+  origin |-> -1,
+  recovered |-> TRUE,
+  clean |-> TRUE,
+  crashed |-> FALSE,
+  badAck |-> FALSE,
+  badRetirement |-> TRUE,
+  badOrigin |-> FALSE,
+  quiet |-> FALSE ]
+
+7 states generated, 4 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 3.
+Finished in 00s at (2026-10-13 23:51:34)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-FEhfJo/NegScopeNeighbor_TTrace_1791915694.tla
+
+[violation] Found an issue (364ms).
+error: found a counterexample

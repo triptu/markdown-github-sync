@@ -21,13 +21,13 @@
   "quint": "0.33.0",
   "apalache": "0.62.1",
   "jarSha256": "880c0b2b72354816f12e9a9755829f2907071e9a181ffea1937954c23d54739d",
-  "utc": "2026-10-13T18:03:35Z",
+  "utc": "2026-10-13T18:20:29Z",
   "inputsUnchanged": true,
   "sources": {
     "scopeState.qnt": "ee8d3ae2fc090ac18fb33df102ec1c9c649718102faf2f4111687754f39ef808",
     "scopeHandoff.qnt": "49364661a9c2e0d998b0710f9a61355bcf1eb4ceb9c532e96be0e134264fc243",
-    "check-scope.py": "e9669b111924ecb6058b5084c8b5e8a5f641e1a78777822695019a911e775059",
-    "test-check-scope.py": "843dc48652e522b681a72922e50f33d45ed30414b738fef001d724b6a7ab1d15",
+    "check-scope.py": "3fb453d6adcfd61cbe7211784b8763fe502ac296af9ffe498f08a9c7a5e85acb",
+    "test-check-scope.py": "b05f6fb2302c98511a2b7f244399f99f5195fd1de84acd54d19329d462158bef",
     "tlc-config.json": "cef7b24458a17299872ef7da84233ec954bf19e4653a9173fa3aefed93b9773e",
     "package-lock.json": "1e6424ee53efce1575262cb1b8f6d1f878bbecabe6d442df98dcc512879c21f2",
     "models/ScopeState.qnt": "4ba5cf6e24b37b5f04dc59b85e14641cff2761ef6d7cc822507aa5bbfee29a38",
@@ -60,8 +60,8 @@
       "dataBounds": "one configuration path, one hidden path",
       "states": "327197 states generated, 66384 distinct states found",
       "depth": 17,
-      "tlcSeed": "-2158110373718352731",
-      "seconds": 5.5,
+      "tlcSeed": "7008150500378144417",
+      "seconds": 5.53,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -70,7 +70,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52510",
+        "--server-endpoint=localhost:56602",
         "--tlc-config=tlc-config.json",
         "--verbosity=3",
         "--temporal=progress"
@@ -85,7 +85,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52510",
+            "--server-endpoint=localhost:56602",
             "--tlc-config=tlc-config.json",
             "--verbosity=3",
             "--temporal=progress"
@@ -107,8 +107,8 @@
       "dataBounds": "one held path, one malformed neighbor",
       "states": "54 states generated, 20 distinct states found",
       "depth": 7,
-      "tlcSeed": "-3743370654035591927",
-      "seconds": 3.5,
+      "tlcSeed": "6841375767637385630",
+      "seconds": 3.53,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -117,7 +117,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52538",
+        "--server-endpoint=localhost:56634",
         "--tlc-config=tlc-config.json",
         "--verbosity=3",
         "--temporal=progress"
@@ -132,7 +132,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52538",
+            "--server-endpoint=localhost:56634",
             "--tlc-config=tlc-config.json",
             "--verbosity=3",
             "--temporal=progress"
@@ -154,8 +154,8 @@
       "dataBounds": "one configuration path, one hidden path",
       "states": "19 states generated, 19 distinct states found",
       "depth": 3,
-      "tlcSeed": "-3729293794233024765",
-      "seconds": 3.89,
+      "tlcSeed": "-2705737832178213753",
+      "seconds": 3.87,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -164,7 +164,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52555",
+        "--server-endpoint=localhost:56680",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -178,7 +178,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52555",
+            "--server-endpoint=localhost:56680",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -197,10 +197,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "383 states generated, 217 distinct states found",
+      "states": "372 states generated, 215 distinct states found",
       "depth": 5,
-      "tlcSeed": "-2472418352504027279",
-      "seconds": 4.0,
+      "tlcSeed": "-4486831026982678067",
+      "seconds": 3.91,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -209,7 +209,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52573",
+        "--server-endpoint=localhost:56701",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -223,7 +223,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52573",
+            "--server-endpoint=localhost:56701",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -242,10 +242,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "428 states generated, 243 distinct states found",
+      "states": "439 states generated, 247 distinct states found",
       "depth": 5,
-      "tlcSeed": "8157311924871538518",
-      "seconds": 3.97,
+      "tlcSeed": "6843512699732379250",
+      "seconds": 3.91,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -254,7 +254,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52602",
+        "--server-endpoint=localhost:56715",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -268,7 +268,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52602",
+            "--server-endpoint=localhost:56715",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -287,10 +287,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "466 states generated, 268 distinct states found",
+      "states": "479 states generated, 272 distinct states found",
       "depth": 5,
-      "tlcSeed": "9038047585835390431",
-      "seconds": 4.03,
+      "tlcSeed": "7233594706510045707",
+      "seconds": 3.89,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -299,7 +299,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52623",
+        "--server-endpoint=localhost:56738",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -313,7 +313,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52623",
+            "--server-endpoint=localhost:56738",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -334,7 +334,7 @@
       "dataBounds": "one configuration path, one hidden path",
       "states": "630 states generated, 323 distinct states found",
       "depth": 5,
-      "tlcSeed": "5145914099403442860",
+      "tlcSeed": "-975284046157638244",
       "seconds": 3.88,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
@@ -344,7 +344,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52642",
+        "--server-endpoint=localhost:56761",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -358,7 +358,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52642",
+            "--server-endpoint=localhost:56761",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -377,10 +377,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "939 states generated, 423 distinct states found",
+      "states": "906 states generated, 416 distinct states found",
       "depth": 6,
-      "tlcSeed": "5651164247669019693",
-      "seconds": 3.95,
+      "tlcSeed": "4904566567953968497",
+      "seconds": 3.9,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -389,7 +389,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52666",
+        "--server-endpoint=localhost:56795",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -403,7 +403,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52666",
+            "--server-endpoint=localhost:56795",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -422,10 +422,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "995 states generated, 446 distinct states found",
+      "states": "1024 states generated, 460 distinct states found",
       "depth": 6,
-      "tlcSeed": "8158561959814322592",
-      "seconds": 3.96,
+      "tlcSeed": "6199224806792359878",
+      "seconds": 3.87,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -434,7 +434,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52689",
+        "--server-endpoint=localhost:56813",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -448,7 +448,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52689",
+            "--server-endpoint=localhost:56813",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -469,8 +469,8 @@
       "dataBounds": "one configuration path, one hidden path",
       "states": "19 states generated, 19 distinct states found",
       "depth": 3,
-      "tlcSeed": "9025123334277179834",
-      "seconds": 3.92,
+      "tlcSeed": "2140587553469605858",
+      "seconds": 3.87,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -479,7 +479,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52709",
+        "--server-endpoint=localhost:56833",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -493,7 +493,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52709",
+            "--server-endpoint=localhost:56833",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -512,10 +512,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "615 states generated, 312 distinct states found",
+      "states": "648 states generated, 330 distinct states found",
       "depth": 5,
-      "tlcSeed": "-832380838147522994",
-      "seconds": 3.89,
+      "tlcSeed": "3731031418437174790",
+      "seconds": 3.91,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -524,7 +524,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52736",
+        "--server-endpoint=localhost:56857",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -538,7 +538,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52736",
+            "--server-endpoint=localhost:56857",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -557,10 +557,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "172 states generated, 111 distinct states found",
+      "states": "165 states generated, 105 distinct states found",
       "depth": 5,
-      "tlcSeed": "4723976245096572547",
-      "seconds": 3.94,
+      "tlcSeed": "2415134485511204944",
+      "seconds": 3.85,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -569,7 +569,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52753",
+        "--server-endpoint=localhost:56879",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -583,7 +583,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52753",
+            "--server-endpoint=localhost:56879",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -602,10 +602,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one configuration path, one hidden path",
-      "states": "175 states generated, 101 distinct states found",
+      "states": "181 states generated, 113 distinct states found",
       "depth": 5,
-      "tlcSeed": "-3278500674131210709",
-      "seconds": 3.92,
+      "tlcSeed": "-3312362277581265724",
+      "seconds": 3.95,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -614,7 +614,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52787",
+        "--server-endpoint=localhost:56902",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -628,7 +628,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52787",
+            "--server-endpoint=localhost:56902",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -647,10 +647,10 @@
       "verifyExit": 1,
       "transitionBound": null,
       "dataBounds": "one held path, one malformed neighbor",
-      "states": "11 states generated, 8 distinct states found",
+      "states": "9 states generated, 8 distinct states found",
       "depth": 4,
-      "tlcSeed": "418353593352854209",
-      "seconds": 3.48,
+      "tlcSeed": "5617643980978432704",
+      "seconds": 3.52,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -659,7 +659,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52810",
+        "--server-endpoint=localhost:56941",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -673,7 +673,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52810",
+            "--server-endpoint=localhost:56941",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -694,8 +694,8 @@
       "dataBounds": "one held path, one malformed neighbor",
       "states": "7 states generated, 4 distinct states found",
       "depth": 3,
-      "tlcSeed": "-8596891439257330395",
-      "seconds": 3.49,
+      "tlcSeed": "-5512810345590338108",
+      "seconds": 3.69,
       "command": [
         "~/.t3/scratch/2026-10-13-reverse-engineer-anything-figure-out-d62b7600/formal/quint/node_modules/.bin/quint",
         "verify",
@@ -704,7 +704,7 @@
         "--max-steps=0",
         "--invariant=safe",
         "--apalache-version=0.62.1",
-        "--server-endpoint=localhost:52831",
+        "--server-endpoint=localhost:56970",
         "--tlc-config=tlc-config.json",
         "--verbosity=3"
       ],
@@ -718,7 +718,7 @@
             "--max-steps=0",
             "--invariant=safe",
             "--apalache-version=0.62.1",
-            "--server-endpoint=localhost:52831",
+            "--server-endpoint=localhost:56970",
             "--tlc-config=tlc-config.json",
             "--verbosity=3"
           ],
@@ -728,5 +728,6 @@
     }
   ],
   "errors": [],
-  "java": "openjdk version \"23.0.2\" 2025-01-21"
+  "java": "openjdk version \"23.0.2\" 2025-01-21",
+  "artifactDir": "runs/c6a775bb01874ae0a217e81960a28848"
 }

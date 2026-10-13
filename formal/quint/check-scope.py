@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "evidence" / "scope-tlc"
@@ -36,6 +37,10 @@ CASES = [
 JAR_HASH = "880c0b2b72354816f12e9a9755829f2907071e9a181ffea1937954c23d54739d"
 
 
+class Cancelled(BaseException):
+    """Cancellation must not be swallowed by selectors' InterruptedError retry."""
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -54,19 +59,15 @@ def atomic_text(path, body):
 
 def save_evidence(manifest):
     atomic_text(OUT / "results.json", json.dumps(manifest, indent=2) + "\n")
-    lines = ["# Scope Quint evidence", "", f"Status: {manifest['status']}."]
-    if manifest.get("error"):
-        lines += ["", f"Error: {manifest['error']}."]
-    if manifest["status"] == "PASS":
-        lines += ["", "TLC explored finite reachable graphs; `--max-steps=0` is not a transition cutoff.",
-                  "Temporal checks use weak fairness, not a bounded deadline.",
-                  "Commands, source hashes, seeds, bounds and raw logs are recorded in results.json.",
-                  "", "| Case | Expected | Observed | States | Depth |", "|---|---|---|---:|---:|"]
-        lines += [f"| {r['case']} | {r['expected']} | {r['observed']} | {r['states']} | {r['depth']} |"
-                  for r in manifest["results"]]
-    else:
-        lines += ["", "Incomplete or failed invocation. No PASS verdict is claimed for these artifacts."]
-    atomic_text(OUT / "summary.md", "\n".join(lines) + "\n")
+
+
+def write_run_summary(run_dir, records):
+    lines = ["# Scope Quint case results", "", "The canonical current verdict is `../../results.json`.",
+             "This generation's case rows alone do not claim an invocation PASS.",
+             "", "| Case | Expected | Observed | States | Depth |", "|---|---|---|---:|---:|"]
+    lines += [f"| {r['case']} | {r['expected']} | {r['observed']} | {r.get('states', '?')} | {r.get('depth', '?')} |"
+              for r in records]
+    atomic_text(run_dir / "summary.md", "\n".join(lines) + "\n")
 
 
 def run(command, env, timeout=180):
@@ -85,8 +86,18 @@ def run(command, env, timeout=180):
             output, _ = process.communicate()
         return 124, output + "\nTIMEOUT\n"
     except BaseException:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.communicate()
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
         raise
 
 
@@ -114,33 +125,51 @@ def main():
         print("Scope evidence directory is locked by another invocation", file=sys.stderr)
         return 1
     old_handler = signal.getsignal(signal.SIGTERM)
+    cancelled = False
     def interrupt(_signum, _frame):
-        raise InterruptedError("interrupted by SIGTERM")
+        nonlocal cancelled
+        cancelled = True
+        raise Cancelled("interrupted by SIGTERM")
     signal.signal(signal.SIGTERM, interrupt)
+    run_id = uuid.uuid4().hex
+    run_dir = OUT / "runs" / run_id
     result = {"status": "RUNNING", "selected": [name for name, _, _ in CASES],
               "backend": "TLC via generated TLA", "quint": "0.33.0", "apalache": "0.62.1",
               "jarSha256": JAR_HASH, "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-              "inputsUnchanged": False, "sources": {}, "results": [], "errors": []}
+              "activeArtifactDir": f"runs/{run_id}", "inputsUnchanged": False,
+              "sources": {}, "results": [], "errors": []}
     try:
-        # The manifest becomes incomplete before any fallible tool preflight.
-        save_evidence(result)
-        for name, _, _ in CASES:
-            for suffix in ("typecheck.log", "verify.log"):
-                (OUT / f"{name}.{suffix}").unlink(missing_ok=True)
-        check_cases(result)
+        # This one atomic pointer is the only current verdict. Every log belongs
+        # to a fresh generation, so old PASS artifacts cannot be current logs.
+        try:
+            save_evidence(result)
+        except OSError:
+            (OUT / "results.json").unlink(missing_ok=True)
+            raise
+        run_dir.mkdir(parents=True)
+        check_cases(result, run_dir, lambda: cancelled)
+        if cancelled:
+            raise Cancelled("interrupted by SIGTERM")
+        write_run_summary(run_dir, result["results"])
     except BaseException as error:
         result["errors"].append(f"{type(error).__name__}: {error}")
     finally:
+        if cancelled and not result["errors"]:
+            result["errors"].append("Cancelled: interrupted by SIGTERM")
         result["status"] = "PASS" if not result["errors"] and result["inputsUnchanged"] and len(result["results"]) == len(CASES) else "FAIL"
+        if result["status"] == "PASS":
+            result["artifactDir"] = result.pop("activeArtifactDir")
         if result["errors"]:
             result["error"] = "; ".join(result["errors"])
-        save_evidence(result)
-        signal.signal(signal.SIGTERM, old_handler)
-        lock.close()
+        try:
+            save_evidence(result)
+        finally:
+            signal.signal(signal.SIGTERM, old_handler)
+            lock.close()
     return 0 if result["status"] == "PASS" else 1
 
 
-def check_cases(result):
+def check_cases(result, run_dir, cancelled):
     quint = Path(os.environ.get("QUINT_BIN", HERE / "node_modules" / ".bin" / "quint"))
     tool_home = Path(os.environ.get("QUINT_HOME", HERE / ".tools"))
     jar = tool_home / "apalache-dist-0.62.1" / "apalache" / "lib" / "apalache.jar"
@@ -168,9 +197,13 @@ def check_cases(result):
     result["sources"] = sources
     save_evidence(result)
     for name, expected, temporal in CASES:
+        if cancelled():
+            raise Cancelled("interrupted by SIGTERM")
         source = f"models/{name}.qnt"
         code, output = run([str(quint), "typecheck", source], env)
-        (OUT / f"{name}.typecheck.log").write_text(f"exit={code}\n{output}")
+        if cancelled():
+            raise Cancelled("interrupted by SIGTERM")
+        (run_dir / f"{name}.typecheck.log").write_text(f"exit={code}\n{output}")
         if code:
             result["results"].append({"case": name, "expected": expected, "observed": "ERROR", "typecheckExit": code})
             result["errors"].append(f"{name}: typecheck exit {code}")
@@ -185,10 +218,12 @@ def check_cases(result):
             if temporal:
                 command.append("--temporal=progress")
             code, output = run(command, env)
+            if cancelled():
+                raise Cancelled("interrupted by SIGTERM")
             attempts.append({"command": command, "exit": code, "output": output})
             if "Failed to bind to address" not in output:
                 break
-        (OUT / f"{name}.verify.log").write_text("".join(
+        (run_dir / f"{name}.verify.log").write_text("".join(
             f"attempt={index + 1} exit={item['exit']}\n{item['output']}" +
             ("" if item["output"].endswith("\n") else "\n")
             for index, item in enumerate(attempts)))
