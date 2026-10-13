@@ -743,7 +743,7 @@ class ChangesModal extends Modal {
               new ConfirmModal(
                 this.app,
                 "Keep local version?",
-                "This releases the held update. Your local version will be proposed for a later GitHub commit; conflicts may still require review.",
+                "Keep this device’s version and propose it for the next GitHub commit. If GitHub deleted this file, keeping it restores it to GitHub. Conflicts may still require review.",
                 async () => {
                   const result = await this.plugin.session?.keepLocal({
                     path: step.path,
