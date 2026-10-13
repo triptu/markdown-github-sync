@@ -1,0 +1,367 @@
+{
+  "completed": false,
+  "runId": "c18ec716-04a2-4243-a2e3-9a90b61ea8e3",
+  "error": "host editor saved exact draft into hold before second rename",
+  "checks": [
+    {
+      "name": "R1 archived exactly and R2 result retained",
+      "pass": true
+    },
+    {
+      "name": "installed Android production SHA is known older artifact",
+      "pass": true
+    },
+    {
+      "name": "production sync disabled for isolated local probe",
+      "pass": true
+    },
+    {
+      "name": "new UUID fixture names unused",
+      "pass": true
+    },
+    {
+      "name": "fixture is an indexed original TFile",
+      "pass": true
+    },
+    {
+      "name": "host editor saved exact draft into hold before second rename",
+      "pass": false
+    }
+  ],
+  "installedProductionSha256Expected": "2a1f0ecb9679e8bf4e7cd5c635f69d1f773e29af3a4e9cb6c7e9abf0c82bb93f",
+  "bundledNativeSourceHashes": {
+    "plugin/src/git-sync/obsidian-vault.ts": "4ebf6eb10419ee3993142abbf030d55bec689368755903f308853dc216465622",
+    "plugin/src/git-sync/native-transactions.ts": "b139c9ba955c901a9f5422d2c6272f5708016ed5709785415943a3bcc3d1645f",
+    "plugin/src/git-sync/store.ts": "86b72a3bfdbc610fa554d6eef89de74f1a1838c5c2842df8565ba0b77b224ea1"
+  },
+  "boundary": "R3 bundles current native sources in an isolated journal; installed Android production remains the older SHA and is checked only as provenance",
+  "premise": "A held Markdown FileView remains open through stage-to-visible install. R2 falsified this on Android; R3 records host lifecycle and tests a draft saved before install.",
+  "naturalUiReachabilityProven": false,
+  "unsavedBufferGuaranteeProven": false,
+  "path": "Native Editor Race R3 c18ec716-04a2-4243-a2e3-9a90b61ea8e3.md",
+  "hold": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+  "previous": {
+    "r1Archive": ".git-sync-native-editor-race-r1-254fe269-7e5d-4fea-8e85-c1a830544bf7-result.json",
+    "r1Sha256": "36cabf1f7fb4ee88726733246ffaf853bd0e6d68aad4567f48a1fbf6918a2d40",
+    "r2Result": ".git-sync-native-editor-race-r2-e4918102-ee90-4f4c-ba7d-221fc2e0dbb9-result.json",
+    "r2Sha256": "e7a35c69638892124a50741f468181cdc3fd118386608f5fc75db71811e9380f"
+  },
+  "observed": null,
+  "census": [
+    {
+      "phase": "before-first-rename",
+      "originalTFilePath": "Native Editor Race R3 c18ec716-04a2-4243-a2e3-9a90b61ea8e3.md",
+      "leaves": [
+        {
+          "type": "empty",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "file-explorer",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "search",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "tag",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "all-properties",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "bookmarks",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "backlink",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outgoing-link",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outline",
+          "filePath": null,
+          "sameOriginalTFile": false
+        }
+      ],
+      "files": {
+        "visible": "e07a22ff1f63e3b7e2afda92b5bd8af713bc705b47afe2fe822f74cdce74e34e",
+        "hold": null,
+        "stage": null
+      },
+      "pending": [
+        {
+          "id": "2442c195-d379-4796-95ac-052138ef84af",
+          "attempted": true
+        }
+      ],
+      "recoveryIds": []
+    },
+    {
+      "phase": "after-first-rename",
+      "originalTFilePath": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+      "leaves": [
+        {
+          "type": "empty",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "file-explorer",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "search",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "tag",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "all-properties",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "bookmarks",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "backlink",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outgoing-link",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outline",
+          "filePath": null,
+          "sameOriginalTFile": false
+        }
+      ],
+      "files": {
+        "visible": null,
+        "hold": "e07a22ff1f63e3b7e2afda92b5bd8af713bc705b47afe2fe822f74cdce74e34e",
+        "stage": null
+      },
+      "pending": [
+        {
+          "id": "2442c195-d379-4796-95ac-052138ef84af",
+          "attempted": true
+        }
+      ],
+      "recoveryIds": []
+    },
+    {
+      "phase": "before-markdown-selection",
+      "originalTFilePath": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+      "leaves": [
+        {
+          "type": "empty",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "file-explorer",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "search",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "tag",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "all-properties",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "bookmarks",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "backlink",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outgoing-link",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outline",
+          "filePath": null,
+          "sameOriginalTFile": false
+        }
+      ],
+      "files": {
+        "visible": null,
+        "hold": "e07a22ff1f63e3b7e2afda92b5bd8af713bc705b47afe2fe822f74cdce74e34e",
+        "stage": "34edc5cda2092d85ed807fa2c746a9226af59f2ac7baaef63267243c13b62d2d"
+      },
+      "pending": [
+        {
+          "id": "2442c195-d379-4796-95ac-052138ef84af",
+          "attempted": true
+        }
+      ],
+      "recoveryIds": []
+    },
+    {
+      "phase": "after-markdown-selection",
+      "originalTFilePath": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+      "leaves": [
+        {
+          "type": "markdown",
+          "filePath": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+          "sameOriginalTFile": true
+        },
+        {
+          "type": "file-explorer",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "search",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "tag",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "all-properties",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "bookmarks",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "backlink",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outgoing-link",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outline",
+          "filePath": null,
+          "sameOriginalTFile": false
+        }
+      ],
+      "files": {
+        "visible": null,
+        "hold": "e07a22ff1f63e3b7e2afda92b5bd8af713bc705b47afe2fe822f74cdce74e34e",
+        "stage": "34edc5cda2092d85ed807fa2c746a9226af59f2ac7baaef63267243c13b62d2d"
+      },
+      "pending": [
+        {
+          "id": "2442c195-d379-4796-95ac-052138ef84af",
+          "attempted": true
+        }
+      ],
+      "recoveryIds": []
+    },
+    {
+      "phase": "draft-save-before-second-rename",
+      "originalTFilePath": ".git-vault-sync/c18ec716-04a2-4243-a2e3-9a90b61ea8e3/hold/2442c195-d379-4796-95ac-052138ef84af",
+      "leaves": [
+        {
+          "type": "empty",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "file-explorer",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "search",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "tag",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "all-properties",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "bookmarks",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "backlink",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outgoing-link",
+          "filePath": null,
+          "sameOriginalTFile": false
+        },
+        {
+          "type": "outline",
+          "filePath": null,
+          "sameOriginalTFile": false
+        }
+      ],
+      "files": {
+        "visible": null,
+        "hold": "e07a22ff1f63e3b7e2afda92b5bd8af713bc705b47afe2fe822f74cdce74e34e",
+        "stage": "34edc5cda2092d85ed807fa2c746a9226af59f2ac7baaef63267243c13b62d2d"
+      },
+      "pending": [
+        {
+          "id": "2442c195-d379-4796-95ac-052138ef84af",
+          "attempted": true
+        }
+      ],
+      "recoveryIds": []
+    }
+  ]
+}
