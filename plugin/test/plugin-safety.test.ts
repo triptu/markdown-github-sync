@@ -14,6 +14,10 @@ import { NativeModeStore } from "../src/git-sync/native-modes";
 import type { GitObsidianVault } from "../src/git-sync/obsidian-vault";
 import { FileJournalStore, type JournalFiles } from "../src/git-sync/store";
 
+// V3 consent follows exact contents: notifications no longer revoke unchanged decisions.
+// One-sided renames sync automatically; a saved restore intent resumes after restart.
+// Native uncertainty now produces a per-file decision instead of a global mode error.
+
 const temporary = mkdtempSync(join(tmpdir(), "git-plugin-safety-"));
 const hostModule = join(temporary, "obsidian.cjs");
 const loadBundle = createRequire(import.meta.url);
@@ -70,18 +74,37 @@ function harness() {
   const docs = new Map<string, { file: InstanceType<typeof loaded.TFile>; data: Uint8Array }>();
   const local = new Map<string, unknown>(), files = new Files();
   let crashAfter = false, crashBefore = false;
+  let tearNextWrite = false;
   let beforeProcess: (() => Promise<void>) | null = null;
   const events = new Map<string, (file: { path: string }, oldPath?: string) => void>();
   const put = (path: string, text: string) => { const data = new TextEncoder().encode(text); docs.set(path, { file: new loaded.TFile(path, { size: data.length, mtime: 1 }), data }); };
+  const exists = files.exists.bind(files), rename = files.rename.bind(files), list = files.list.bind(files);
+  files.exists = async path => docs.has(path) || exists(path);
+  files.rename = async (from, to) => {
+    if (await files.exists(to)) throw Error("Destination exists");
+    const value = docs.get(from);
+    if (!value) return rename(from, to);
+    value.file.path = to; docs.set(to, value); docs.delete(from);
+    events.get("rename")?.(value.file, from);
+  };
+  files.list = async path => {
+    const listing = await list(path);
+    return { ...listing, files: [...listing.files, ...docs.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")) };
+  };
+  const adapter = Object.assign(files, {
+    readBinary: async (path: string) => { const value = docs.get(path); if (!value) throw Error("Missing binary file"); return value.data.slice().buffer; },
+    writeBinary: async (path: string, data: ArrayBuffer) => { docs.set(path, { file: new loaded.TFile(path, { size: data.byteLength, mtime: 1 }), data: new Uint8Array(data).slice() }); },
+    remove: async (path: string) => { docs.delete(path); files.values.delete(path); },
+  });
   const app = {
     savedSettings: structuredClone(settings),
     loadLocalStorage: (key: string) => structuredClone(local.get(key) ?? null),
     saveLocalStorage: (key: string, value: unknown) => local.set(key, structuredClone(value)),
     secretStorage: { getSecret: (id: string) => `token:${id}` },
-    workspace: { onLayoutReady: (_callback: () => void) => {} },
+    workspace: { onLayoutReady: (_callback: () => void) => {}, iterateAllLeaves: () => {} },
     vault: {
       on: (name: string, callback: (file: { path: string }, oldPath?: string) => void) => { events.set(name, callback); return {}; },
-      adapter: files, configDir: ".obsidian",
+      adapter, configDir: ".obsidian",
       getFiles: () => [...docs.values()].map(d => d.file),
       getAbstractFileByPath: (path: string) => docs.get(path)?.file ?? null,
       readBinary: async (file: { path: string }) => docs.get(file.path)!.data.slice().buffer,
@@ -91,6 +114,7 @@ function harness() {
         await beforeProcess?.();
         if (crashBefore) { crashBefore = false; throw Error("before native write"); }
         const next = fn(new TextDecoder("utf8", { ignoreBOM: true }).decode(docs.get(file.path)!.data)); put(file.path, next);
+        if (tearNextWrite) { tearNextWrite = false; put(file.path, next.split("\n").slice(0, 5).join("\n") + "\n"); throw Error("torn native write"); }
         if (crashAfter) { crashAfter = false; throw Error("after native write"); }
         return next;
       },
@@ -100,7 +124,7 @@ function harness() {
     const plugin = new (replacement ? reloaded : loaded).GitVaultSync(app as unknown as App, { id: "git-vault-sync", name: "GitHub Vault Sync", version: "test", minAppVersion: "1.11.4", description: "Safety test", author: "Test" }); plugin.app = app as unknown as App;
     plugin.settings = structuredClone(settings); Reflect.set(plugin, "ready", true); return plugin;
   };
-  return { app, docs, files, local, put, create, emit: (name: string, path: string, oldPath?: string) => events.get(name)?.({ path }, oldPath), beforeProcess: (callback: () => Promise<void>) => { beforeProcess = callback; }, crashAfter: () => { crashAfter = true; }, crashBefore: () => { crashBefore = true; } };
+  return { app, docs, files, local, put, create, emit: (name: string, path: string, oldPath?: string) => events.get(name)?.({ path }, oldPath), beforeProcess: (callback: () => Promise<void>) => { beforeProcess = callback; }, crashAfter: () => { crashAfter = true; }, crashBefore: () => { crashBefore = true; }, tearWrite: () => { tearNextWrite = true; } };
 }
 async function enroll(plugin: Plugin) {
   const preview = await plugin.session!.previewEnrollment(); assert.equal(preview.kind, "preview");
@@ -128,7 +152,7 @@ test("reload drains separate bundles and fences old publication plus queued UI o
   assert.equal(repo.calls.filter(c => c === "publish").length, publishes, "old writer cannot publish after unload");
   await initialization; repo.prepare = prepare; await next.syncOnce();
   assert.equal(entryText(repo.headFiles()["a.md"]), "replacement capture\n");
-  const sequences = [...host.files.values.keys()].filter(p => /\/records\/\d{12}-/.test(p) && !p.includes("/modes/")).map(p => p.match(/\/records\/(\d{12})-/)![1]);
+  const sequences = [...host.files.values.keys()].filter(p => /\/records\/\d{12}-/.test(p) && !p.includes("/modes/") && !p.includes("/native/")).map(p => p.match(/\/records\/(\d{12})-/)![1]);
   assert.equal(new Set(sequences).size, sequences.length); assert.equal((await next.session!.status()).kind, "enrolled");
   await assert.rejects(plugin.session!.sync(), /retired/);
 });
@@ -144,7 +168,7 @@ test("historical restore recovers its mode after a native byte-write interruptio
   assert.equal(entryText(repo.headFiles()["a.md"]), "historical\n"); assert.equal(repo.headFiles()["a.md"].mode, "100755");
 });
 
-test("pre-write restore interruption cannot change the current bytes or mode", async () => {
+test("pre-write restore interruption resumes the exact reviewed restore after restart", async () => {
   const repo = await MemoryRepository.create({ "a.md": await entryFromText("historical\n", "100755") }); const history = repo.branchHead;
   await repo.push({ "a.md": await entryFromText("current\n", "100644") }); loaded.useRepository(repo);
   const host = harness(), plugin = host.create(); await plugin.initialize(); await enroll(plugin);
@@ -152,7 +176,7 @@ test("pre-write restore interruption cannot change the current bytes or mode", a
   assert.equal(preview.kind, "preview"); if (preview.kind !== "preview") return;
   host.crashBefore(); await assert.rejects(plugin.session!.restore({ path: "a.md", commit: history, token: preview.token }), /before native write/);
   plugin.onunload(); const next = host.create(true); await next.initialize(); await next.syncOnce();
-  assert.equal(entryText(repo.headFiles()["a.md"]), "current\n"); assert.equal(repo.headFiles()["a.md"].mode, "100644");
+  assert.equal(entryText(repo.headFiles()["a.md"]), "historical\n"); assert.equal(repo.headFiles()["a.md"].mode, "100755");
 });
 
 test("remote executable update still recovers after native write interruption", async () => {
@@ -162,13 +186,12 @@ test("remote executable update still recovers after native write interruption", 
   assert.equal(repo.headFiles()["a.md"].mode, "100755"); assert.equal(entryText(repo.headFiles()["a.md"]), "remote\n");
 });
 
-test("file and folder renames retain executable mode through restart and deletion approval", async () => {
+test("file and folder renames retain executable mode through automatic sync after restart", async () => {
   const { repo, host, plugin } = await setup("executable\n", "100755");
   host.put("folder/a.md", "executable\n"); host.docs.delete("a.md"); await plugin.recordRename("a.md", "folder/a.md");
   host.put("moved/a.md", "executable\n"); host.docs.delete("folder/a.md"); await plugin.recordRename("folder", "moved");
   plugin.onunload(); const next = host.create(true); await next.initialize(); const outcome = await next.session!.sync();
-  assert.equal(outcome.kind, "needs-decision"); if (outcome.kind !== "needs-decision") return;
-  await next.session!.resolve({ conflictId: outcome.conflicts[0].id, choice: { kind: "mine" } }); await next.syncOnce();
+  assert.equal(outcome.kind, "synced");
   assert.equal(repo.headFiles()["a.md"], undefined); assert.equal(repo.headFiles()["moved/a.md"].mode, "100755");
 });
 
@@ -205,7 +228,7 @@ test("a native process callback resuming after unload cannot write; its successo
   assert.equal(repo.headFiles()["a.md"].mode, "100755");
 });
 
-test("native create/modify/delete/rename notifications retire same-byte approvals before scheduling", async () => {
+test("native notifications schedule sync without retiring exact-content decisions", async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", { configurable: true, value: { hidden: false } });
   try {
@@ -217,15 +240,12 @@ test("native create/modify/delete/rename notifications retire same-byte approval
       const id = conflict.conflicts[0].id;
       assert.equal((await plugin.session!.resolve({ conflictId: id, choice: { kind: "mine" } })).kind, "recorded");
       let scheduled = 0;
-      Reflect.set(plugin, "scheduler", { stop() {}, schedule() {
-        scheduled++;
-        const latest = [...host.files.values.keys()].filter(p => /\/records\/\d{12}-/.test(p) && !p.includes("/modes/")).sort().at(-1)!;
-        assert.deepEqual(JSON.parse(host.files.values.get(latest)!).decisions, {}, "notification must be durable before scheduling");
-      } });
+      Reflect.set(plugin, "scheduler", { stop() {}, schedule() { scheduled++; } });
       // A complete edit/revert or recreate cycle can end at the same manifest.
       host.emit(kind, "a.md", "a.md");
       const outcome = await plugin.session!.sync();
-      assert.equal(outcome.kind, "needs-decision", kind); assert.equal(scheduled, 1, kind);
+      assert.equal(outcome.kind, "synced", kind); assert.equal(scheduled, 1, kind);
+      assert.equal(entryText(repo.headFiles()["a.md"]), "local\n");
       assert.equal((await plugin.session!.resolve({ conflictId: id, choice: { kind: "mine" } })).kind, "stale");
       const writes = host.files.writes.length; host.emit("modify", ".obsidian/data.json"); await plugin.session!.status();
       assert.equal(host.files.writes.length, writes); assert.equal(scheduled, 1);
@@ -256,7 +276,10 @@ test("a post-crash edit with ambiguous mode is held instead of published with a 
   host.crashAfter(); await assert.rejects(plugin.session!.restore({ path: "a.md", commit: history, token: preview.token }), /after native write/);
   host.put("a.md", "edited after interruption\n"); plugin.onunload();
   const next = host.create(true); await next.initialize();
-  await assert.rejects(next.syncOnce(), /mode intent has been retained/);
+  const outcome = await next.session!.sync();
+  assert.equal(outcome.kind, "needs-decision");
+  if (outcome.kind !== "needs-decision") throw Error("Missing native recovery conflict");
+  assert.equal(outcome.conflicts[0].kind, "interrupted-write");
   assert.equal(entryText(repo.headFiles()["a.md"]), "current\n");
   assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), "edited after interruption\n");
 });
@@ -303,9 +326,7 @@ test("a rename observed during active sync prevents capture with stale logical m
   host.put("renamed.md", "executable\n"); host.docs.delete("a.md");
   const rename = plugin.recordRename("a.md", "renamed.md"); release.resolve(); await refused; await rename;
   repo.head = head;
-  const outcome = await plugin.session!.sync(); assert.equal(outcome.kind, "needs-decision");
-  if (outcome.kind !== "needs-decision") throw Error("missing deletion review");
-  await plugin.session!.resolve({ conflictId: outcome.conflicts[0].id, choice: { kind: "mine" } }); await plugin.syncOnce();
+  const outcome = await plugin.session!.sync(); assert.equal(outcome.kind, "synced");
   assert.equal(repo.headFiles()["renamed.md"].mode, "100755");
 });
 
@@ -324,7 +345,7 @@ test("initialize drains an immediately admitted notification even when its track
   assert.equal((await plugin.session!.status()).kind, "enrolled");
 });
 
-test("a notification fenced by unload remains pending across bundles and retires saved approvals", async () => {
+test("a notification fenced by unload drains across bundles without retiring exact-content decisions", async () => {
   const { repo, host, plugin } = await setup();
   host.put("a.md", "local\n"); await repo.push({ "a.md": await entryFromText("remote\n") });
   const reviewed = await plugin.session!.sync(); assert.equal(reviewed.kind, "needs-decision");
@@ -337,8 +358,8 @@ test("a notification fenced by unload remains pending across bundles and retires
   plugin.onunload(); const next = host.create(true), initialize = next.initialize();
   release.resolve(); await refused; await eventRefused; await initialize; repo.head = head;
   const outcome = await next.session!.sync();
-  assert.equal(outcome.kind, "needs-decision", "replacement must not reuse an approval from before the observed cycle");
-  assert.equal(entryText(repo.headFiles()["a.md"]), "remote\n");
+  assert.equal(outcome.kind, "synced", "same bytes retain the reviewed decision across replacement");
+  assert.equal(entryText(repo.headFiles()["a.md"]), "local\n");
 });
 
 test("rename metadata queued at unload transfers to the replacement bundle before capture", async () => {
@@ -350,33 +371,24 @@ test("rename metadata queued at unload transfers to the replacement bundle befor
   const rename = plugin.recordRename("a.md", "renamed.md"), renameRefused = assert.rejects(rename, /retired/);
   plugin.onunload(); const next = host.create(true), initialize = next.initialize();
   release.resolve(); await refused; await renameRefused; await initialize; repo.head = head;
-  const outcome = await next.session!.sync(); assert.equal(outcome.kind, "needs-decision");
-  if (outcome.kind !== "needs-decision") throw Error("missing deletion review");
-  await next.session!.resolve({ conflictId: outcome.conflicts[0].id, choice: { kind: "mine" } }); await next.syncOnce();
+  const outcome = await next.session!.sync(); assert.equal(outcome.kind, "synced");
   assert.equal(repo.headFiles()["renamed.md"].mode, "100755");
 });
 
-test("native same-byte recreate/delete events invalidate an approval already loaded by active sync", async () => {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
-  Object.defineProperty(globalThis, "document", { configurable: true, value: { hidden: false } });
-  try {
-    const { repo, host, plugin } = await setup(); await plugin.onload(); host.docs.delete("a.md");
-    const reviewed = await plugin.session!.sync(); assert.equal(reviewed.kind, "needs-decision");
-    if (reviewed.kind !== "needs-decision") throw Error("missing deletion review");
-    const approval = reviewed.conflicts[0].id;
-    await plugin.session!.resolve({ conflictId: approval, choice: { kind: "mine" } });
-    const arrived = deferred(), release = deferred(), head = repo.head.bind(repo);
-    repo.head = async () => { const result = await head(); arrived.resolve(); await release.promise; return result; };
-    const run = plugin.syncOnce(); await arrived.promise;
-    host.put("a.md", "base\n"); host.emit("create", "a.md"); host.docs.delete("a.md"); host.emit("delete", "a.md");
-    release.resolve(); await run; repo.head = head;
-    assert.equal(entryText(repo.headFiles()["a.md"]), "base\n", "an observed cycle must not consume the earlier deletion approval");
-    const outcome = await plugin.session!.sync(); assert.equal(outcome.kind, "needs-decision");
-    if (outcome.kind !== "needs-decision") throw Error("missing renewed review");
-    assert.notEqual(outcome.conflicts[0].id, approval); plugin.onunload();
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "document", previous); else Reflect.deleteProperty(globalThis, "document");
-  }
+test("newer bytes arriving during a resumed decision are preserved and reviewed again", async () => {
+  const { repo, host, plugin } = await setup();
+  host.put("a.md", "local\n"); await repo.push({ "a.md": await entryFromText("remote\n") });
+  const reviewed = await plugin.session!.sync();
+  if (reviewed.kind !== "needs-decision") throw Error("missing content review");
+  await plugin.session!.resolve({ conflictId: reviewed.conflicts[0].id, choice: { kind: "remote" } });
+  const arrived = deferred(), release = deferred(), head = repo.head.bind(repo);
+  repo.head = async () => { const result = await head(); arrived.resolve(); await release.promise; return result; };
+  const run = plugin.syncOnce(); await arrived.promise;
+  host.put("a.md", "a newer unsynced draft\n");
+  release.resolve(); await run; repo.head = head;
+  assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), "a newer unsynced draft\n");
+  assert.equal(entryText(repo.headFiles()["a.md"]), "remote\n");
+  const outcome = await plugin.session!.sync(); assert.equal(outcome.kind, "needs-decision");
 });
 
 test("history browser starts at this device's restorable checkpoint when GitHub is ahead", async () => {
@@ -393,4 +405,33 @@ test("history browser starts at this device's restorable checkpoint when GitHub 
   assert.notEqual(requested?.at, repo.branchHead);
   await plugin.fileHistory({path: "a.md", at: checkpoint, page: 2});
   assert.deepEqual(requested, {path: "a.md", at: checkpoint, page: 2});
+});
+
+test("the wired plugin never publishes a torn native note and continues syncing unrelated files", async () => {
+  const base = Array.from({ length: 10 }, (_, index) => `line ${index}\n`).join("");
+  const remote = base.replace("line 1\n", "remote line 1\n");
+  const { repo, host, plugin } = await setup(base);
+  await repo.push({ "a.md": await entryFromText(remote) });
+  host.tearWrite();
+  await assert.rejects(plugin.syncOnce(), /torn native write/);
+  plugin.onunload();
+  const next = host.create(true); await next.initialize();
+  const first = await next.session!.sync();
+  assert.equal(first.kind, "needs-decision");
+  if (first.kind !== "needs-decision") throw Error("Missing interrupted-write decision");
+  assert.equal(first.conflicts[0].kind, "interrupted-write");
+  assert.equal(entryText(repo.headFiles()["a.md"]), remote);
+  host.put("unrelated.md", "This draft should still sync.\n");
+  await next.syncOnce(); await next.syncOnce();
+  assert.equal(entryText(repo.headFiles()["a.md"]), remote);
+  assert.equal(entryText(repo.headFiles()["unrelated.md"]), "This draft should still sync.\n");
+  const held = await next.session!.inspect();
+  assert.equal(held.kind, "enrolled");
+  if (held.kind !== "enrolled") throw Error("Missing enrolled state");
+  const conflict = held.conflicts.find(item => item.kind === "interrupted-write");
+  assert.ok(conflict);
+  assert.equal((await next.session!.resolve({ conflictId: conflict.id, choice: { kind: "next" } })).kind, "recorded");
+  await next.syncOnce();
+  assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), remote);
+  assert.equal(entryText(repo.headFiles()["a.md"]), remote);
 });

@@ -24,7 +24,8 @@ import { decodeBase64, encodeBase64, entryText } from "./git-sync/codec";
 import { GitObsidianVault } from "./git-sync/obsidian-vault";
 import { FileJournalStore } from "./git-sync/store";
 import { ForegroundScheduler } from "./git-sync/scheduler";
-import { PluginOwnership } from "./git-sync/ownership";
+import { PluginOwnership, hostLifetimeId } from "./git-sync/ownership";
+import { NativeTransactionJournal } from "./git-sync/native-transactions";
 import { NativeModeStore, parseModes } from "./git-sync/native-modes";
 import { defaultSettings, parseSettings, type Settings } from "./settings";
 
@@ -58,6 +59,7 @@ export default class GitVaultSync extends Plugin {
   private journals: FileJournalStore[] = [];
   private lastCleanup = 0;
   private modes: NativeModeStore | null = null;
+  private nativeJournal: NativeTransactionJournal | null = null;
   private owner(): PluginOwnership {
     if (this.unloaded) throw new Error("This sync instance has retired.");
     return this.ownership ??= new PluginOwnership(this.app);
@@ -134,6 +136,7 @@ export default class GitVaultSync extends Plugin {
     );
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (this.unloaded) return;
+      if ([oldPath, file.path].some(path => path === ".git-vault-sync" || path.startsWith(".git-vault-sync/"))) { schedule(); return; }
       if ([oldPath, file.path].every(path => path.split("/").some(part => part.startsWith(".")))) return;
       void this.recordRename(oldPath, file.path).then(schedule).catch(error => this.setStatus(failure(error)));
     }));
@@ -175,6 +178,7 @@ export default class GitVaultSync extends Plugin {
     this.journals = [];
     this.session = null;
     this.modes = null;
+    this.nativeJournal = null;
     if (
       !this.settings.owner ||
       !this.settings.repository ||
@@ -242,13 +246,15 @@ export default class GitVaultSync extends Plugin {
       Object.assign(modes, parseModes(storedModes));
     const modeStore = new FileJournalStore(files, installation, "modes");
     this.modes = await NativeModeStore.open(modeStore, modes);
+    const nativeJournal = await NativeTransactionJournal.open(files, installation);
+    this.nativeJournal = nativeJournal;
     await this.transferRenamesOwned();
     const rawSession = new SyncSession({
       repository: owner.fence(repository),
       vault: owner.fence(new GitObsidianVault(this.app, owner.fence(this.modes), () => {
         owner.assertActive();
         if (owner.hasPendingRenames()) throw new Error("A vault rename is pending. Retry after its mode metadata is saved.");
-      })),
+      }, owner.fence(nativeJournal), hostLifetimeId(this.app))),
       store: owner.fence(store),
       deviceName: this.settings.deviceName,
     });
@@ -318,6 +324,8 @@ export default class GitVaultSync extends Plugin {
       total.recordsRemoved += result.recordsRemoved;
       total.objectsRemoved += result.objectsRemoved;
     }
+    if (this.nativeJournal?.pending().length) throw new Error("Finish the interrupted file operation before cleaning native recovery storage.");
+    await this.nativeJournal?.compact();
     this.lastCleanup = Date.now();
     return total;
   }

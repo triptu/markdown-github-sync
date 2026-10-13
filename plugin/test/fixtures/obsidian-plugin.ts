@@ -1,4 +1,4 @@
-export { TFile, App } from "./obsidian";
+export { TFile, App, FileView } from "./obsidian";
 export class Plugin {
   app: { savedSettings?: unknown } = {};
   async saveData(value: unknown): Promise<void> { this.app.savedSettings = structuredClone(value); }
