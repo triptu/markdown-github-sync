@@ -42,3 +42,9 @@ The 0.2.0 beta is a baseline, not completion of the requested replacement. The n
 Work is approximately seven units: publication protocol, native file transactions, Quint migration, history, onboarding/migration, journal cleanup, and combined acceptance. Protocol uncertainty is tackled first with independent Opus and Fable designs; an Astra worker migrates formal verification in an isolated worktree. The parent owns user flows and integration. No real-vault mutations are authorized by this test plan; dummy-vault experiments continue under the user's existing authorization.
 
 The baseline is tag `0.2.0-beta.1`, commit `e780b4c`: 239 plugin tests, four legacy server tests, and documented native acceptance. Improvements must remove beta limitations through implemented behavior, not by weakening or hiding the claims.
+
+## Configuration integration checkpoint
+
+The native configuration policy, reviewed legacy journal upgrade, engine scope migration, and configuration review screens are integrated in `21a3d18` with engine fixes in `46aa75e`. Startup derives scope from durable enrollment state; legacy vaults need a reviewed pause and fresh enrollment. New hidden-file publication previews and deferred incoming configuration show saved contents and bind approval to the exact versions. Successful sync statuses show remaining unreadable, held, or deferred work.
+
+Root validation: 398/398 plugin tests, TypeScript, build, and diff checks pass. Independent native and composed-workflow reviews remain active, along with expanded Quint models. The new factory and UI still require dedicated integration and final Android/desktop acceptance. Earlier device evidence applies to its recorded bundle hash only. No release or full-replacement completion is claimed.
