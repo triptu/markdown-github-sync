@@ -55,7 +55,8 @@ export interface Repository {
  * transaction's preimage (`expected`) and intent (`next`) exist. The engine
  * turns each into a durable per-path hold that is never merged automatically.
  */
-export interface NativeIssue {
+export type NativeIssue = NativeBytesIssue | NativeOversizeIssue;
+export interface NativeBytesIssue {
   /** Stable vault-assigned id; `recover` keeps returning it until acknowledged. */
   id: string;
   /** Syncable vault path the bytes belong to. */
@@ -71,23 +72,82 @@ export interface NativeIssue {
   /** The unexpected bytes; null only when an interrupted path is now absent. */
   found: Entry | null;
 }
+/**
+ * Unexpected bytes too large for engine ingestion (over 8 MiB), retained by
+ * the vault at `sourcePath`. The engine holds `path` without its bytes and
+ * acknowledges the id only once the user's decision for the hold is durable,
+ * immediately before that decision is written. Acknowledgement must not delete
+ * the retained file; a later size/mtime change is reported as a new id.
+ */
+export interface NativeOversizeIssue {
+  id: string;
+  path: string;
+  kind: "oversize";
+  sourcePath: string;
+  size: number;
+  /** Modification time in epoch milliseconds, when the host reports one. */
+  mtime: number | null;
+  expected: Entry | null;
+  next: Entry | null;
+}
+/** A durable native intent that has not finished; a read-only view. */
+export interface PendingIntent {
+  id: string;
+  path: string;
+  expected: { oid: string; mode: FileMode } | null;
+  next: { oid: string; mode: FileMode } | null;
+  /** True once a visible write could have happened. */
+  attempted: boolean;
+}
+/** Per-intent instruction from the engine; intents in neither list stay pending, untouched. */
+export interface RecoveryAuthorization {
+  /** Complete toward `next`, or report an issue. */
+  replay: string[];
+  /** Never install `next`: drop an unattempted intent, settle an attempted one backward or report an issue. */
+  cancel: string[];
+}
 export type ApplyResult =
   | { kind: "applied" }
   /** Nothing was written: the live bytes differed from `expected` before any write could happen. */
   | { kind: "changed" }
   | { kind: "blocked"; reason: string }
-  | { kind: "interrupted"; issue: NativeIssue }
-  | { kind: "displaced"; issue: NativeIssue };
+  | { kind: "interrupted"; issue: NativeBytesIssue }
+  | { kind: "displaced"; issue: NativeBytesIssue };
+/** A visible file the vault cannot capture with its bytes (over the 8 MiB entry limit). */
+export interface UnreadableFile {
+  path: string;
+  size: number;
+  mtime: number | null;
+  reason: "oversize";
+}
+/** Only `apply`, `recover` and `acknowledgeRecovery` mutate the vault or its native journal. */
 export interface LocalVault {
+  /** Strictly read-only: never replays intents, persists evidence or reclaims hidden files. */
   capture(): Promise<Snapshot>;
+  /**
+   * Strictly read-only capture that reports unreadable visible files instead
+   * of throwing; preferred over `capture` when present. An unreadable path is
+   * never treated as deleted: the engine leaves it untouched on both sides.
+   */
+  scan?(): Promise<{ files: Snapshot; unreadable: UnreadableFile[] }>;
+  /** A pending intent at `path` whose (expected, next) differ from the call returns `blocked` without mutation. */
   apply(
     path: string,
     expected: Entry | null,
     next: Entry | null,
   ): Promise<ApplyResult>;
-  /** Every unacknowledged issue; called before the engine's first capture of a sync or restore. */
-  recover?(): Promise<NativeIssue[]>;
-  /** Called only after the engine durably saved these issues and their bytes. Idempotent. */
+  /** Strictly read-only: every unfinished native intent. */
+  pendingIntents?(): Promise<PendingIntent[]>;
+  /**
+   * The only native entry point that settles intents, persists hidden-file
+   * evidence or reclaims; called by the engine only after its identity, pause
+   * and installation fences. Returns every unacknowledged issue.
+   */
+  recover?(authorization: RecoveryAuthorization): Promise<NativeIssue[]>;
+  /**
+   * Called only after the engine durably saved these issues (and the bytes of
+   * byte issues; for oversize issues, the user's decision). Idempotent.
+   */
   acknowledgeRecovery?(ids: string[]): Promise<void>;
 }
 export interface DurableStore {
