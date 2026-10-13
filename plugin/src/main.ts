@@ -268,6 +268,7 @@ export default class GitVaultSync extends Plugin {
       vault: owner.fence(nativeVault),
       store: owner.fence(store),
       deviceName: this.settings.deviceName,
+      hostLifetimeId: hostLifetimeId(this.app),
       scopeRules,
     });
     owner.assertActive();
@@ -340,12 +341,12 @@ export default class GitVaultSync extends Plugin {
       const migration = new SyncSession({
         repository: owner.fence(this.createRepository(installation, "config/1")),
         vault: owner.fence(vault), store: owner.fence(store),
-        deviceName: this.settings.deviceName, scopeRules: "config/1",
+        deviceName: this.settings.deviceName, scopeRules: "config/1", hostLifetimeId: hostLifetimeId(this.app),
       });
       const policy = await NativePathPolicy.forConfig(this.app.vault.configDir);
       await journal.previewPolicyUpgrade(policy);
       const preview = await migration.previewConfigurationScope();
-      if (preview.kind !== "preview") throw new Error(`Configuration review unavailable: ${preview.kind}`);
+      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Resolve the existing pause first: ${preview.pause.detail}` : `Configuration review unavailable: ${preview.kind}`);
       return {
         note: preview.note,
         confirm: () => owner.run(async () => {
@@ -353,7 +354,7 @@ export default class GitVaultSync extends Plugin {
           await this.assertSingleWriter();
           await journal.previewPolicyUpgrade(policy);
           const result = await migration.enableConfigurationScope({ token: preview.token });
-          if (result.kind !== "reenroll") throw new Error(`Reopen the configuration review: ${result.kind}`);
+          if (result.kind !== "reenroll") throw new Error(result.kind === "paused" ? `Resolve the existing pause first: ${result.pause.detail}` : `Reopen the configuration review: ${result.kind}`);
           await this.initializeOwned();
           return this.rawSession?.previewEnrollment();
         }),
@@ -743,6 +744,42 @@ class ConfigurationModal extends Modal {
       if (listing.rules !== "config/1") {
         el.createEl("p", { text: "Configuration sync is off. Enable it through the reviewed enrollment in GitHub Vault Sync settings." }); return;
       }
+      if (listing.guarded.length) {
+        el.createEl("h3", { text: `Applied configuration changed locally · ${listing.guarded.length}` });
+        el.createEl("p", { text: "Obsidian or a plugin saved a different version after you applied an update. These files are held on this device; unrelated notes can still sync. Review the saved version before deciding whether to publish it." });
+        for (const item of listing.guarded) {
+          new Setting(el).setName(item.path)
+            .setDesc(item.unreadable ? "This file cannot be read within the size limit. Its bytes have not been treated as a deletion." : "An applied update was changed locally. Publication is held.")
+            .addButton(button => button.setButtonText("Review saved version").setDisabled(item.unreadable).onClick(async () => {
+              button.setDisabled(true);
+              try {
+                const preview = await session.previewGuardedConfigurationPublication(item.path);
+                if (!current()) return;
+                if (preview.kind !== "preview") throw new Error(`Reopen this review: ${preview.kind}`);
+                const modal = new Modal(this.app);
+                modal.contentEl.addClass("git-sync-panel");
+                modal.contentEl.createEl("h2", { text: preview.path });
+                modal.contentEl.createEl("p", { text: preview.entry === null
+                  ? "This file was deleted locally after a configuration update. Approving publishes that deletion."
+                  : "This is the saved local version that would replace the reviewed configuration on GitHub." });
+                configurationEntryPreview(modal.contentEl, preview.entry);
+                new Setting(modal.contentEl).addButton(approve => approve
+                  .setButtonText(preview.entry === null ? "Approve this deletion" : "Approve this saved version")
+                  .setCta().onClick(async () => {
+                    approve.setDisabled(true);
+                    try {
+                      if (!current()) throw new Error("Configuration changed. Reopen this review.");
+                      const result = await session.consentGuardedConfigurationPublication({ path: preview.path, token: preview.token });
+                      if (result.kind !== "recorded") throw new Error(`File changed; review it again: ${result.kind}`);
+                      modal.close(); await this.plugin.syncNow(); await this.render();
+                    } catch (error) { new Notice(failure(error), 12000); approve.setDisabled(false); }
+                  }));
+                modal.open();
+              } catch (error) { new Notice(failure(error), 12000); }
+              finally { button.setDisabled(false); }
+            }));
+        }
+      }
       el.createEl("h3", { text: `New local files · ${listing.unpublished.length}` });
       el.createEl("p", { text: "These files remain on this device until you approve their contents. Check for secrets before publishing.", cls: "git-sync-muted" });
       for (const item of listing.unpublished) {
@@ -792,6 +829,12 @@ class ConfigurationModal extends Modal {
           if (!current()) throw new Error("Configuration changed. Reopen this review.");
           await this.plugin.assertSingleWriter();
           const result = await session.applyConfiguration({ token: preview.token });
+          if (result.kind === "review-needed") {
+            new Notice(`${result.applied.length} updates saved. ${result.changed.length} files changed during application and need review in Changes.`, 15000);
+            this.close();
+            new ChangesModal(this.app, this.plugin).open();
+            return;
+          }
           if (result.kind !== "applied") throw new Error(`Configuration needs another review: ${result.kind}`);
           new Notice(`${result.paths.length} configuration updates saved. Restart Obsidian to load them.`, 12000);
           await this.render();
