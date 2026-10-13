@@ -1,0 +1,374 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-13T10:39:09+00:00",
+  "title": "Design System: GitHub Sync Proposal",
+  "extensions": {
+    "scope": "Standalone docs/github-sync-proposal.html proposal site only; not plugin UI, not an approved brand. Responsive layout verified at 390, 768, and 1440px.",
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "tonalRamp": [
+          "oklch(15% 0.015 110)",
+          "oklch(25% 0.015 110)",
+          "oklch(35% 0.015 110)",
+          "oklch(48% 0.015 110)",
+          "oklch(62% 0.015 110)",
+          "oklch(76% 0.015 110)",
+          "oklch(88% 0.015 110)",
+          "oklch(95% 0.015 110)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Warm White",
+        "tonalRamp": [
+          "oklch(15% 0.015 110)",
+          "oklch(25% 0.015 110)",
+          "oklch(35% 0.015 110)",
+          "oklch(48% 0.015 110)",
+          "oklch(62% 0.015 110)",
+          "oklch(76% 0.015 110)",
+          "oklch(88% 0.015 110)",
+          "oklch(95% 0.015 110)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Green Ink",
+        "tonalRamp": [
+          "oklch(15% 0.045 160)",
+          "oklch(25% 0.045 160)",
+          "oklch(35% 0.045 160)",
+          "oklch(48% 0.045 160)",
+          "oklch(62% 0.045 160)",
+          "oklch(76% 0.045 160)",
+          "oklch(88% 0.045 160)",
+          "oklch(95% 0.045 160)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "body": {
+        "role": "neutral",
+        "displayName": "Body",
+        "tonalRamp": [
+          "oklch(15% 0.045 160)",
+          "oklch(25% 0.045 160)",
+          "oklch(35% 0.045 160)",
+          "oklch(48% 0.045 160)",
+          "oklch(62% 0.045 160)",
+          "oklch(76% 0.045 160)",
+          "oklch(88% 0.045 160)",
+          "oklch(95% 0.045 160)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Olive",
+        "tonalRamp": [
+          "oklch(15% 0.03 120)",
+          "oklch(25% 0.03 120)",
+          "oklch(35% 0.03 120)",
+          "oklch(48% 0.03 120)",
+          "oklch(62% 0.03 120)",
+          "oklch(76% 0.03 120)",
+          "oklch(88% 0.03 120)",
+          "oklch(95% 0.03 120)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "tonalRamp": [
+          "oklch(15% 0.015 110)",
+          "oklch(25% 0.015 110)",
+          "oklch(35% 0.015 110)",
+          "oklch(48% 0.015 110)",
+          "oklch(62% 0.015 110)",
+          "oklch(76% 0.015 110)",
+          "oklch(88% 0.015 110)",
+          "oklch(95% 0.015 110)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "green": {
+        "role": "primary",
+        "displayName": "Forest Green",
+        "tonalRamp": [
+          "oklch(15% 0.045 160)",
+          "oklch(25% 0.045 160)",
+          "oklch(35% 0.045 160)",
+          "oklch(48% 0.045 160)",
+          "oklch(62% 0.045 160)",
+          "oklch(76% 0.045 160)",
+          "oklch(88% 0.045 160)",
+          "oklch(95% 0.045 160)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "green-hover": {
+        "role": "primary",
+        "displayName": "Forest Green Hover",
+        "tonalRamp": [
+          "oklch(15% 0.045 160)",
+          "oklch(25% 0.045 160)",
+          "oklch(35% 0.045 160)",
+          "oklch(48% 0.045 160)",
+          "oklch(62% 0.045 160)",
+          "oklch(76% 0.045 160)",
+          "oklch(88% 0.045 160)",
+          "oklch(95% 0.045 160)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "green-light": {
+        "role": "neutral",
+        "displayName": "Green Wash",
+        "tonalRamp": [
+          "oklch(15% 0.025 130)",
+          "oklch(25% 0.025 130)",
+          "oklch(35% 0.025 130)",
+          "oklch(48% 0.025 130)",
+          "oklch(62% 0.025 130)",
+          "oklch(76% 0.025 130)",
+          "oklch(88% 0.025 130)",
+          "oklch(95% 0.025 130)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "evidence-green": {
+        "role": "primary",
+        "displayName": "Evidence Green",
+        "tonalRamp": [
+          "oklch(15% 0.045 160)",
+          "oklch(25% 0.045 160)",
+          "oklch(35% 0.045 160)",
+          "oklch(48% 0.045 160)",
+          "oklch(62% 0.045 160)",
+          "oklch(76% 0.045 160)",
+          "oklch(88% 0.045 160)",
+          "oklch(95% 0.045 160)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "amber": {
+        "role": "secondary",
+        "displayName": "Burnt Amber",
+        "tonalRamp": [
+          "oklch(15% 0.09 50)",
+          "oklch(25% 0.09 50)",
+          "oklch(35% 0.09 50)",
+          "oklch(48% 0.09 50)",
+          "oklch(62% 0.09 50)",
+          "oklch(76% 0.09 50)",
+          "oklch(88% 0.09 50)",
+          "oklch(95% 0.09 50)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "amber-light": {
+        "role": "secondary",
+        "displayName": "Amber Wash",
+        "tonalRamp": [
+          "oklch(15% 0.05 70)",
+          "oklch(25% 0.05 70)",
+          "oklch(35% 0.05 70)",
+          "oklch(48% 0.05 70)",
+          "oklch(62% 0.05 70)",
+          "oklch(76% 0.05 70)",
+          "oklch(88% 0.05 70)",
+          "oklch(95% 0.05 70)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      },
+      "focus-amber": {
+        "role": "secondary",
+        "displayName": "Focus Amber",
+        "tonalRamp": [
+          "oklch(15% 0.09 50)",
+          "oklch(25% 0.09 50)",
+          "oklch(35% 0.09 50)",
+          "oklch(48% 0.09 50)",
+          "oklch(62% 0.09 50)",
+          "oklch(76% 0.09 50)",
+          "oklch(88% 0.09 50)",
+          "oklch(95% 0.09 50)"
+        ],
+        "note": "Ramp synthesized; the project defines no tonal scale."
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero h1 only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section h2."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "h3 and component titles (18-20px)."
+      },
+      "lead": {
+        "displayName": "Lead",
+        "purpose": "Hero intro paragraph, max 420px."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Running text; supporting text 13-15px."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Diagram labels, captions, badges, phase steps."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Inline commit hashes and paths."
+      }
+    },
+    "shadows": [
+      {
+        "name": "paper-sheet",
+        "value": "0 6px 16px #0000000d",
+        "purpose": "Depicted note sheets only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "button-bg",
+        "value": "background 0.18s",
+        "purpose": "Primary button hover; removed under prefers-reduced-motion."
+      },
+      {
+        "name": "scroll",
+        "value": "scroll-behavior: smooth; scroll-padding-top: 32px",
+        "purpose": "Anchor navigation; auto under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "min-width: 1600px"
+      },
+      {
+        "name": "laptop",
+        "value": "max-width: 1100px"
+      },
+      {
+        "name": "tablet",
+        "value": "max-width: 800px"
+      },
+      {
+        "name": "phone",
+        "value": "max-width: 600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Main call to action; forest green fill.",
+      "html": "<button class=\"ds-btn-primary\">Read the proposal</button>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:20px;min-height:48px;padding:13px 22px;border:1px solid transparent;border-radius:6px;background:#254f40;color:#fffef9;font:500 14px DM,'DM Sans',sans-serif;cursor:pointer;transition:background .18s}.ds-btn-primary:hover{background:#183c2d}.ds-btn-primary:focus-visible{outline:3px solid #a36535;outline-offset:5px;}.ds-btn-primary:disabled{background:#dfe3d9;color:#56604f;cursor:not-allowed}"
+    },
+    {
+      "name": "Scenario Segmented Control",
+      "kind": "nav",
+      "refersTo": "segmented-control",
+      "description": "Switches the synthetic scenario shown in the transaction strip.",
+      "html": "<div class=\"ds-seg\"><button aria-pressed=\"true\">Normal edit</button><button aria-pressed=\"false\">Offline</button><button aria-pressed=\"false\">Conflict</button></div>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-seg{display:flex;gap:6px}.ds-seg button{border:0;background:transparent;color:#55614e;font:12px DM,'DM Sans',sans-serif;border-radius:5px;padding:10px 12px;cursor:pointer}.ds-seg button:hover{background:#e6e9df}.ds-seg button[aria-pressed=\"true\"]{background:#254f40;color:#fffef9}.ds-seg button:focus-visible{outline:3px solid #a36535;outline-offset:5px;}"
+    },
+    {
+      "name": "Resolver Choice Button",
+      "kind": "button",
+      "refersTo": "choice-button",
+      "description": "Pick local, GitHub, or both in the conflict demo.",
+      "html": "<div class=\"ds-choices\"><button class=\"ds-choice\" aria-pressed=\"false\">Keep local</button><button class=\"ds-choice\" aria-pressed=\"true\">Keep both</button></div>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-choices{display:flex;gap:7px}.ds-choice{font:11px DM,'DM Sans',sans-serif;padding:8px 12px;border:1px solid #c9cebd;border-radius:5px;color:#213f35;background:#fffef9;cursor:pointer}.ds-choice:hover{background:#edf0e6}.ds-choice[aria-pressed=\"true\"]{border-color:#254f40;background:#254f40;color:#fffef9}.ds-choice:focus-visible{outline:3px solid #a36535;outline-offset:5px;}"
+    },
+    {
+      "name": "Demo Badge",
+      "kind": "chip",
+      "refersTo": "badge-demo",
+      "description": "Amber label marking synthetic or draft content.",
+      "html": "<span class=\"ds-badge\">Synthetic example</span>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-badge{display:inline-block;font:11px DM,'DM Sans',sans-serif;padding:3px 9px;background:#f4e1c9;color:#8e4a25;border-radius:4px}"
+    },
+    {
+      "name": "Note Sheet",
+      "kind": "card",
+      "refersTo": "hero-map",
+      "description": "Depicted Markdown note on a green-wash map; the only shadowed element.",
+      "html": "<div class=\"ds-map\"><div class=\"ds-note\"><span class=\"ds-file\">Daily/2026-10-13.md</span><p>Call the plumber <mark>before Friday</mark>.</p><span class=\"ds-draft\">Local draft</span></div></div>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-map{background:#e5ebdf;border-radius:18px;padding:28px}.ds-note{background:#fffef9;padding:17px 15px 13px;border-radius:4px;box-shadow:0 6px 16px #0000000d}.ds-file{font-size:11px;color:#596554}.ds-note p{font:18px/1.4 Newsreader,Georgia,serif;margin:17px 0}.ds-note mark{background:#f4e1c9;color:#74401e;padding:2px}.ds-draft{font-size:11px;color:#8e4a25;text-transform:uppercase;letter-spacing:.06em}"
+    },
+    {
+      "name": "Transaction Phase",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "One column of the four-phase sync strip; authority phase is tinted.",
+      "html": "<div class=\"ds-phases\"><div class=\"ds-phase\"><span class=\"ds-step\">02</span><h3>Commit to GitHub</h3><p>The commit becomes the shared version.</p><span class=\"ds-state\">Authoritative</span></div><div class=\"ds-phase ds-auth\"><span class=\"ds-step\">03</span><h3>Pull on phone</h3><p>Phone fetches the committed tree.</p><span class=\"ds-state\">Shared</span></div></div>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-phases{display:grid;grid-template-columns:1fr 1fr;border-block:1px solid #d6d9ca;font-family:DM,'DM Sans',sans-serif}.ds-phase{padding:27px 23px 24px;border-right:1px solid #d6d9ca;display:flex;flex-direction:column}.ds-phase:last-child{border-right:0}.ds-auth{background:#e9eddf}.ds-step{font-size:11px;letter-spacing:.09em;color:#55614e;margin-bottom:26px}.ds-phase h3{font-size:19px;line-height:1.25;font-weight:500;margin:0 0 14px}.ds-phase p{font-size:13px;line-height:1.65;color:#55614e;margin:0 0 25px}.ds-state{font-size:11px;margin-top:auto;align-self:flex-start;border-bottom:1px solid #a7b594;padding-bottom:4px}.ds-auth .ds-state{font-weight:600}"
+    },
+    {
+      "name": "Masthead Navigation",
+      "kind": "nav",
+      "refersTo": null,
+      "description": "Brand left, text links right, hairline below.",
+      "html": "<header class=\"ds-mast\"><a class=\"ds-brand\" href=\"#\">Vault Sync <span>proposal</span></a><nav><a href=\"#\">How it works</a><a href=\"#\">Conflicts</a><a href=\"#\">Evidence</a></nav></header>",
+      "css": ":host{--paper:#f5f3eb;--white:#fffef9;--ink:#213f35;--muted:#55614e;--line:#d6d9ca;--green:#254f40;--green-light:#e5ebdf;--amber:#8e4a25;--amber-light:#f4e1c9;font-family:DM,'DM Sans',sans-serif;color:var(--ink)} .ds-mast{display:flex;align-items:center;justify-content:space-between;gap:30px;padding:30px 0;border-bottom:1px solid #d6d9ca;font:14px DM,'DM Sans',sans-serif;color:#213f35}.ds-mast a{color:inherit;text-decoration:none}.ds-brand{font-weight:700}.ds-brand span{font-weight:400;color:#55614e}.ds-mast nav{display:flex;gap:30px}.ds-mast a:hover{color:#9c522d}.ds-mast a:focus-visible{outline:3px solid #a36535;outline-offset:5px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Field Report",
+    "overview": "The page is a printed technical brief on warm paper: a serif editorial voice for headings, a quiet sans for explanation, and deep forest green for anything that represents committed, authoritative state. Amber marks what is local, unresolved, or synthetic. Density is moderate: generous section rhythm (104px) with compact 11–13px labels inside diagrams.\n\nDepth comes from tonal panels and hairline rules rather than shadows. Explanations are built from diagrams and concrete states (device-to-repo map, four-phase transaction strip, conflict resolver demo), not decorative imagery.",
+    "keyCharacteristics": [
+      "Warm off-white paper ground with green-ink text; light scheme only.",
+      "Newsreader serif headlines, DM Sans for everything else.",
+      "Green = committed/authoritative; amber = draft, conflict, or demo.",
+      "Hairline `line` rules divide content; tonal green panels group it.",
+      "Bounded 1240px container; reading paragraphs capped around 420–510px."
+    ],
+    "rules": [
+      {
+        "name": "The Authority Color Rule",
+        "body": "Solid green fill means \"this is the committed/shared version or the selected action.\" Don't use it for decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Synthetic Is Amber Rule",
+        "body": "Demo, draft, and conflict states are labelled in amber so illustrative content is never mistaken for real vault data.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Voices Rule",
+        "body": "Serif is for headings and for depicted note content; never for UI controls or labels.",
+        "section": "typography"
+      },
+      {
+        "name": "The Paper-Only Shadow Rule",
+        "body": "Shadows belong to depicted documents, not to UI panels or buttons.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** use forest green fill only for committed authority and selected actions.",
+      "**Do** label every synthetic example with amber demo/draft styling.",
+      "**Do** separate content with 1px `line` hairlines and tonal panels.",
+      "**Do** keep reading paragraphs within ~420–510px inside the 1240px container."
+    ],
+    "donts": [
+      "**Don't** treat these tokens as the Obsidian plugin's UI or an approved brand.",
+      "**Don't** add shadows to panels or buttons; the paper-sheet shadow is the only one.",
+      "**Don't** use Newsreader for controls, labels, or captions."
+    ]
+  }
+}
