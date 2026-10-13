@@ -7,13 +7,14 @@ import type { Entry, Changes, CommitSnapshot, PreparedPublication } from "../../
 const owner = "triptu";
 const repository = "vault-sync-test";
 const branch = "native-android-1791894436601";
-const expectedProductionSha = "3d076efb958be8cc672a6e76f754af171d9bdf13ed9c94fae2c05a6941dae4ea";
-const progressPath = ".git-sync-native-conflict-progress.json";
-const resultPath = ".git-sync-native-conflict-result.json";
-const autoStagePath = ".git-sync-native-conflict-auto-stage.json";
-const autoResultPath = ".git-sync-native-conflict-auto-result.json";
-const holdConflict = ".git-sync-native-conflict-hold-conflict";
-const holdBlocked = ".git-sync-native-conflict-hold-blocked";
+declare const EXPECTED_PRODUCTION_SHA: string;
+const expectedProductionSha = EXPECTED_PRODUCTION_SHA;
+const progressPath = ".git-sync-native-v2-conflict-progress.json";
+const resultPath = ".git-sync-native-v2-conflict-result.json";
+const autoStagePath = ".git-sync-native-v2-conflict-auto-stage.json";
+const autoResultPath = ".git-sync-native-v2-conflict-auto-result.json";
+const holdConflict = ".git-sync-native-v2-conflict-hold-conflict";
+const holdBlocked = ".git-sync-native-v2-conflict-hold-blocked";
 
 type Check = { name: string; pass: boolean };
 const bytesEqual = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -65,7 +66,7 @@ export default class NativeConflictAcceptance extends Plugin {
     let paths: { local: string; remote: string } | null = null;
     let commit: string | null = null;
     try {
-      check("r7 installed bundle hash", await this.productionHash() === expectedProductionSha);
+      check("installed V2 bundle hash", await this.productionHash() === expectedProductionSha);
       const manager: unknown = Reflect.get(this.app, "plugins");
       if (typeof manager !== "object" || manager === null) throw new Error("Plugin manager unavailable");
       const installed: unknown = Reflect.get(manager, "plugins");
@@ -181,7 +182,7 @@ export default class NativeConflictAcceptance extends Plugin {
       if (typeof candidate !== "object" || candidate === null || typeof Reflect.get(candidate, "syncOnce") !== "function")
         throw new Error("Production plugin unavailable");
       plugin = candidate as GitVaultSync;
-      check("r7 installed bundle hash", await this.productionHash() === expectedProductionSha);
+      check("installed V2 bundle hash", await this.productionHash() === expectedProductionSha);
       check("exact private lab target configured", plugin.settings.owner === owner && plugin.settings.repository === repository && plugin.settings.branch === branch);
       check("lab credential referenced", plugin.settings.secretId === "git-sync-native-lab" && Boolean(this.app.secretStorage.getSecret("git-sync-native-lab")));
       check("production session enrolled", (await plugin.session?.inspect())?.kind === "enrolled");
@@ -266,23 +267,14 @@ export default class NativeConflictAcceptance extends Plugin {
       check("remote binary and deletion published", await publishFixture(remote, incoming));
       commits.incoming = incoming.oid;
       await plugin.syncOnce();
-      const deletionStatus = await plugin.session?.inspect();
-      const deletionConflict = deletionStatus?.kind === "enrolled" ? deletionStatus.conflicts.find((item) => "path" in item && item.path === removed) : undefined;
-      check("remote deletion requires explicit review", deletionStatus?.kind === "enrolled" && deletionConflict?.kind === "remote-deletion");
-      check("deletion review preserves local bytes", removedFile instanceof TFile && await this.app.vault.read(removedFile) === removedText);
-      if (!deletionConflict) throw new Error("Deletion conflict disappeared");
-      check("remote deletion decision recorded", (await plugin.session?.resolve({ conflictId: deletionConflict.id, choice: { kind: "remote" } }))?.kind === "recorded");
-      await plugin.syncOnce();
-      const blocked = await plugin.session?.inspect();
-      check("binary replacement blocked by native vault", blocked?.kind === "enrolled" && blocked.phase === "blocked" && blocked.blocked.some((step) => step.path === binary && step.reason.includes("atomic binary replacement")));
-      check("remote deletion blocked by native vault", blocked?.kind === "enrolled" && blocked.blocked.some((step) => step.path === removed && step.reason.includes("controlled manual apply")));
-      check("blocked files remain byte-for-byte untouched", binaryFile instanceof TFile && removedFile instanceof TFile &&
-        bytesEqual(new Uint8Array(await this.app.vault.readBinary(binaryFile)), binaryBefore) &&
-        await this.app.vault.read(removedFile) === removedText);
-      const headAfterBlock = await remote.head();
-      check("GitHub retains incoming binary and deletion", headAfterBlock.oid === incoming.oid &&
-        headAfterBlock.files[binary]?.data === (await entryFromBytes(binaryAfter)).data && !Object.hasOwn(headAfterBlock.files, removed));
-      await progress("blocked-inbox");
+      const applied = await plugin.session?.inspect();
+      check("ordinary binary replacement and deletion converge without review", applied?.kind === "enrolled" && applied.phase === "idle" && applied.conflicts.length === 0 && applied.blocked.length === 0);
+      const replacementFile = this.app.vault.getAbstractFileByPath(binary);
+      check("replacement bytes installed at original path", replacementFile instanceof TFile && bytesEqual(new Uint8Array(await this.app.vault.readBinary(replacementFile)), binaryAfter));
+      check("ordinary remote deletion applied", !(await files.exists(removed)));
+      const headAfterApply = await remote.head();
+      check("applying remote changes creates no extra commit", headAfterApply.oid === incoming.oid);
+      await progress("binary-and-deletion-applied");
       await waitForScreenshot(holdBlocked);
 
       const records = await plugin.session?.listRecovery();
@@ -316,7 +308,7 @@ export default class NativeConflictAcceptance extends Plugin {
         try {
           await plugin.saveConfiguration({ ...plugin.settings, automatic: originalAutomatic });
         } catch (error) {
-          await files.write(".git-sync-native-conflict-restore-error.json", JSON.stringify({ error: error instanceof Error ? error.message : "Unknown restore failure" }));
+          await files.write(".git-sync-native-v2-conflict-restore-error.json", JSON.stringify({ error: error instanceof Error ? error.message : "Unknown restore failure" }));
         }
       }
     }

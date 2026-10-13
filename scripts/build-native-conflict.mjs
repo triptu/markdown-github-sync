@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
 await mkdir("dist/native-conflict", { recursive: true });
@@ -9,6 +10,7 @@ await require("esbuild").build({
   platform: "browser",
   format: "cjs",
   external: ["obsidian"],
+  define: { EXPECTED_PRODUCTION_SHA: JSON.stringify(createHash("sha256").update(await readFile("dist/github-vault-sync/main.js")).digest("hex")) },
   outfile: "dist/native-conflict/main.js",
 });
 await writeFile("dist/native-conflict/manifest.json", JSON.stringify({
