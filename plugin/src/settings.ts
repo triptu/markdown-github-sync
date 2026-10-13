@@ -1,3 +1,5 @@
+import { defaultCommitDateFormat, defaultCommitMessageTemplate } from "./commit-message";
+
 export interface Settings {
   format: 2;
   owner: string;
@@ -6,6 +8,8 @@ export interface Settings {
   secretId: string;
   deviceName: string;
   automatic: boolean;
+  commitMessageTemplate: string;
+  commitDateFormat: string;
   configuration?: boolean;
 }
 export const defaultSettings = (): Settings => ({
@@ -16,6 +20,8 @@ export const defaultSettings = (): Settings => ({
   secretId: "",
   deviceName: "Obsidian",
   automatic: true,
+  commitMessageTemplate: defaultCommitMessageTemplate,
+  commitDateFormat: defaultCommitDateFormat,
   configuration: true,
 });
 export function parseSettings(value: unknown): Settings {
@@ -35,6 +41,13 @@ export function parseSettings(value: unknown): Settings {
     const field: unknown = Reflect.get(value, key);
     if (typeof field !== "string" || field.length > 256)
       throw new Error(`Invalid setting: ${key}`);
+    defaults[key] = field;
+  }
+  for (const key of ["commitMessageTemplate", "commitDateFormat"] as const) {
+    const field: unknown = Reflect.get(value, key);
+    if (field === undefined) continue;
+    if (typeof field !== "string" || !field.trim() || field.length > 256 || /[\r\n\x00]/.test(field))
+      throw new Error("Commit message and date format must be a single line, 1–256 characters.");
     defaults[key] = field;
   }
   const automatic: unknown = Reflect.get(value, "automatic");

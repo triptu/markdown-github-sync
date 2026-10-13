@@ -284,19 +284,22 @@ export class GitHubRepository implements Repository {
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
     return { id, owner, name, branch: this.options.branch };
   }
-  async history(input: { path: string; at?: string; page?: number }): Promise<FileHistoryPage> {
-    if (!input.path) throw new GitHubError("Choose a vault file for history");
-    pathParts(input.path);
-    if (this.ruleVersion === "visible-only" && !visible(input.path)) throw new GitHubError("Choose a visible vault file for history");
+  async history(input: { path?: string; at?: string; page?: number }): Promise<FileHistoryPage> {
+    if (input.path !== undefined) {
+      if (!input.path) throw new GitHubError("Choose a vault file for history");
+      pathParts(input.path);
+      if (this.ruleVersion === "visible-only" && !visible(input.path)) throw new GitHubError("Choose a visible vault file for history");
+    }
     const page = input.page ?? 1;
     if (!Number.isSafeInteger(page) || page < 1 || page > 10000 || (page > 1 && !input.at))
       throw new GitHubError("Invalid history page");
     const pinned = input.at === undefined ? undefined : oid(input.at);
     await this.identity();
     const at = pinned ?? await this.headOid();
-    if (this.ruleVersion === "config/1" && !(await this.scopeFor(at)).includes(input.path))
+    if (input.path !== undefined && this.ruleVersion === "config/1" && !(await this.scopeFor(at)).includes(input.path))
       throw new GitHubError("File is outside the commit's scope");
-    const query = new URLSearchParams({ sha: at, path: input.path, per_page: "30", page: String(page) });
+    const query = new URLSearchParams({ sha: at, per_page: "30", page: String(page) });
+    if (input.path !== undefined) query.set("path", input.path);
     const rows = list(await this.rest(`/commits?${query}`));
     if (rows.length > 30) throw new GitHubError("Oversized history page");
     const entries = rows.map(value => {

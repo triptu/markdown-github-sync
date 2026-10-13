@@ -948,3 +948,21 @@ test("config client reads an ignored visible historical checkpoint under visible
   assert.equal(checkpoint.files[".gitignore"], undefined);
   assert.equal(checkpoint.treeOid, (await repo.readCommit(api.head)).treeOid);
 });
+
+test("sync history lists all files and pins pagination without a path filter", async () => {
+  const api = new FakeGitHub(), repo = client(api), originalHead = api.head;
+  api.intercept = request => {
+    const url = new URL(request.url);
+    if (url.pathname !== "/repos/owner/repo/commits") return undefined;
+    assert.equal(url.searchParams.get("sha"), originalHead);
+    assert.equal(url.searchParams.has("path"), false);
+    return response(Array.from({ length: url.searchParams.get("page") === "1" ? 30 : 1 }, (_, i) => ({
+      sha: String(i + 1).padStart(40, "0"), commit: { message: "vault backup mac (1): 6th Oct, 2026 13:08:19", author: { name: "Tushar", date: "2026-10-06T07:38:19Z" } },
+    })));
+  };
+  const first = await repo.history({});
+  assert.equal(first.nextPage, 2);
+  assert.equal(first.entries[0].message, "vault backup mac (1): 6th Oct, 2026 13:08:19");
+  api.head = api.addCommit({ "note.md": file("changed") }, api.head);
+  assert.equal((await repo.history({ at: first.at, page: 2 })).entries.length, 1);
+});

@@ -1,3 +1,4 @@
+import { defaultSettings } from "../../src/settings";
 import { Platform, Plugin, requestUrl, TFile } from "obsidian";
 import type GitVaultSync from "../../src/main";
 import { decodeBase64, entryFromBytes, entryFromText } from "../../src/git-sync/codec";
@@ -182,7 +183,7 @@ export default class NativeFinalAcceptance extends Plugin {
       throw new Error("Loopback bootstrap does not match this run");
     const secretId = `git-sync-final-${ACCEPTANCE_RUN_ID}-${device}`;
     this.app.secretStorage.setSecret(secretId, bootstrap.token);
-    await plugin.saveConfiguration({ format: 2, owner, repository, branch: ACCEPTANCE_BRANCH, secretId,
+    await plugin.saveConfiguration({ ...defaultSettings(), format: 2, owner, repository, branch: ACCEPTANCE_BRANCH, secretId,
       deviceName: `Final acceptance ${device}`, automatic: true, configuration: false });
     if (!plugin.session) throw new Error("Production session failed to initialize");
     const remote = await this.remote(device);

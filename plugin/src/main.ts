@@ -1,11 +1,14 @@
+import { inspectGitTakeover, takeOverGit } from "./git-takeover";
 import {
   App,
   Modal,
   Notice,
+  Platform,
   Plugin,
   PluginSettingTab,
   SecretComponent,
   Setting,
+  debounce,
   requestUrl,
 } from "obsidian";
 import { GitHubRepository } from "./git-sync/github";
@@ -29,6 +32,7 @@ import { NativeTransactionJournal, NativePolicyMismatchError } from "./git-sync/
 import { NativePathPolicy } from "./git-sync/native-path-policy";
 import { NativeModeStore, parseModes } from "./git-sync/native-modes";
 import { defaultSettings, parseSettings, type Settings } from "./settings";
+import { formatCommitMessage } from "./commit-message";
 
 const installationKey = "github-vault-sync-installation-v2";
 function failure(error: unknown): string {
@@ -78,6 +82,9 @@ export default class GitVaultSync extends Plugin {
     return this.ownership ??= new PluginOwnership(this.app);
   }
   private listeners = new Set<() => void>();
+  // Reads current settings at commit time, so format edits apply without reconnecting.
+  private commitMessage = (count: number, date: Date): string => formatCommitMessage(
+    this.settings.commitMessageTemplate, this.settings.commitDateFormat, { device: this.settings.deviceName, count, date });
   async onload(): Promise<void> {
     this.owner();
     try {
@@ -95,36 +102,13 @@ export default class GitVaultSync extends Plugin {
     this.statusElement.onclick = () => new ChangesModal(this.app, this).open();
     this.setStatus("Set up GitHub sync");
     this.addSettingTab(new GitSettings(this.app, this));
-    this.addRibbonIcon("git-branch", "GitHub sync: changes and status", () =>
+    this.addRibbonIcon("git-branch", "Sync status", () =>
       new ChangesModal(this.app, this).open(),
     );
-    this.addCommand({
-      id: "sync-now",
-      name: "Sync now",
-      callback: () => {
-        void this.syncNow();
-      },
-    });
-    this.addCommand({
-      id: "changes",
-      name: "Review changes and conflicts",
-      callback: () => new ChangesModal(this.app, this).open(),
-    });
-    this.addCommand({
-      id: "configuration",
-      name: "Review configuration sync",
-      callback: () => new ConfigurationModal(this.app, this).open(),
-    });
-    this.addCommand({
-      id: "restore",
-      name: "Restore a historical file",
-      callback: () => new RestoreModal(this.app, this).open(),
-    });
-    this.addCommand({
-      id: "recovery",
-      name: "Browse local recovery",
-      callback: () => new RecoveryModal(this.app, this).open(),
-    });
+    this.addCommand({ id: "sync-now", name: "Sync now", callback: () => { void this.syncNow(); } });
+    this.addCommand({ id: "changes", name: "Sync status", callback: () => new ChangesModal(this.app, this).open() });
+    this.addCommand({ id: "history", name: "Sync history", callback: () => new SyncHistoryModal(this.app, this).open() });
+    this.addCommand({ id: "restore", name: "File history", callback: () => new RestoreModal(this.app, this).open() });
     this.scheduler = new ForegroundScheduler(
       () => this.syncOnce(),
       () => this.ready && this.settings.automatic && this.session !== null,
@@ -268,6 +252,7 @@ export default class GitVaultSync extends Plugin {
       vault: owner.fence(nativeVault),
       store: owner.fence(store),
       deviceName: this.settings.deviceName,
+      commitMessage: this.commitMessage,
       hostLifetimeId: hostLifetimeId(this.app),
       scopeRules,
     });
@@ -284,7 +269,7 @@ export default class GitVaultSync extends Plugin {
     const status = await rawSession.status();
     this.setStatus(
       status.kind === "unenrolled"
-        ? "Review enrollment in settings"
+        ? "Not syncing yet · finish setup in settings"
         : status.kind === "corrupt"
           ? status.detail
           : "Ready to sync",
@@ -334,22 +319,22 @@ export default class GitVaultSync extends Plugin {
       const vault = this.nativeVault;
       const store = this.journals[0];
       const journal = this.nativeJournal;
-      if (!current || !vault || !store || !journal) throw new Error("Save settings and enroll this device first.");
+      if (!current || !vault || !store || !journal) throw new Error("Start syncing first, then turn on settings sync.");
       await this.assertSingleWriter();
       const configuration = await current.listConfiguration();
       if (configuration.kind === "configuration" && configuration.rules === "config/1")
-        throw new Error("Configuration sync is already enabled. Use Review configuration sync in the command palette to review incoming updates.");
+        throw new Error("Settings sync is already on. Review incoming updates from Sync status.");
       const installation: unknown = this.app.loadLocalStorage(installationKey);
       if (typeof installation !== "string") throw new Error("Missing device identity.");
       const migration = new SyncSession({
         repository: owner.fence(this.createRepository(installation, "config/1")),
         vault: owner.fence(vault), store: owner.fence(store),
-        deviceName: this.settings.deviceName, scopeRules: "config/1", hostLifetimeId: hostLifetimeId(this.app),
+        deviceName: this.settings.deviceName, commitMessage: this.commitMessage, scopeRules: "config/1", hostLifetimeId: hostLifetimeId(this.app),
       });
       const policy = await NativePathPolicy.forConfig(this.app.vault.configDir);
       await journal.previewPolicyUpgrade(policy);
       const preview = await migration.previewConfigurationScope();
-      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Resolve the existing pause first: ${preview.pause.detail}` : `Configuration review unavailable: ${preview.kind}`);
+      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Sync is paused: ${preview.pause.detail}` : preview.kind === "busy" ? "Finish the open items in Sync status first." : `Settings sync can't start yet (${preview.kind}).`);
       return {
         note: preview.note,
         confirm: () => owner.run(async () => {
@@ -357,18 +342,44 @@ export default class GitVaultSync extends Plugin {
           await this.assertSingleWriter();
           await journal.previewPolicyUpgrade(policy);
           const result = await migration.enableConfigurationScope({ token: preview.token });
-          if (result.kind !== "reenroll") throw new Error(result.kind === "paused" ? `Resolve the existing pause first: ${result.pause.detail}` : `Reopen the configuration review: ${result.kind}`);
+          if (result.kind !== "reenroll") throw new Error(result.kind === "paused" ? `Sync is paused: ${result.pause.detail}` : "Something changed. Try turning on settings sync again.");
           await this.initializeOwned();
           return this.rawSession?.previewEnrollment();
         }),
       };
     });
   }
+  async checkSetup(): Promise<boolean> {
+    await this.assertNoCompetingSync();
+    const check = await inspectGitTakeover(this.owner().fence(this.app.vault.adapter));
+    if (check.kind === "blocked") throw new Error(check.reason);
+    return check.kind === "ready";
+  }
+  startSyncing(token: string): ReturnType<SyncSession["enroll"]> {
+    return this.owner().run(async () => {
+      if (!this.rawSession) throw new Error("Connect to GitHub first.");
+      await this.checkSetup();
+      const preview = await this.rawSession.previewEnrollment();
+      if (preview.kind !== "preview") return preview;
+      if (preview.token !== token) return { kind: "stale", preview };
+      const result = await takeOverGit(this.owner().fence(this.app.vault.adapter));
+      if (result.kind === "blocked") throw new Error(result.reason);
+      await this.assertSingleWriter();
+      try {
+        return await this.rawSession.enroll({ token });
+      } catch (error) {
+        if (result.kind === "moved")
+          throw new Error(`${failure(error)} Your previous Git folder is kept at ${result.keptAt}. Reopen setup to try again.`);
+        throw error;
+      }
+    });
+  }
   async assertSingleWriter(): Promise<void> {
     if (await this.app.vault.adapter.exists(".git"))
-      throw new Error(
-        "Use a fresh plugin-owned vault. Keep your existing Git checkout as the rollback copy.",
-      );
+      throw new Error("Finish connecting in GitHub Vault Sync settings before syncing this Git vault.");
+    await this.assertNoCompetingSync();
+  }
+  private async assertNoCompetingSync(): Promise<void> {
     const path = `${this.app.vault.configDir}/community-plugins.json`;
     if (await this.app.vault.adapter.exists(path)) {
       const plugins: unknown = JSON.parse(
@@ -386,7 +397,7 @@ export default class GitVaultSync extends Plugin {
         plugins.some((id) => typeof id === "string" && conflicts.includes(id))
       )
         throw new Error(
-          "Disable the other sync plugin in this vault before enrolling or syncing.",
+          "Turn off the other sync plugin in Settings → Community plugins, then try again.",
         );
     }
   }
@@ -394,7 +405,7 @@ export default class GitVaultSync extends Plugin {
     return this.owner().run(async () => {
       if (!this.repository || !this.session) throw new Error("Connect this vault to GitHub first.");
       const status = await this.rawSession?.status();
-      if (status?.kind !== "enrolled") throw new Error("Enroll this device before browsing its history.");
+      if (status?.kind !== "enrolled") throw new Error("Start syncing to see history.");
       return this.repository.history({ ...input, at: input.at ?? status.commit });
     });
   }
@@ -403,7 +414,7 @@ export default class GitVaultSync extends Plugin {
   }
   private async compactRecoveryOwned(): Promise<{ recordsRemoved: number; objectsRemoved: number }> {
     const status = await this.rawSession?.status();
-    if (!status || status.kind !== "enrolled") throw new Error("Recovery cleanup requires a readable enrolled vault.");
+    if (!status || status.kind !== "enrolled") throw new Error("Start syncing before cleaning up recovery copies.");
     const total = { recordsRemoved: 0, objectsRemoved: 0 };
     for (const journal of this.journals) {
       const result = await journal.compact();
@@ -449,7 +460,7 @@ export default class GitVaultSync extends Plugin {
       if (!this.rawSession || !this.ready) return;
       await this.assertSingleWriter();
       this.owner().assertActive();
-      this.setStatus("Checking saved changes…");
+      this.setStatus("Syncing…");
       const outcome = await this.rawSession.sync();
       this.setStatus(describeOutcome(outcome));
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
@@ -460,9 +471,7 @@ export default class GitVaultSync extends Plugin {
   }
   async syncNow(): Promise<void> {
     if (!this.session) {
-      new Notice(
-        "Configure your repository and review enrollment in GitHub Vault Sync settings.",
-      );
+      new Notice("Finish setting up GitHub Vault Sync in settings.");
       return;
     }
     await this.scheduler?.now();
@@ -491,13 +500,13 @@ export default class GitVaultSync extends Plugin {
           ? await new FileJournalStore(this.owner().fence(this.app.vault.adapter), installation, "native").load()
           : null;
         if (this.nativeJournal || nativeState !== null)
-          throw new Error("Initial scope is already bound to this vault. Finish enrollment, then use the configuration migration review.");
+          throw new Error("Settings sync was already chosen for this vault. Start syncing first, then change it from the settings page.");
       }
       if (binding &&
           (saved.owner.toLowerCase() !== binding.owner.toLowerCase() ||
            saved.repository.toLowerCase() !== binding.name.toLowerCase() ||
            saved.branch !== binding.branch))
-        throw new Error("Repository and branch are bound to this vault. Enroll a fresh vault to change them.");
+        throw new Error(`This vault already syncs with ${binding.owner}/${binding.name} (${binding.branch}). To sync a different repository, use another vault.`);
       this.owner().assertActive();
       await this.saveData(saved);
       this.owner().assertActive();
@@ -508,7 +517,7 @@ export default class GitVaultSync extends Plugin {
   }
   nativeRecoveryOverview() {
     return this.owner().run(async () => {
-      if (!this.nativeVault) throw new Error("Connect this vault before inspecting native recovery.");
+      if (!this.nativeVault) throw new Error("Connect this vault to GitHub first.");
       return {
         oversized: this.nativeVault.nativeRecoveries().filter(record => record.kind === "oversize"),
         retained: await this.nativeVault.retainedHiddenSummary(),
@@ -550,40 +559,82 @@ export default class GitVaultSync extends Plugin {
   }
 
 }
+function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
 function describeOutcome(outcome: SyncOutcome): string {
   switch (outcome.kind) {
     case "unenrolled":
-      return "Review enrollment in settings";
+      return "Not syncing yet · finish setup in settings";
     case "corrupt":
-      return `Recovery needed: ${outcome.detail}`;
+      return `Needs repair: ${outcome.detail}`;
     case "paused":
       return `Paused: ${outcome.pause.detail}`;
     case "up-to-date":
     case "synced": {
       const pending: string[] = [];
-      if (outcome.attention?.unreadable.length) pending.push(`${outcome.attention.unreadable.length} unreadable files`);
-      if (outcome.attention?.held.length) pending.push(`${outcome.attention.held.length} held files`);
-      if (outcome.attention?.deferred) pending.push(`${outcome.attention.deferred} configuration updates`);
-      if (outcome.kind === "synced" && outcome.carried.length) pending.push(`${outcome.carried.length} newer local edits`);
-      const progress = outcome.kind === "synced" && outcome.published ? "Changes published" : "Checked GitHub";
-      return pending.length ? `${progress} · ${pending.join(" · ")} pending`
-        : `Content synced · ${outcome.commit.slice(0, 7)}`;
+      if (outcome.attention?.unreadable.length) pending.push(`${plural(outcome.attention.unreadable.length, "file")} too large`);
+      if (outcome.attention?.held.length) pending.push(`${plural(outcome.attention.held.length, "file")} to review`);
+      if (outcome.attention?.deferred) pending.push(`${plural(outcome.attention.deferred, "settings update")} to review`);
+      if (outcome.kind === "synced" && outcome.carried.length) pending.push(`${plural(outcome.carried.length, "newer edit")} queued`);
+      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return pending.length ? `Synced at ${time} · ${pending.join(" · ")}` : `Synced at ${time}`;
     }
     case "needs-decision":
-      return `${outcome.conflicts.length} decisions needed${outcome.published ? " · other changes published" : ""}${outcome.carried.length ? ` · ${outcome.carried.length} drafts retained` : ""}`;
+      return `${plural(outcome.conflicts.length, "file needs", "files need")} your choice`;
     case "blocked":
-      return `${outcome.steps.length} file updates held · open Changes`;
+      return `${plural(outcome.steps.length, "update")} waiting · open Sync status`;
     case "publication-unknown":
-      return "Publication uncertain · open Changes to review";
+      return "Couldn't confirm the last upload · open Sync status";
     case "settling":
-      return "Waiting for GitHub to confirm the upload; retrying automatically";
+      return "Waiting for GitHub to confirm the upload…";
     case "contended":
-      return "Another device is publishing; retrying shortly";
+      return "Another device is syncing · retrying soon";
     case "native-error":
-      return "Recovery evidence needs attention · open Changes";
+      return "A file needs attention · open Sync status";
   }
 }
+function parseRepository(value: string): { owner: string; repository: string } | null {
+  const match = /^(?:(?:https?:\/\/)?github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(value.trim());
+  return match ? { owner: match[1]!, repository: match[2]! } : null;
+}
+function deviceSuggestion(): string {
+  if (Platform.isAndroidApp) return "Android";
+  if (Platform.isIosApp) return Platform.isTablet ? "iPad" : "iPhone";
+  if (Platform.isMacOS) return "Mac";
+  if (Platform.isWin) return "Windows";
+  return "Linux";
+}
+type CommitDraft = Pick<Settings, "deviceName" | "commitMessageTemplate" | "commitDateFormat">;
+/** Device name, message and date format with a live preview. `changed` runs only on user edits with a valid format. */
+function renderCommitSettings(el: HTMLElement, draft: CommitDraft, changed: () => void): void {
+  const preview = new Setting(el).setName("Preview");
+  preview.descEl.addClass("git-sync-code");
+  const update = (): boolean => {
+    const valid = Boolean(draft.commitMessageTemplate.trim() && draft.commitDateFormat.trim());
+    preview.setDesc(valid
+      ? formatCommitMessage(draft.commitMessageTemplate, draft.commitDateFormat, { device: draft.deviceName || deviceSuggestion(), count: 3, date: new Date() })
+      : "Message and date format can't be empty.");
+    return valid;
+  };
+  const edited = () => { if (update()) changed(); };
+  new Setting(el).setName("Device name")
+    .addText(text => text.setValue(draft.deviceName).setPlaceholder(deviceSuggestion())
+      .onChange(value => { draft.deviceName = value.trim() || deviceSuggestion(); edited(); }));
+  new Setting(el).setClass("git-sync-format-field").setName("Message")
+    .setDesc("{{device}}, {{count}} (files changed) and {{date}} are filled in.")
+    .addText(text => text.setValue(draft.commitMessageTemplate)
+      .onChange(value => { draft.commitMessageTemplate = value; edited(); }));
+  new Setting(el).setClass("git-sync-format-field").setName("Date format")
+    .setDesc("YYYY MM MMM D DD Do HH mm ss. Wrap other text in [brackets].")
+    .addText(text => text.setValue(draft.commitDateFormat)
+      .onChange(value => { draft.commitDateFormat = value; edited(); }));
+  el.appendChild(preview.settingEl);
+  update();
+}
 class GitSettings extends PluginSettingTab {
+  private generation = 0;
+  private unsubscribe: (() => void) | null = null;
   constructor(
     app: App,
     private plugin: GitVaultSync,
@@ -591,145 +642,175 @@ class GitSettings extends PluginSettingTab {
     super(app, plugin);
   }
   display(): void {
+    void this.render();
+  }
+  hide(): void {
+    this.generation++;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+  private async render(): Promise<void> {
+    const generation = ++this.generation;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    const session = this.plugin.session;
+    const status = await session?.status().catch((error: unknown) => ({ kind: "corrupt" as const, detail: failure(error) }));
+    if (generation !== this.generation) return;
     const el = this.containerEl;
     el.empty();
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "GitHub Vault Sync" });
-    el.createEl("p", {
-      text: "Saved notes become commits in your private repository. Only accepted GitHub versions are shared. Configuration sync is enabled separately after review.",
-    });
+    if (status?.kind === "enrolled" && !status.pause) {
+      await this.renderSyncing(el, status.repository, generation);
+      return;
+    }
+    if (status?.kind === "enrolled" && status.pause) {
+      new Setting(el).setName("Sync is paused").setDesc(status.pause.detail)
+        .addButton(button => button.setButtonText("Review changes").setCta().onClick(() => this.review(button)));
+      return;
+    }
+    if (status?.kind === "corrupt") this.renderProblem(el, status.detail);
+    else if (!session && this.plugin.settings.owner && this.plugin.settings.secretId) this.renderProblem(el, this.plugin.statusText);
+    this.renderSetup(el);
+  }
+  private renderProblem(el: HTMLElement, detail: string): void {
+    new Setting(el).setName("Can't connect").setDesc(detail)
+      .addButton(button => button.setButtonText("Try again").onClick(async () => {
+        button.setDisabled(true);
+        try { await this.plugin.initialize(); this.display(); }
+        catch (error) { this.plugin.setStatus(failure(error)); new Notice(failure(error), 12000); button.setDisabled(false); }
+      }));
+  }
+  private renderSetup(el: HTMLElement): void {
     const draft = { ...this.plugin.settings };
-    new Setting(el).setName("GitHub owner").addText((t) =>
-      t
-        .setValue(draft.owner)
-        .setPlaceholder("Your username")
-        .onChange((v) => (draft.owner = v.trim())),
-    );
-    new Setting(el).setName("Repository").addText((t) =>
-      t
-        .setValue(draft.repository)
-        .setPlaceholder("notes")
-        .onChange((v) => (draft.repository = v.trim())),
-    );
-    new Setting(el)
-      .setName("Branch")
-      .addText((t) =>
-        t.setValue(draft.branch).onChange((v) => (draft.branch = v.trim())),
-      );
-    new Setting(el)
-      .setName("GitHub token")
-      .setDesc(
-        "Use a fine-grained token for this repository with Contents read/write and Metadata read. The token stays in Obsidian SecretStorage, outside vault files.",
-      )
-      .addComponent((container) =>
-        new SecretComponent(this.app, container)
-          .setValue(draft.secretId)
-          .onChange((v) => (draft.secretId = v ?? "")),
-      );
-    new Setting(el)
-      .setName("Device name")
-      .setDesc("Included in commit messages.")
-      .addText((t) =>
-        t.setValue(draft.deviceName).onChange((v) => (draft.deviceName = v)),
-      );
-    new Setting(el)
-      .setName("Automatic sync")
-      .setDesc(
-        "Publish saved changes after a short pause; check for remote changes every minute while Obsidian is active.",
-      )
-      .addToggle((t) =>
-        t.setValue(draft.automatic).onChange((v) => (draft.automatic = v)),
-      );
-    new Setting(el).setName("Include configuration in first enrollment")
-      .setDesc("Choose before connecting this new vault. Existing enrolled vaults use the separate migration review below.")
+    let repository = draft.owner && draft.repository ? `${draft.owner}/${draft.repository}` : "";
+    new Setting(el).setName("Connect to GitHub").setHeading()
+      .setDesc("Your notes are saved as commits in a private GitHub repository you own.");
+    new Setting(el).setName("Repository")
+      .setDesc("Owner and name, or paste the repository link.")
+      .addText(text => text.setValue(repository).setPlaceholder("username/notes")
+        .onChange(value => { repository = value; }));
+    new Setting(el).setName("Branch")
+      .addText(text => text.setValue(draft.branch).setPlaceholder("main")
+        .onChange(value => { draft.branch = value.trim(); }));
+    new Setting(el).setName("Access token")
+      .setDesc(createFragment(fragment => {
+        fragment.appendText("A fine-grained token for this repository with Contents set to read and write. ");
+        fragment.createEl("a", { text: "Create a token", href: "https://github.com/settings/personal-access-tokens/new" });
+      }))
+      .addComponent(container => new SecretComponent(this.app, container)
+        .setValue(draft.secretId)
+        .onChange(value => { draft.secretId = value ?? ""; }));
+    new Setting(el).setName("Also sync Obsidian settings")
+      .setDesc("Themes, hotkeys and plugins. Changes from other devices wait for your OK.")
       .addToggle(toggle => toggle.setValue(draft.configuration ?? false)
         .setDisabled(this.plugin.session !== null)
         .onChange(value => { draft.configuration = value; }));
-    new Setting(el).addButton((b) =>
-      b
-        .setButtonText("Save settings")
-        .setCta()
-        .onClick(async () => {
-          b.setDisabled(true);
-          try {
-            await this.plugin.saveConfiguration(draft);
-            new Notice("Settings saved.");
-          } catch (error) {
-            new Notice(failure(error), 12000);
-          } finally {
-            b.setDisabled(false);
-          }
-        }),
-    );
-    new Setting(el).setName("Configuration changes")
-      .setDesc("Preview incoming settings and choose which new local configuration files may be published.")
-      .addButton(button => button.setButtonText("Review changes").onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
-    new Setting(el).setName("Reconnect after a startup error")
-      .setDesc(this.plugin.statusText)
-      .addButton(button => button.setButtonText("Retry connection").onClick(async () => {
+    const commits = el.createEl("details", { cls: "git-sync-advanced" });
+    commits.createEl("summary", { text: "Commit messages" });
+    renderCommitSettings(commits, draft, () => {});
+    new Setting(el).addButton(button => button.setButtonText("Connect").setCta().onClick(async () => {
+      const parsed = parseRepository(repository);
+      if (!draft.commitMessageTemplate.trim() || !draft.commitDateFormat.trim()) { new Notice("Commit message and date format can't be empty."); return; }
+      if (!parsed) { new Notice("Enter the repository as owner/name, for example your-name/notes."); return; }
+      if (!draft.secretId) { new Notice("Choose an access token first."); return; }
+      button.setDisabled(true);
+      try {
+        await this.plugin.saveConfiguration({ ...draft, ...parsed, branch: draft.branch || "main" });
+        if (!this.plugin.session) { this.display(); throw new Error(this.plugin.statusText); }
+        await this.review(button);
+      } catch (error) {
+        new Notice(failure(error), 12000);
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
+  }
+  /** Opens the first-sync review; nothing changes until the user confirms there. */
+  private async review(button: { setDisabled(disabled: boolean): unknown }): Promise<void> {
+    button.setDisabled(true);
+    try {
+      const keepsGit = await this.plugin.checkSetup();
+      const session = this.plugin.session;
+      if (!session) throw new Error(this.plugin.statusText);
+      const preview = await session.previewEnrollment();
+      if (preview.kind === "corrupt") throw new Error(preview.detail);
+      if (preview.kind === "preview") new EnrollmentModal(this.app, this.plugin, preview, keepsGit, () => this.display()).open();
+      else this.display();
+    } catch (error) {
+      new Notice(failure(error), 12000);
+    } finally {
+      button.setDisabled(false);
+    }
+  }
+  private async renderSyncing(el: HTMLElement, repository: RepositoryIdentity, generation: number): Promise<void> {
+    const plugin = this.plugin;
+    const draft = { ...plugin.settings };
+    const save = debounce(() => {
+      plugin.saveConfiguration({ ...plugin.settings, automatic: draft.automatic, deviceName: draft.deviceName,
+        commitMessageTemplate: draft.commitMessageTemplate, commitDateFormat: draft.commitDateFormat, secretId: draft.secretId })
+        .catch(error => new Notice(failure(error), 12000));
+    }, 600, true);
+
+    const status = new Setting(el).setName(`${repository.owner}/${repository.name}`).setDesc(plugin.statusText)
+      .addButton(button => button.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, plugin).open()))
+      .addButton(button => button.setButtonText("Status").onClick(() => new ChangesModal(this.app, plugin).open()))
+      .addButton(button => button.setButtonText("Sync now").setCta().onClick(async () => {
         button.setDisabled(true);
-        try { await this.plugin.initialize(); this.display(); }
-        catch (error) { this.plugin.setStatus(failure(error)); new Notice(failure(error), 12000); }
-        finally { button.setDisabled(false); }
+        await plugin.syncNow();
+        button.setDisabled(false);
       }));
-    el.createEl("h3", { text: "Enroll this device" });
-    el.createEl("p", {
-      text: "Start with a fresh vault and keep your existing vault as a backup. Disable Obsidian Sync, Git, cloud-folder sync, and other sync tools for this vault. Enrollment previews all differences before making changes.",
-    });
-    let soleWriter = false;
-    new Setting(el)
-      .setName("This plugin is the only sync writer")
-      .addToggle((t) => t.onChange((v) => (soleWriter = v)));
-    new Setting(el).addButton((b) =>
-      b.setButtonText("Preview enrollment").onClick(async () => {
-        if (!soleWriter) {
-          new Notice(
-            "Confirm that other sync tools are disabled for this vault.",
-          );
-          return;
-        }
-        b.setDisabled(true);
-        try {
-          await this.plugin.assertSingleWriter();
-          if (!this.plugin.session)
-            throw new Error(`Sync is unavailable: ${this.plugin.statusText}. Use Retry connection after resolving the reported error.`);
-          const preview = await this.plugin.session.previewEnrollment();
-          if (preview.kind !== "preview") {
-            new Notice(
-              preview.kind === "corrupt"
-                ? preview.detail
-                : "This device is already enrolled.",
-            );
-            return;
-          }
-          new EnrollmentModal(this.app, this.plugin, preview).open();
-        } catch (error) {
-          new Notice(failure(error), 12000);
-        } finally {
-          b.setDisabled(false);
-        }
-      }),
-    );
-    new Setting(el).setName("Include Obsidian configuration")
-      .setDesc("After initial enrollment, review eligible settings, themes and plugins. Incoming configuration waits for approval; new local configuration files need publication consent.")
-      .addButton(button => button.setButtonText("Review configuration sync").onClick(async () => {
+    this.unsubscribe = plugin.subscribe(() => status.setDesc(plugin.statusText));
+    new Setting(el).setName("Sync automatically")
+      .setDesc("Sync shortly after you edit, and check for changes every minute while Obsidian is open.")
+      .addToggle(toggle => toggle.setValue(draft.automatic).onChange(value => { draft.automatic = value; save(); }));
+    const configuration = new Setting(el).setName("Obsidian settings");
+    void this.describeConfiguration(configuration, generation);
+
+    new Setting(el).setName("Commit messages").setHeading();
+    renderCommitSettings(el, draft, save);
+
+    const advanced = el.createEl("details", { cls: "git-sync-advanced" });
+    advanced.createEl("summary", { text: "Advanced" });
+    new Setting(advanced).setName("Repository")
+      .setDesc(`${repository.owner}/${repository.name} · ${repository.branch}. To sync a different repository, use another vault.`);
+    new Setting(advanced).setName("Access token")
+      .addComponent(container => new SecretComponent(this.app, container)
+        .setValue(draft.secretId)
+        .onChange(value => { if (value) { draft.secretId = value; save(); } }));
+    new Setting(advanced).setName("File history")
+      .setDesc("Restore an earlier version of one note.")
+      .addButton(button => button.setButtonText("Open").onClick(() => new RestoreModal(this.app, plugin).open()));
+    new Setting(advanced).setName("Local recovery")
+      .setDesc("Copies this device kept before sync replaced or removed a file.")
+      .addButton(button => button.setButtonText("Open").onClick(() => new RecoveryModal(this.app, plugin).open()));
+  }
+  private async describeConfiguration(setting: Setting, generation: number): Promise<void> {
+    const listing = await this.plugin.session?.listConfiguration().catch(() => null);
+    if (generation !== this.generation || listing?.kind !== "configuration") { setting.settingEl.remove(); return; }
+    if (listing.rules === "config/1") {
+      const waiting = listing.deferred.length + listing.guarded.length + listing.unpublished.length;
+      setting.setDesc(waiting ? `${plural(waiting, "change")} to review.` : "Themes, hotkeys and plugins sync too.")
+        .addButton(button => {
+          button.setButtonText("Review").onClick(() => new ConfigurationModal(this.app, this.plugin).open());
+          if (waiting) button.setCta();
+        });
+      return;
+    }
+    setting.setDesc("Only notes and attachments sync. Turn on to include themes, hotkeys and plugins.")
+      .addButton(button => button.setButtonText("Turn on").onClick(async () => {
         button.setDisabled(true);
         try {
           const upgrade = await this.plugin.previewConfigurationUpgrade();
-          new ConfirmModal(this.app, "Include Obsidian configuration?",
-            `${upgrade.note}. Sync will pause while you review enrollment. Your existing notes and recovery copies remain on this device.`,
+          new ConfirmModal(this.app, "Sync Obsidian settings too?",
+            "Sync pauses while you review what would change. Your notes stay as they are.",
             async () => {
               const preview = await upgrade.confirm();
-              if (preview?.kind !== "preview") throw new Error("Open enrollment in settings to continue the configuration review.");
-              new EnrollmentModal(this.app, this.plugin, preview).open();
+              if (preview?.kind !== "preview") throw new Error("Open the settings page to review changes.");
+              new EnrollmentModal(this.app, this.plugin, preview, false, () => this.display()).open();
             }).open();
         } catch (error) { new Notice(failure(error), 12000); }
         finally { button.setDisabled(false); }
       }));
-    el.createEl("p", {
-      text: "Review conflicts, interrupted operations, and files above the size limit in Changes. Original files retained in .git-vault-sync are not deleted automatically; inspect storage in Local recovery.",
-      cls: "git-sync-muted",
-    });
   }
 }
 class ConfigurationModal extends Modal {
@@ -743,43 +824,42 @@ class ConfigurationModal extends Modal {
     const current = () => generation === this.generation && session === this.plugin.session;
     const el = this.contentEl;
     el.empty(); el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Configuration sync" });
-    el.createEl("p", { text: "Review the exact saved versions before sharing or applying them. Applying does not reload Obsidian or restart plugins." });
-    if (!session) { el.createEl("p", { text: "Connect and enroll this vault in settings first." }); return; }
+    this.setTitle("Obsidian settings");
+    if (!session) { el.createEl("p", { text: "Connect to GitHub in GitHub Vault Sync settings first." }); return; }
     try {
       const listing = await session.listConfiguration();
       if (!current()) return;
-      if (listing.kind !== "configuration") throw new Error(`Configuration unavailable: ${listing.kind}`);
+      if (listing.kind !== "configuration") throw new Error(`Settings sync isn't available right now (${listing.kind}).`);
       if (listing.rules !== "config/1") {
-        el.createEl("p", { text: "Configuration sync is off. Enable it through the reviewed enrollment in GitHub Vault Sync settings." }); return;
+        el.createEl("p", { text: "Settings sync is off. Turn it on in GitHub Vault Sync settings." }); return;
       }
       if (listing.guarded.length) {
-        el.createEl("h3", { text: `Applied configuration changed locally · ${listing.guarded.length}` });
-        el.createEl("p", { text: "Obsidian or a plugin saved a different version after you applied an update. These files are held on this device; unrelated notes can still sync. Review the saved version before deciding whether to publish it." });
+        el.createEl("h3", { text: `Changed after an update · ${listing.guarded.length}` });
+        el.createEl("p", { text: "Obsidian or a plugin changed these after you applied an update. They stay on this device until you check them. Notes keep syncing." });
         for (const item of listing.guarded) {
           new Setting(el).setName(item.path)
-            .setDesc(item.unreadable ? "This file cannot be read within the size limit. Its bytes have not been treated as a deletion." : "An applied update was changed locally. Publication is held.")
-            .addButton(button => button.setButtonText("Review saved version").setDisabled(item.unreadable).onClick(async () => {
+            .setDesc(item.unreadable ? "Too large to read. Left as is." : "Changed here after an update. Not uploaded yet.")
+            .addButton(button => button.setButtonText("Review").setDisabled(item.unreadable).onClick(async () => {
               button.setDisabled(true);
               try {
                 const preview = await session.previewGuardedConfigurationPublication(item.path);
                 if (!current()) return;
-                if (preview.kind !== "preview") throw new Error(`Reopen this review: ${preview.kind}`);
+                if (preview.kind !== "preview") throw new Error("This file changed. Close and try again.");
                 const modal = new Modal(this.app);
                 modal.contentEl.addClass("git-sync-panel");
                 modal.contentEl.createEl("h2", { text: preview.path });
                 modal.contentEl.createEl("p", { text: preview.entry === null
-                  ? "This file was deleted locally after a configuration update. Approving publishes that deletion."
-                  : "This is the saved local version that would replace the reviewed configuration on GitHub." });
+                  ? "Deleted here after an update. Approving removes it from GitHub too."
+                  : "This version would replace the one on GitHub." });
                 configurationEntryPreview(modal.contentEl, preview.entry);
                 new Setting(modal.contentEl).addButton(approve => approve
-                  .setButtonText(preview.entry === null ? "Approve this deletion" : "Approve this saved version")
+                  .setButtonText(preview.entry === null ? "Remove from GitHub" : "Upload this version")
                   .setCta().onClick(async () => {
                     approve.setDisabled(true);
                     try {
-                      if (!current()) throw new Error("Configuration changed. Reopen this review.");
+                      if (!current()) throw new Error("Something changed. Close and try again.");
                       const result = await session.consentGuardedConfigurationPublication({ path: preview.path, token: preview.token });
-                      if (result.kind !== "recorded") throw new Error(`File changed; review it again: ${result.kind}`);
+                      if (result.kind !== "recorded") throw new Error("This file changed. Close and try again.");
                       modal.close(); await this.plugin.syncNow(); await this.render();
                     } catch (error) { new Notice(failure(error), 12000); approve.setDisabled(false); }
                   }));
@@ -790,25 +870,25 @@ class ConfigurationModal extends Modal {
         }
       }
       const unpublished = el.createEl("details");
-      unpublished.createEl("summary", { text: `New local configuration files · ${listing.unpublished.length}` });
-      unpublished.createEl("p", { text: "These files remain on this device until you approve their contents. Check for secrets before publishing.", cls: "git-sync-muted" });
+      unpublished.createEl("summary", { text: `New on this device · ${listing.unpublished.length}` });
+      unpublished.createEl("p", { text: "Not uploaded until you approve. Check them for passwords or API keys first.", cls: "git-sync-muted" });
       for (const item of listing.unpublished) {
-        new Setting(unpublished).setName(item.path).addButton(button => button.setButtonText("Preview publication").onClick(async () => {
+        new Setting(unpublished).setName(item.path).addButton(button => button.setButtonText("Review").onClick(async () => {
           button.setDisabled(true);
           try {
             const preview = await session.previewHiddenPublication(item.path);
             if (!current()) return;
-            if (preview.kind !== "preview") throw new Error(`Reopen the preview: ${preview.kind}`);
+            if (preview.kind !== "preview") throw new Error("This file changed. Close and try again.");
             const modal = new Modal(this.app);
             modal.contentEl.addClass("git-sync-panel");
             modal.contentEl.createEl("h2", { text: preview.path });
             configurationEntryPreview(modal.contentEl, preview.entry);
-            new Setting(modal.contentEl).addButton(approve => approve.setButtonText("Allow this version to publish").setCta().onClick(async () => {
+            new Setting(modal.contentEl).addButton(approve => approve.setButtonText("Upload this version").setCta().onClick(async () => {
               approve.setDisabled(true);
               try {
-                if (!current()) throw new Error("Configuration changed. Reopen this review.");
+                if (!current()) throw new Error("Something changed. Close and try again.");
                 const result = await session.consentHiddenPublication({ path: preview.path, token: preview.token });
-                if (result.kind !== "recorded") throw new Error(`File changed; review it again: ${result.kind}`);
+                if (result.kind !== "recorded") throw new Error("This file changed. Close and try again.");
                 modal.close(); await this.plugin.syncNow(); await this.render();
               } catch (error) { new Notice(failure(error), 12000); approve.setDisabled(false); }
             }));
@@ -817,100 +897,167 @@ class ConfigurationModal extends Modal {
           finally { button.setDisabled(false); }
         }));
       }
-      el.createEl("h3", { text: `Incoming updates · ${listing.deferred.length}` });
-      if (!listing.deferred.length) { el.createEl("p", { text: "No configuration updates waiting." }); return; }
+      el.createEl("h3", { text: `From other devices · ${listing.deferred.length}` });
+      if (!listing.deferred.length) { el.createEl("p", { text: "Nothing waiting." }); return; }
       const preview = await session.previewApplyConfiguration();
       if (!current()) return;
-      if (preview.kind !== "preview") throw new Error(`Configuration application unavailable: ${preview.kind}`);
+      if (preview.kind !== "preview") throw new Error(`Can't apply updates right now (${preview.kind}).`);
       for (const item of preview.items) {
         const details = el.createEl("details");
         details.createEl("summary", { text: item.path });
-        details.createEl("h4", { text: "Expected local version" });
+        details.createEl("h4", { text: "On this device" });
         configurationEntryPreview(details, item.expectedEntry);
-        details.createEl("h4", { text: "Incoming committed version" });
+        details.createEl("h4", { text: "Incoming" });
         configurationEntryPreview(details, item.incomingEntry);
         if (item.blockedReason) details.createEl("p", { text: item.blockedReason });
       }
       for (const blocked of preview.blocked) el.createEl("p", { text: `${blocked.path}: ${blocked.reason}` });
-      el.createEl("p", { text: "Finish editing settings and disable affected third-party plugins before applying. Their running code may overwrite files. Restart Obsidian yourself afterward to load the saved configuration." });
-      new Setting(el).addButton(button => button.setButtonText("Apply reviewed updates").setCta().setDisabled(preview.blocked.length > 0).onClick(async () => {
+      el.createEl("p", { text: "Close settings and turn off affected plugins first so they don't overwrite the update. Restart Obsidian afterward." });
+      new Setting(el).addButton(button => button.setButtonText("Apply updates").setCta().setDisabled(preview.blocked.length > 0).onClick(async () => {
         button.setDisabled(true);
         try {
-          if (!current()) throw new Error("Configuration changed. Reopen this review.");
+          if (!current()) throw new Error("Something changed. Close and try again.");
           await this.plugin.assertSingleWriter();
           const result = await session.applyConfiguration({ token: preview.token });
           if (result.kind === "review-needed") {
-            new Notice(`${result.applied.length} updates saved. ${result.changed.length} files changed during application and need review in Changes.`, 15000);
+            new Notice(`${plural(result.applied.length, "update")} applied. ${plural(result.changed.length, "file")} changed meanwhile; check Sync status.`, 15000);
             this.close();
             new ChangesModal(this.app, this.plugin).open();
             return;
           }
-          if (result.kind !== "applied") throw new Error(`Configuration needs another review: ${result.kind}`);
-          new Notice(`${result.paths.length} configuration updates saved. Restart Obsidian to load them.`, 12000);
+          if (result.kind !== "applied") throw new Error("Something changed. Close and try again.");
+          new Notice(`${plural(result.paths.length, "update")} applied. Restart Obsidian to load them.`, 12000);
           await this.render();
         } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
       }));
     } catch (error) { if (current()) el.createEl("p", { text: failure(error) }); }
   }
 }
+const reviewGroups: ReadonlyArray<readonly [EnrollmentPreview["items"][number]["action"], string, string]> = [
+  ["conflict", "Changed in both places", "You'll choose which version to keep."],
+  ["review-local-deletion", "Deleted on this device", "You'll confirm before they're removed from GitHub."],
+  ["review-remote-deletion", "Deleted on GitHub", "You'll confirm before they're removed here."],
+  ["upload", "Only on this device", "Will be added to GitHub."],
+  ["download", "Only on GitHub", "Will be added to this device."],
+  ["update-local", "Newer on GitHub", "Will be updated on this device."],
+  ["unreadable", "Too large to sync", "Left as they are."],
+  ["native-pending", "Interrupted saves", "A copy is kept in local recovery."],
+];
+/** Shows what the first sync would do. Starting is the only step that changes anything. */
 class EnrollmentModal extends Modal {
   constructor(
     app: App,
     private plugin: GitVaultSync,
     private preview: EnrollmentPreview,
+    private keepsGit: boolean,
+    private done?: () => void,
   ) {
     super(app);
   }
   onOpen(): void {
     const el = this.contentEl;
+    const { repository } = this.preview;
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Review this device" });
+    this.setTitle(this.preview.reenrollment ? "Resume syncing" : "Start syncing");
+    el.createEl("p", { text: `${repository.owner}/${repository.name} · ${repository.branch}`, cls: "git-sync-muted" });
     el.createEl("p", {
-      text: `${this.preview.repository.owner}/${this.preview.repository.name} · ${this.preview.repository.branch} · ${this.preview.commit.slice(0, 7)}`,
+      text: this.preview.items.length
+        ? `${plural(this.preview.unchanged, "file")} already match. Files changed in both places, and deletions found now, wait for your choice.`
+        : `Everything already matches GitHub (${plural(this.preview.unchanged, "file")}).`,
     });
-    el.createEl("p", {
-      text: `${this.preview.unchanged} unchanged files; ${this.preview.items.length} differences. Local-only files may be published after enrollment. Conflicting files require a decision.`,
-    });
-    const list = el.createDiv({ cls: "git-sync-list" });
-    for (const item of this.preview.items)
-      list.createEl("p", {
-        text: `${item.action.replaceAll("-", " ")} · ${item.path}`,
-      });
+    if (this.keepsGit)
+      el.createEl("p", { text: "Your notes stay here. Your previous Git setup will be kept locally for switching back. It won't receive new syncs." });
+    for (const [action, name, description] of reviewGroups) {
+      const paths = this.preview.items.filter(item => item.action === action).map(item => item.path);
+      if (!paths.length) continue;
+      const group = el.createEl("details", { cls: "git-sync-group" });
+      const summary = group.createEl("summary");
+      summary.createSpan({ text: `${name} · ${paths.length}` });
+      summary.createSpan({ text: description, cls: "git-sync-muted" });
+      const list = group.createDiv({ cls: "git-sync-list" });
+      for (const path of paths) list.createEl("p", { text: path });
+    }
     new Setting(el)
-      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
-      .addButton((b) =>
-        b
-          .setButtonText("Enroll and sync")
-          .setCta()
-          .onClick(async () => {
-            b.setDisabled(true);
-            try {
-              await this.plugin.assertSingleWriter();
-              const outcome = await this.plugin.session?.enroll({
-                token: this.preview.token,
-              });
-              if (outcome?.kind === "stale") {
-                this.close();
-                new EnrollmentModal(
-                  this.app,
-                  this.plugin,
-                  outcome.preview,
-                ).open();
-                return;
-              }
-              if (outcome?.kind !== "enrolled")
-                throw new Error(
-                  "Enrollment could not complete. Reopen the preview.",
-                );
+      .addButton(b => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton(b => b
+        .setButtonText(this.preview.reenrollment ? "Resume syncing" : "Start syncing")
+        .setCta()
+        .onClick(async () => {
+          b.setDisabled(true);
+          try {
+            const outcome = await this.plugin.startSyncing(this.preview.token);
+            if (outcome?.kind === "stale") {
               this.close();
-              await this.plugin.syncNow();
-              new ChangesModal(this.app, this.plugin).open();
-            } catch (error) {
-              new Notice(failure(error), 12000);
-              b.setDisabled(false);
+              new Notice("Files changed while you were reviewing. Here is the updated list.");
+              new EnrollmentModal(this.app, this.plugin, outcome.preview, this.keepsGit, this.done).open();
+              return;
             }
-          }),
-      );
+            if (outcome?.kind !== "enrolled") throw new Error("Couldn't start syncing. Open the review again.");
+            this.close();
+            this.done?.();
+            await this.plugin.syncNow();
+            const status = await this.plugin.session?.status();
+            if (status?.kind === "enrolled" && (status.conflicts.length || status.blocked.length || status.pause || status.nativeErrors.length))
+              new ChangesModal(this.app, this.plugin).open();
+            else new Notice(`Syncing with ${this.preview.repository.owner}/${this.preview.repository.name}.`);
+          } catch (error) {
+            new Notice(failure(error), 12000);
+            b.setDisabled(false);
+          }
+        }));
+  }
+}
+const conflictLabels: Record<string, string> = {
+  "content": "Edited here and on GitHub",
+  "add-add": "Created here and on GitHub",
+  "local-deleted-remote-edited": "Deleted here, edited on GitHub",
+  "local-edited-remote-deleted": "Edited here, deleted on GitHub",
+  "interrupted-write": "A save was interrupted",
+  "displaced-write": "Changed while sync was writing it",
+  "oversize-write": "Too large to compare automatically",
+};
+class SyncHistoryModal extends Modal {
+  private closed = false;
+  constructor(app: App, private plugin: GitVaultSync) { super(app); }
+  onClose(): void { this.closed = true; }
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    this.setTitle("Sync history");
+    const { owner, repository, branch } = this.plugin.settings;
+    el.createEl("p", { text: `Commits from all your devices · ${owner}/${repository} · ${branch}`, cls: "git-sync-muted" });
+    const list = el.createDiv();
+    list.createEl("p", { text: "Loading…", cls: "git-sync-muted" });
+    new Setting(el).setName("Looking for one note?")
+      .addButton(b => b.setButtonText("File history").onClick(() => { this.close(); new RestoreModal(this.app, this.plugin).open(); }));
+    const load = async (at?: string, page = 1): Promise<void> => {
+      try {
+        const result = await this.plugin.fileHistory({ at, page });
+        if (this.closed) return;
+        if (page === 1) list.empty();
+        for (const version of result.entries) {
+          new Setting(list)
+            .setName(version.message.split("\n")[0] || "Sync")
+            .setDesc(`${new Date(version.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · ${version.author}`)
+            .addExtraButton(b => b.setIcon("external-link").setTooltip("Open on GitHub").onClick(() =>
+              window.open(`https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commit/${version.commit}`)));
+        }
+        if (page === 1 && !result.entries.length) list.createEl("p", { text: "No commits yet." });
+        if (result.nextPage !== null) {
+          const nextPage = result.nextPage;
+          const more = new Setting(list).addButton(b => b.setButtonText("Show older").onClick(async () => {
+            b.setDisabled(true);
+            await load(result.at, nextPage);
+            more.settingEl.remove();
+          }));
+        }
+      } catch (error) {
+        if (this.closed) return;
+        if (page === 1) list.empty();
+        list.createEl("p", { text: failure(error) });
+      }
+    };
+    void load();
   }
 }
 class ChangesModal extends Modal {
@@ -935,7 +1082,7 @@ class ChangesModal extends Modal {
     const el = this.contentEl;
     el.empty();
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Changes" });
+    this.setTitle("Sync status");
     this.summary = el.createEl("p", { text: this.plugin.statusText });
     new Setting(el)
       .addButton((b) =>
@@ -949,20 +1096,15 @@ class ChangesModal extends Modal {
           }),
       )
       .addButton((b) =>
-        b.setButtonText("Refresh").onClick(() => {
-          void this.render();
-        }),
-      )
-      .addButton((b) =>
-        b.setButtonText("Review configuration").onClick(() => {
-          new ConfigurationModal(this.app, this.plugin).open();
+        b.setButtonText("History").onClick(() => {
+          new SyncHistoryModal(this.app, this.plugin).open();
         }),
       );
     try {
       const status = await this.plugin.session?.inspect();
       if (!status || status.kind === "unenrolled") {
         el.createEl("p", {
-          text: "Open GitHub Vault Sync settings to connect and enroll this device.",
+          text: "Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.",
         });
         return;
       }
@@ -971,49 +1113,49 @@ class ChangesModal extends Modal {
         return;
       }
       el.createEl("p", {
-        text: `Last checkpoint ${status.commit.slice(0, 7)} · ${status.repository.owner}/${status.repository.name}`,
+        text: `${status.repository.owner}/${status.repository.name} · last synced commit ${status.commit.slice(0, 7)}`,
         cls: "git-sync-muted",
       });
       if (status.pause) el.createEl("p", { text: status.pause.detail });
       for (const error of status.nativeErrors) {
-        new Setting(el).setName(error.path ?? "Recovery evidence")
+        new Setting(el).setName(error.path ?? "Sync can't continue")
           .setDesc(error.detail);
       }
       for (const file of status.unreadable ?? []) {
         new Setting(el).setName(file.path)
-          .setDesc(`${file.size.toLocaleString()} bytes · exceeds the sync size limit. This file is left untouched; other readable files can sync. Move it outside the vault or reduce its size before retrying.`);
+          .setDesc(`Too large to sync (${file.size.toLocaleString()} bytes). Left as is; other files keep syncing.`);
       }
       if (status.phase === "publication-unknown")
         new Setting(el)
-          .setName("Publication needs review")
-          .setDesc("The candidate is not confirmed in GitHub history. Automatic publication is held to avoid replaying a removed commit. Sync now checks again without republishing.")
-          .addButton(b => b.setButtonText("Review recovery").onClick(async () => {
+          .setName("Last upload wasn't confirmed")
+          .setDesc("Uploads are on hold until this is sorted. Sync now checks GitHub again without re-uploading.")
+          .addButton(b => b.setButtonText("Review").onClick(async () => {
             b.setDisabled(true);
             try {
               const preview = await this.plugin.session?.previewPublicationRecovery();
               if (preview?.kind === "reachable") { await this.plugin.syncNow(); await this.render(); }
               else if (preview?.kind === "preview") new PublicationRecoveryModal(this.app, this.plugin, preview).open();
-              else throw new Error(`Recovery unavailable: ${preview?.kind ?? "not enrolled"}`);
+              else throw new Error(`Can't review this right now (${preview?.kind ?? "not set up"}).`);
             } catch (error) { new Notice(failure(error), 12000); }
             finally { b.setDisabled(false); }
           }));
       for (const conflict of status.conflicts) {
         if (conflict.kind === "collision") {
           el.createEl("p", {
-            text: `Rename these colliding paths before continuing: ${conflict.paths.join(", ")}`,
+            text: `These names differ only by capital letters. Rename one to keep syncing: ${conflict.paths.join(", ")}`,
           });
           continue;
         }
         if (conflict.kind === "bulk-deletion") {
-          new Setting(el).setName(`${conflict.paths.length} files would be deleted`)
-            .setDesc(conflict.direction === "local" ? "Review deletions from this device before publishing." : "Review deletions from GitHub before applying.")
+          new Setting(el).setName(`${conflict.paths.length} files deleted ${conflict.direction === "local" ? "on this device" : "on GitHub"}`)
+            .setDesc(conflict.direction === "local" ? "Confirm before they're removed from GitHub." : "Confirm before they're removed here.")
             .addButton(button => button.setButtonText("Review deletions").onClick(() =>
               new BulkDeletionModal(this.app, this.plugin, conflict, () => { void this.render(); }).open()));
           continue;
         }
         new Setting(el)
           .setName(conflict.path)
-          .setDesc(conflict.kind.replaceAll("-", " "))
+          .setDesc(conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " "))
           .addButton((b) =>
             b.setButtonText("Review").onClick(() =>
               new ConflictModal(this.app, this.plugin, conflict, () => {
@@ -1027,18 +1169,18 @@ class ChangesModal extends Modal {
           .setName(step.path)
           .setDesc(step.reason)
           .addButton((b) =>
-            b.setButtonText("Keep local instead").onClick(() => {
+            b.setButtonText("Keep mine").onClick(() => {
               new ConfirmModal(
                 this.app,
-                "Keep local version?",
-                "Keep this device’s version and propose it for the next GitHub commit. If GitHub deleted this file, keeping it restores it to GitHub. Conflicts may still require review.",
+                "Keep this device's version?",
+                "It will be uploaded on the next sync. If GitHub deleted this file, it comes back.",
                 async () => {
                   const result = await this.plugin.session?.keepLocal({
                     path: step.path,
                   });
                   if (result?.kind !== "recorded")
                     throw new Error(
-                      "The held update changed. Refresh and review again.",
+                      "This file changed. Close and try again.",
                     );
                   await this.plugin.syncNow();
                   await this.render();
@@ -1047,16 +1189,20 @@ class ChangesModal extends Modal {
             }),
           );
       const pending = status.pending ?? [];
-      el.createEl("h3", { text: `Saved local changes (${pending.length})` });
-      const list = el.createDiv({ cls: "git-sync-list" });
-      for (const change of pending)
-        list.createEl("p", { text: `${change.change} · ${change.path}` });
-      if (!pending.length)
-        list.createEl("p", { text: "No saved local changes." });
-      el.createEl("p", {
-        text: "Configuration sync requires separate review for .obsidian settings, plugins, hidden files, and Git metadata. Unsaved editor text is not yet a captured draft.",
-        cls: "git-sync-muted",
-      });
+      el.createEl("h3", { text: pending.length ? `Not synced yet · ${pending.length}` : "Everything on this device is synced." });
+      if (pending.length) {
+        const list = el.createDiv({ cls: "git-sync-list" });
+        for (const change of pending)
+          list.createEl("p", { text: `${change.change} · ${change.path}` });
+      }
+      const configuration = await this.plugin.session?.listConfiguration().catch(() => null);
+      const waiting = configuration?.kind === "configuration" && configuration.rules === "config/1"
+        ? configuration.deferred.length + configuration.guarded.length + configuration.unpublished.length : 0;
+      if (waiting)
+        new Setting(el).setName("Obsidian settings").setDesc(`${plural(waiting, "change")} to review.`)
+          .addButton(b => b.setButtonText("Review").onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
+      new Setting(el).setName("Local recovery").setDesc("Copies this device kept before sync replaced or removed a file.")
+        .addButton(b => b.setButtonText("Open").onClick(() => new RecoveryModal(this.app, this.plugin).open()));
     } catch (error) {
       el.createEl("p", { text: failure(error) });
     }
@@ -1229,9 +1375,9 @@ class PublicationRecoveryModal extends Modal {
   onOpen(): void {
     const el = this.contentEl;
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Review uncertain publication" });
-    el.createEl("p", { text: "Continuing archives the candidate and your current drafts locally, releases the held operation, and pauses for a fresh enrollment review. It does not change GitHub or your notes. Archived drafts can be recovered explicitly afterward." });
-    el.createEl("p", { text: `Candidate ${this.preview.candidate} · current GitHub head ${this.preview.head}`, cls: "git-sync-muted" });
+    this.setTitle("Last upload wasn't confirmed");
+    el.createEl("p", { text: "GitHub never confirmed the last upload, so sync is on hold. Continuing saves copies of both versions on this device, then shows a fresh review before syncing resumes. GitHub and your notes are not changed." });
+    el.createEl("p", { text: `Unconfirmed ${this.preview.candidate.slice(0, 7)} · GitHub now at ${this.preview.head.slice(0, 7)}`, cls: "git-sync-muted" });
     const paths = new Set([...Object.keys(this.preview.candidateFiles), ...Object.keys(this.preview.headFiles), ...Object.keys(this.preview.localFiles)]);
     for (const path of [...paths].sort()) {
       const local = this.preview.localFiles[path] ?? null;
@@ -1240,20 +1386,20 @@ class PublicationRecoveryModal extends Modal {
       if (local?.oid === remote?.oid && remote?.oid === candidate?.oid && local?.mode === remote?.mode && remote?.mode === candidate?.mode) continue;
       const details = el.createEl("details");
       details.createEl("summary", { text: path });
-      for (const [label, value] of [["This device", local], ["Current GitHub", remote], ["Held candidate", candidate]] as const) {
+      for (const [label, value] of [["This device", local], ["GitHub now", remote], ["Unconfirmed upload", candidate]] as const) {
         details.createEl("h3", { text: label });
         details.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
       }
     }
-    new Setting(el).addButton(b => b.setButtonText("Keep held").onClick(() => this.close())).addButton(b => b.setButtonText("Archive and review enrollment").onClick(() => {
-      new ConfirmModal(this.app, "Release this held publication?", "Both the candidate and current drafts will be retained in local recovery. A fresh enrollment preview is required before syncing can resume.", async () => {
+    new Setting(el).addButton(b => b.setButtonText("Not now").onClick(() => this.close())).addButton(b => b.setButtonText("Save copies and review").setCta().onClick(() => {
+      new ConfirmModal(this.app, "Save copies and review?", "Both versions are kept in Local recovery. Sync resumes after you review the changes.", async () => {
         const result = await this.plugin.session?.recoverPublication({ token: this.preview.token });
-        if (result?.kind !== "released") throw new Error("The publication or local files changed. Close this preview and review again.");
-        this.plugin.setStatus("Paused · review enrollment");
+        if (result?.kind !== "released") throw new Error("Something changed. Close this and try again.");
+        this.plugin.setStatus("Paused · review changes in settings");
         this.close();
         const enrollment = await this.plugin.session?.previewEnrollment();
-        if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment).open();
-        else new Notice("Open settings to review enrollment before resuming sync.");
+        if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment, false).open();
+        else new Notice("Open GitHub Vault Sync settings to review changes and resume.");
       }).open();
     }));
   }

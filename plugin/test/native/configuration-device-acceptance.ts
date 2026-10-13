@@ -1,3 +1,4 @@
+import { defaultSettings } from "../../src/settings";
 import { Platform, Plugin, requestUrl } from "obsidian";
 import type GitVaultSync from "../../src/main";
 import { entryFromText } from "../../src/git-sync/codec";
@@ -178,7 +179,7 @@ export default class NativeConfigurationDeviceAcceptance extends Plugin {
         typeof bootstrap.token !== "string" || bootstrap.token.length < 20)
       throw new Error("Loopback bootstrap does not match this run");
     this.app.secretStorage.setSecret(secretId, bootstrap.token);
-    await plugin.saveConfiguration({ format: 2, owner, repository, branch: ACCEPTANCE_BRANCH, secretId,
+    await plugin.saveConfiguration({ ...defaultSettings(), format: 2, owner, repository, branch: ACCEPTANCE_BRANCH, secretId,
       deviceName: `Configuration lab ${ACCEPTANCE_RUN_ID}`, automatic: false, configuration: true });
     const active = this.production();
     if (!active.session) throw new Error("Production session failed to initialize");

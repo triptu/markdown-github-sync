@@ -2,7 +2,7 @@
 
 An Obsidian plugin that syncs notes through ordinary commits in a private GitHub repository. Runs inside Obsidian on desktop and Android, without a companion Git app or a hosted sync server.
 
-**Beta release: 0.3.0-beta.1.** The self-contained GitHub replacement includes automatic sync, conflict review, history restore, and reviewed configuration sync. Desktop and Android content acceptance and Android configuration/restart acceptance passed on the release bundle. See [release notes and exact verification limits](docs/releases/0.3.0-beta.1.md). Keep your original Git-backed vault as the recovery baseline and enroll a fresh plugin-owned vault; the real-vault cutover has not been performed.
+**Beta release: 0.3.0-beta.2.** Simpler setup in your existing vault, customizable dated commit messages, sync history, and a shorter command palette. See [release notes](docs/releases/0.3.0-beta.2.md).
 
 ## How it works
 
@@ -24,13 +24,15 @@ npm run package
 
 Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` into `<test-vault>/.obsidian/plugins/github-vault-sync/`. The archive is `dist/github-vault-sync.zip`. Enable community plugins and **GitHub Vault Sync**.
 
-1. Use a fresh test vault outside another sync service. Keep your original Git checkout as a rollback copy. The plugin refuses a vault containing `.git` or a detected competing sync plugin.
-2. In settings, enter the GitHub owner, repository and existing branch.
-3. Create a fine-grained GitHub token scoped to that repository with Contents read/write and Metadata read. Select it through Obsidian's secret control. The plugin stores a secret identifier in its settings, not the token itself.
-4. Save settings, acknowledge that this plugin owns syncing in this vault, then preview enrollment. Review the proposed actions before confirming.
-5. Open **Changes and status** to inspect pending edits and conflicts. Use **Sync now** or leave automatic sync enabled.
+1. Open your existing vault and turn off the old sync plugin in **Settings → Community plugins**.
+2. In **GitHub Vault Sync**, enter your repository (`owner/name` or its GitHub URL), branch and access token. The token needs Contents read/write and Metadata read for that private repository.
+3. Expand **Commit messages** if you want to change the device name, message or date format. A preview shows the result. The default uses local device time, like `vault backup Mac (3): 14th Oct, 2026 03:40:04`. `{{device}}`, `{{count}}`, `{{date}}` and the old Git plugin's `{{hostname}}` / `{{numFiles}}` aliases work.
+4. Click **Connect**, review the first sync, then **Start syncing**. Existing notes stay in this vault. If it has an ordinary `.git` folder, the plugin keeps that folder under `.git-vault-sync/previous-git/<id>/dot-git`; it no longer runs as a local Git checkout. No force push or Git history rewrite occurs.
+5. Use **Sync now**, **Sync status**, **Sync history** or **File history** from the command palette. Automatic sync runs while Obsidian is open. Sync history shows repository commits through this device's last synced version.
 
-Install and enroll each device separately. Do not copy device journal files or app-local storage between devices. Plugin installation on Android currently requires copying the three build files into the vault's hidden `.obsidian/plugins` folder; ordinary syncing then happens entirely inside Obsidian.
+Install and connect each device separately. Copy only the three plugin files, not device journals or app-local storage. Android installation uses the same `.obsidian/plugins/github-vault-sync` folder. Recovery tools are available in Sync status and Advanced settings.
+
+The saved Git folder is a snapshot from the switch, not a continuously updated backup. To return to terminal Git later, disable this plugin and reconcile that saved checkout with GitHub and your current notes before enabling another sync tool.
 
 ## Conflicts and recovery
 

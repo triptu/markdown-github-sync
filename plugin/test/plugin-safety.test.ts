@@ -1,3 +1,4 @@
+import { defaultSettings } from "../src/settings";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
@@ -69,7 +70,7 @@ class Files implements JournalFiles {
   async list(path: string): ReturnType<JournalFiles["list"]> { return { files: [...this.values.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")), folders: [] }; }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
-const settings = { format: 2 as const, owner: "me", repository: "vault", branch: "main", secretId: "secret", deviceName: "Lab", automatic: false };
+const settings = { ...defaultSettings(), configuration: false, format: 2 as const, owner: "me", repository: "vault", branch: "main", secretId: "secret", deviceName: "Lab", automatic: false };
 function harness() {
   const docs = new Map<string, { file: InstanceType<typeof loaded.TFile>; data: Uint8Array }>();
   const local = new Map<string, unknown>(), files = new Files();
@@ -219,8 +220,8 @@ test("saved drafts are isolated and enrollment identity binds every subsequent s
   const { host, plugin } = await setup(); const draft = { ...plugin.settings }; await plugin.saveConfiguration(draft);
   draft.repository = "different"; draft.secretId = "unsaved";
   assert.equal(plugin.settings.repository, "vault"); assert.equal(plugin.settings.secretId, "secret"); assert.equal(await loaded.options().token(), "token:secret");
-  await assert.rejects(plugin.saveConfiguration(draft), /bound to this vault/);
-  plugin.settings.repository = "different"; await assert.rejects(plugin.saveConfiguration(draft), /bound to this vault/);
+  await assert.rejects(plugin.saveConfiguration(draft), /already syncs with/);
+  plugin.settings.repository = "different"; await assert.rejects(plugin.saveConfiguration(draft), /already syncs with/);
   assert.equal(host.app.savedSettings.repository, "vault");
 });
 
@@ -283,7 +284,7 @@ test("native notifications schedule sync without retiring exact-content decision
 test("an enrolled journal binds configuration even before a replacement is initialized", async () => {
   const { plugin, host } = await setup(); plugin.onunload();
   const next = host.create(true);
-  await assert.rejects(next.saveConfiguration({ ...settings, repository: "different" }), /bound to this vault/);
+  await assert.rejects(next.saveConfiguration({ ...settings, repository: "different" }), /already syncs with/);
   assert.equal(host.app.savedSettings.repository, "vault");
 });
 
@@ -550,7 +551,7 @@ test("a fresh configured vault enrolls directly with hidden local files and comm
   if (listing.kind !== "configuration") throw Error("missing listing");
   assert.equal(listing.rules, "config/1");
   assert.ok(listing.unpublished.some(file => file.path === ".obsidian/app.json"));
-  await assert.rejects(plugin.previewConfigurationUpgrade(), /already enabled/);
+  await assert.rejects(plugin.previewConfigurationUpgrade(), /already on/);
 });
 
 test("startup failure cannot bypass the durable initial scope binding", async () => {
@@ -563,9 +564,55 @@ test("startup failure cannot bypass the durable initial scope binding", async ()
   Reflect.deleteProperty(host.app, "secretStorage");
   const next = host.create(true);
   await assert.rejects(next.initialize(), /secret storage/);
-  await assert.rejects(next.saveConfiguration({ ...settings, configuration: true }), /Initial scope is already bound/);
+  await assert.rejects(next.saveConfiguration({ ...settings, configuration: true }), /Settings sync was already chosen/);
   assert.equal(Boolean(next.settings.configuration), false);
   host.app.secretStorage = secrets;
   await next.initialize();
   assert.equal((await next.session!.previewEnrollment()).kind, "preview");
+});
+
+test("existing Git vault can preview setup without moving anything; stale confirmation cannot archive Git", async () => {
+  const repo = await MemoryRepository.create({ "a.md": await entryFromText("base") }); loaded.useRepository(repo);
+  const host = harness(), plugin = host.create();
+  host.files.folders.add(".git"); host.files.values.set(".git/HEAD", "ref: refs/heads/main\n");
+  await plugin.initialize();
+  const before = [...host.files.writes];
+  assert.equal(await plugin.checkSetup(), true);
+  assert.deepEqual(host.files.writes, before);
+  const result = await plugin.startSyncing("stale-token");
+  assert.equal(result.kind, "stale");
+  assert.equal(await host.files.exists(".git"), true);
+  await assert.rejects(plugin.assertSingleWriter(), /Finish connecting/);
+});
+
+test("setup detects an enabled old sync plugin before archiving Git", async () => {
+  const host = harness(), plugin = host.create();
+  host.files.folders.add(".git");
+  host.files.values.set(".obsidian/community-plugins.json", JSON.stringify(["obsidian-git"]));
+  await assert.rejects(plugin.checkSetup(), /Turn off the other sync plugin/);
+  assert.equal(await host.files.exists(".git"), true);
+  assert.deepEqual(host.files.writes, []);
+});
+
+test("Start syncing adopts an existing vault after review, preserving Git metadata and notes", async () => {
+  const repo = await MemoryRepository.create({ "a.md": await entryFromText("base") }); loaded.useRepository(repo);
+  const host = harness(), plugin = host.create(); host.put("a.md", "base");
+  host.files.folders.add(".git"); host.files.values.set(".git/HEAD", "ref: refs/heads/main\n");
+  const rename = host.app.vault.adapter.rename.bind(host.app.vault.adapter);
+  host.app.vault.adapter.rename = async (from, to) => {
+    if (from !== ".git") return rename(from, to);
+    host.files.folders.delete(from); host.files.folders.add(to);
+    for (const [name, data] of [...host.files.values]) if (name.startsWith(from + "/")) {
+      host.files.values.set(to + name.slice(from.length), data); host.files.values.delete(name);
+    }
+  };
+  await plugin.initialize();
+  const preview = await plugin.session!.previewEnrollment();
+  if (preview.kind !== "preview") throw Error("Expected setup preview");
+  assert.equal((await plugin.startSyncing(preview.token)).kind, "enrolled");
+  assert.equal(await host.files.exists(".git"), false);
+  const kept = [...host.files.values].find(([path]) => path.endsWith("/dot-git/HEAD"));
+  assert.equal(kept?.[1], "ref: refs/heads/main\n");
+  assert.equal(new TextDecoder().decode(host.docs.get("a.md")?.data), "base");
+  await plugin.assertSingleWriter();
 });

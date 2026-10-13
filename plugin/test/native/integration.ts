@@ -1,3 +1,4 @@
+import { defaultSettings } from "../../src/settings";
 import { Plugin, requestUrl, TFile } from "obsidian";
 import type GitVaultSync from "../../src/main";
 export default class NativeIntegration extends Plugin {
@@ -22,7 +23,7 @@ export default class NativeIntegration extends Plugin {
       const candidate:unknown=Reflect.get(plugins,'github-vault-sync');
       if(typeof candidate!=='object'||candidate===null||typeof Reflect.get(candidate,'saveConfiguration')!=='function')throw new Error('Production plugin not enabled');
       const plugin=candidate as GitVaultSync;
-      await plugin.saveConfiguration({format:2,owner:'triptu',repository:'vault-sync-test',branch,secretId:'git-sync-native-lab',deviceName:'Android emulator',automatic:true});
+      await plugin.saveConfiguration({...defaultSettings(),configuration:false,format:2,owner:'triptu',repository:'vault-sync-test',branch,secretId:'git-sync-native-lab',deviceName:'Android emulator',automatic:true});
       if(!plugin.session)throw new Error('Session not initialized');
       const preview=await plugin.session.previewEnrollment();
       check('native enrollment preview',preview.kind==='preview');if(preview.kind!=='preview')return;

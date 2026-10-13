@@ -1,3 +1,4 @@
+import { formatCommitMessage, defaultCommitMessageTemplate, defaultCommitDateFormat } from "../commit-message";
 // SyncSession: the single owner of synchronization state for one vault.
 // Durable transactions run one at a time. Publication follows the
 // per-installation ledger protocol; local mutation is compare-and-swap against
@@ -51,6 +52,7 @@ export interface SessionPorts {
   store: DurableStore;
   /** Shown in commit messages. */
   deviceName?: string;
+  commitMessage?: (count: number, date: Date) => string;
   now?: () => Date;
   /** Backoff between cancelled publication rounds; injectable for tests. */
   delay?: (ms: number) => Promise<void>;
@@ -273,6 +275,7 @@ export class SyncSession {
   readonly #vault: LocalVault;
   readonly #store: DurableStore;
   readonly #deviceName: string;
+  readonly #commitMessage: (count: number, date: Date) => string;
   readonly #now: () => Date;
   readonly #delay: (ms: number) => Promise<void>;
   readonly #random: () => number;
@@ -290,6 +293,9 @@ export class SyncSession {
     this.#vault = ports.vault;
     this.#store = ports.store;
     this.#deviceName = ports.deviceName ?? "Obsidian";
+    this.#commitMessage = ports.commitMessage ?? ((count, date) => formatCommitMessage(
+      defaultCommitMessageTemplate, defaultCommitDateFormat, { device: this.#deviceName, count, date },
+    ));
     this.#now = ports.now ?? (() => new Date());
     this.#delay = ports.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#random = ports.random ?? Math.random;
@@ -2421,7 +2427,7 @@ export class SyncSession {
   }
 
   #message(count: number): string {
-    return `Vault sync from ${this.#deviceName}: ${count} file${count === 1 ? "" : "s"}`;
+    return this.#commitMessage(count, this.#now());
   }
 }
 
