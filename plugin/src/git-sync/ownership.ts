@@ -26,6 +26,18 @@ export function serialize<T>(host: object, key: string, task: () => Promise<T>):
   return result;
 }
 const ownerKey = Symbol.for("github-vault-sync.owner.v1");
+const lifetimeKey = Symbol.for("github-vault-sync.host-lifetime.v1");
+/** Stays with the host App across plugin reloads; never stored in vault files or localStorage. */
+export function hostLifetimeId(host: object): string {
+  let value: unknown = Reflect.get(host, lifetimeKey);
+  if (value === undefined) {
+    value = crypto.randomUUID();
+    Object.defineProperty(host, lifetimeKey, { value });
+  }
+  if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value))
+    throw new Error("Invalid sync host lifetime identity");
+  return value;
+}
 const eventsKey = Symbol.for("github-vault-sync.local-events.v1");
 interface LocalRename { id: number; from: string; to: string }
 interface LocalEvents { observed: number; persisted: number; renames: LocalRename[] }

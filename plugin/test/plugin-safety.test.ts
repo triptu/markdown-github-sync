@@ -20,7 +20,7 @@ const loadBundle = createRequire(import.meta.url);
 async function bundle(name: string) {
   const outfile = join(temporary, name);
   await build({
-    stdin: { contents: `export { default as GitVaultSync } from './src/main'; export { TFile } from 'obsidian'; export { GitObsidianVault } from './src/git-sync/obsidian-vault'; export function useRepository(repo) { globalThis.safetyRepository = repo; } export function options() { return globalThis.safetyOptions; }`, resolveDir: resolve(".") },
+    stdin: { contents: `export { default as GitVaultSync } from './src/main'; export { TFile } from 'obsidian'; export { GitObsidianVault } from './src/git-sync/obsidian-vault'; export { hostLifetimeId } from './src/git-sync/ownership'; export function useRepository(repo) { globalThis.safetyRepository = repo; } export function options() { return globalThis.safetyOptions; }`, resolveDir: resolve(".") },
     bundle: true, platform: "node", format: "cjs", outfile,
     plugins: [{ name: "host-boundaries", setup(build) {
       build.onResolve({ filter: /^obsidian$/ }, () => ({ path: hostModule, external: true }));
@@ -36,6 +36,7 @@ type BundleApi = {
     TFile: new (path: string, stat: { size: number; mtime: number }) => { path: string; stat: { size: number; mtime: number } };
     useRepository(repo: MemoryRepository): void;
     options(): ConstructorParameters<typeof GitHubRepository>[0];
+    hostLifetimeId(host: object): string;
 };
 // Separate plugin bundles share the host's Obsidian classes and App.
 let loaded: BundleApi, reloaded: BundleApi;
@@ -43,6 +44,16 @@ before(async () => {
   await build({ entryPoints: [resolve("test/fixtures/obsidian-plugin.ts")], bundle: true, platform: "node", format: "cjs", outfile: hostModule });
   loaded = await bundle("first.cjs"); reloaded = await bundle("replacement.cjs");
   rmSync(temporary, { recursive: true, force: true });
+});
+test("host lifetime identity survives separate plugin bundles but is never copied as vault state", () => {
+  const host = {};
+  const original = loaded.hostLifetimeId(host);
+  assert.equal(reloaded.hostLifetimeId(host), original);
+  assert.equal(loaded.hostLifetimeId(host), original);
+  assert.notEqual(reloaded.hostLifetimeId({}), original);
+  assert.deepEqual(JSON.parse(JSON.stringify(host)), {});
+  assert.deepEqual(structuredClone(host), {});
+  assert.throws(() => loaded.hostLifetimeId({ [Symbol.for("github-vault-sync.host-lifetime.v1")]: "corrupt" }), /Invalid/);
 });
 class Files implements JournalFiles {
   values = new Map<string, string>(); folders = new Set<string>(); writes: string[] = [];
