@@ -1,7 +1,7 @@
 // Pure three-way reconciliation of one coherent base, the captured local
 // snapshot and one remote commit. No I/O; hashing is the only async work.
 import type { Changes, Entry, Snapshot } from "./contracts";
-import { digestText, entryFromText, entryText, foldPath, sameEntry } from "./codec";
+import { dictionary, digestText, entryFromText, entryText, foldPath, isSyncablePath, sameEntry } from "./codec";
 
 export type ChoiceKind = "mine" | "remote" | "both" | "edit";
 /** A user decision. `edit` carries the exact replacement content. */
@@ -42,6 +42,8 @@ export interface ApplyStep {
   path: string;
   expected: Entry | null;
   next: Entry | null;
+  /** Reviewed mutations retain their original merge base for fresh review after revocation. */
+  consent: { kind: "automatic" } | { kind: "reviewed"; base: Entry | null };
 }
 
 export interface ReconcileInput {
@@ -49,6 +51,8 @@ export interface ReconcileInput {
   local: Snapshot;
   remote: Snapshot;
   decisions: Readonly<Record<string, Choice>>;
+  /** Bind conflict IDs to a particular head and review generation. */
+  reviewScope?: string;
 }
 
 export type Plan =
@@ -80,10 +84,13 @@ export function choicesFor(kind: VersionConflictKind): ChoiceKind[] {
 }
 
 export async function reconcile(input: ReconcileInput): Promise<Plan> {
-  const { base, local, remote, decisions } = input;
+  const base = dictionary(Object.entries(input.base));
+  const local = dictionary(Object.entries(input.local));
+  const remote = dictionary(Object.entries(input.remote));
+  const decisions = dictionary(Object.entries(input.decisions));
   const paths = [...new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)])].sort();
   const occupied = new Set(paths.map(foldPath));
-  const target: Snapshot = {};
+  const target: Snapshot = dictionary();
   const unresolved: Conflict[] = [];
   const resolved: VersionConflict[] = [];
   const merged: string[] = [];
@@ -112,7 +119,7 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
     }
 
     if (kind) {
-      const conflict = await versionConflict({ kind, path, base: b, local: l, remote: r }, occupied);
+      const conflict = await versionConflict({ kind, path, base: b, local: l, remote: r }, occupied, input.reviewScope ?? "");
       const choice = decisions[conflict.id];
       if (!choice || !conflict.choices.includes(choice.kind)) {
         unresolved.push(conflict);
@@ -136,14 +143,22 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   const collisions = await findCollisions(target);
   if (collisions.length > 0) return { kind: "needs-decision", conflicts: collisions, merged };
 
-  const outgoing: Changes = {};
+  const outgoing: Changes = dictionary();
   for (const path of new Set([...Object.keys(remote), ...Object.keys(target)])) {
     if (!sameEntry(remote[path], target[path])) outgoing[path] = target[path] ?? null;
   }
   const incoming: ApplyStep[] = [];
   for (const path of new Set([...Object.keys(local), ...Object.keys(target)])) {
     if (!sameEntry(local[path], target[path])) {
-      incoming.push({ path, expected: local[path] ?? null, next: target[path] ?? null });
+      const conflict = resolved.find((item) => item.path === path || item.sibling === path);
+      incoming.push({
+        path,
+        expected: local[path] ?? null,
+        next: target[path] ?? null,
+        consent: conflict
+          ? { kind: "reviewed", base: conflict.path === path ? conflict.base : null }
+          : { kind: "automatic" },
+      });
     }
   }
   return { kind: "ready", target, outgoing, incoming: orderSteps(incoming), merged, resolved };
@@ -152,13 +167,14 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
 async function versionConflict(
   input: Omit<VersionConflict, "id" | "choices" | "sibling">,
   occupied: ReadonlySet<string>,
+  reviewScope: string,
 ): Promise<VersionConflict> {
   const { kind, path, base, local, remote } = input;
   const version = (entry: Entry | null) => (entry ? `${entry.mode}:${entry.oid}` : "absent");
-  const id = await digestText(JSON.stringify(["conflict/1", kind, path, version(base), version(local), version(remote)]));
+  const id = await digestText(JSON.stringify(["conflict/2", reviewScope, kind, path, version(base), version(local), version(remote)]));
   // "Keep both" is offered only when its sibling name is free on every side.
   const proposed = local && remote ? siblingPath(path, local.oid) : null;
-  const sibling = proposed && !occupied.has(foldPath(proposed)) ? proposed : null;
+  const sibling = proposed && isSyncablePath(proposed) && !occupied.has(foldPath(proposed)) ? proposed : null;
   const choices = CHOICES[kind].filter((choice) => choice !== "both" || sibling !== null);
   return { kind, id, path, base, local, remote, choices, sibling };
 }

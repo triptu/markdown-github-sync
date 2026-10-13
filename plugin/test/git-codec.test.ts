@@ -13,6 +13,9 @@ import {
   isSyncablePath,
   isValidPath,
   sameEntry,
+  sameManifest,
+  toManifest,
+  own,
   verifySnapshot,
 } from "../src/git-sync/codec";
 
@@ -65,4 +68,26 @@ test("snapshot verification rejects tampered bytes and out-of-scope paths", asyn
   await assert.rejects(verifySnapshot({ "a.md": { ...entry, data: encodeBase64(new TextEncoder().encode("fake")) } }, "test"), IntegrityError);
   await assert.rejects(verifySnapshot({ ".obsidian/x.json": entry }, "test"), IntegrityError);
   await assert.rejects(verifySnapshot({ "a.md": { ...entry, mode: "120000" } }, "test"), IntegrityError);
+});
+
+ test("large attachment base64 decoding does not overflow the regex stack", () => {
+  const data = new Uint8Array(4321024);
+  for (let i=0; i<data.length; i++) data[i]=i%251;
+  assert.deepEqual(decodeBase64(encodeBase64(data)), data);
+ });
+
+test("prototype-key files survive verification and manifests; absent access is own-only", async () => {
+  const entry = await entryFromText("saved prototype-key bytes");
+  const source = Object.fromEntries(["__proto__", "constructor", "toString"].map((path) => [path, entry]));
+  const verified = await verifySnapshot(source, "prototype files");
+  const manifest = toManifest(verified);
+  assert.equal(Object.getPrototypeOf(verified), null);
+  assert.equal(Object.getPrototypeOf(manifest), null);
+  assert.deepEqual(Object.keys(verified), Object.keys(source));
+  for (const path of Object.keys(source)) assert.ok(sameEntry(verified[path], manifest[path]));
+  assert.equal(own({}, "constructor"), undefined);
+  assert.equal(own({}, "__proto__"), undefined);
+  assert.ok(!sameManifest(Object.fromEntries([["constructor", entry]]), {}));
+  const inherited = Object.create({ oid: entry.oid, mode: entry.mode, data: entry.data });
+  await assert.rejects(verifySnapshot({ x: inherited }, "inherited entry fields"), IntegrityError);
 });

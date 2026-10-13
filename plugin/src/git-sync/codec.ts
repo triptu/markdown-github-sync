@@ -12,7 +12,17 @@ export class IntegrityError extends Error {
   override name = "IntegrityError";
 }
 
-const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+/** File dictionaries must never consult Object.prototype, including at port boundaries. */
+export function dictionary<T>(entries: Iterable<readonly [string, T]> = []): Record<string, T> {
+  const result: Record<string, T> = Object.create(null);
+  for (const [key, value] of entries) result[key] = value;
+  return result;
+}
+
+export function own<T>(values: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(values, key) ? values[key] : undefined;
+}
+
 const OID = /^[0-9a-f]{40}$/;
 const CHUNK = 0x8000;
 
@@ -26,8 +36,10 @@ export function encodeBase64(bytes: Uint8Array): string {
 
 /** Strict decoding: rejects whitespace, URL-safe alphabets and bad padding. */
 export function decodeBase64(text: string): Uint8Array<ArrayBuffer> {
-  if (!BASE64.test(text)) throw new IntegrityError("Invalid base64 data");
-  const binary = atob(text);
+  if (text.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(text)) throw new IntegrityError("Invalid base64 data");
+  let binary: string;
+  try { binary = atob(text); } catch { throw new IntegrityError("Invalid base64 data"); }
+  if (btoa(binary) !== text) throw new IntegrityError("Noncanonical base64 data");
   const bytes = new Uint8Array(binary.length);
   for (let at = 0; at < binary.length; at++) bytes[at] = binary.charCodeAt(at);
   return bytes;
@@ -113,7 +125,7 @@ export function sameEntry(a: Ref | null | undefined, b: Ref | null | undefined):
 
 export function sameManifest(a: Manifest | Snapshot, b: Manifest | Snapshot): boolean {
   const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((path) => sameEntry(a[path], b[path]));
+  return keys.length === Object.keys(b).length && keys.every((path) => sameEntry(own(a, path), own(b, path)));
 }
 
 export function toRef(entry: Ref): Ref {
@@ -121,16 +133,16 @@ export function toRef(entry: Ref): Ref {
 }
 
 export function toManifest(snapshot: Snapshot | Manifest): Manifest {
-  const manifest: Manifest = {};
+  const manifest: Manifest = dictionary();
   for (const [path, entry] of Object.entries(snapshot)) manifest[path] = toRef(entry);
   return manifest;
 }
 
 export function hasEntryShape(value: unknown): value is Entry {
   if (typeof value !== "object" || value === null) return false;
-  const oid: unknown = Reflect.get(value, "oid");
-  const mode: unknown = Reflect.get(value, "mode");
-  const data: unknown = Reflect.get(value, "data");
+  const oid: unknown = Object.hasOwn(value, "oid") ? Reflect.get(value, "oid") : undefined;
+  const mode: unknown = Object.hasOwn(value, "mode") ? Reflect.get(value, "mode") : undefined;
+  const data: unknown = Object.hasOwn(value, "data") ? Reflect.get(value, "data") : undefined;
   return isOid(oid) && isFileMode(mode) && typeof data === "string";
 }
 
@@ -148,7 +160,7 @@ export async function verifySnapshot(snapshot: unknown, label: string): Promise<
   if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
     throw new IntegrityError(`${label}: snapshot is not an object`);
   }
-  const verified: Snapshot = {};
+  const verified: Snapshot = dictionary();
   for (const [path, entry] of Object.entries(snapshot)) {
     if (!isSyncablePath(path)) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
     verified[path] = await verifyEntry(`${label}: ${path}`, entry);

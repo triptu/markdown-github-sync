@@ -4,18 +4,24 @@
 import type { RepositoryIdentity } from "./contracts";
 import type { ChoiceKind, VersionConflictKind } from "./reconcile";
 import { choicesFor } from "./reconcile";
-import { decodeBase64, hashBlob, isFileMode, isOid, isSyncablePath } from "./codec";
+import { dictionary as safeDictionary, decodeBase64, hashBlob, isFileMode, isOid, isSyncablePath } from "./codec";
 import type { Manifest, Ref } from "./codec";
 
-export const STATE_FORMAT = "github-vault-sync/1";
+export const STATE_FORMAT = "github-vault-sync/2";
 
-export type StepStatus = "pending" | "applied" | "changed" | "blocked" | "kept";
+export type StepStatus = "pending" | "applied" | "changed" | "blocked" | "kept" | "revoked";
+
+export type StepConsent = { kind: "automatic" } | { kind: "reviewed"; base: Ref | null };
+
+/** Revocation is independent of the current review and survives restart. */
+export type OperationApproval = { kind: "valid"; local: Manifest } | { kind: "revoked" };
 
 export interface StoredStep {
   path: string;
   expected: Ref | null;
   next: Ref | null;
   status: StepStatus;
+  consent: StepConsent;
   /** Adapter explanation for `blocked`. */
   reason: string | null;
 }
@@ -40,7 +46,12 @@ export interface CommitRef {
   tree: string;
 }
 
-/** A candidate commit recorded before publication; its outcome is unknown until settled. */
+/** Legacy operations acquire local incoming bytes before application resumes. */
+export type IncomingPreservation =
+  | { kind: "legacy" }
+  | { kind: "captured"; recoveryId: string | null };
+
+/** A candidate recorded before publication; only confirmed reachability settles it. */
 export interface PublishOperation {
   kind: "publish";
   id: string;
@@ -48,7 +59,9 @@ export interface PublishOperation {
   candidate: CommitRef;
   target: Manifest;
   steps: StoredStep[];
+  approval: OperationApproval;
   recoveryId: string | null;
+  incoming: IncomingPreservation;
 }
 
 /** Local application of a commit known to be on the branch. */
@@ -57,7 +70,9 @@ export interface ApplyOperation {
   id: string;
   target: CommitRef & { files: Manifest };
   steps: StoredStep[];
+  approval: OperationApproval;
   recoveryId: string | null;
+  incoming: IncomingPreservation;
 }
 
 export type Operation = PublishOperation | ApplyOperation;
@@ -69,7 +84,7 @@ export interface Pause {
   detail: string;
 }
 
-export type RecoveryReason = "sync" | "enrollment" | "restore";
+export type RecoveryReason = "sync" | "enrollment" | "restore" | "incoming" | "carried" | "publication-recovery" | "conflict-edit" | "migration";
 
 /** Immutable copy of local bytes taken before publication or replacement. */
 export interface RecoveryRecord {
@@ -85,6 +100,8 @@ export interface RecoveryRecord {
 
 export interface StoredState {
   format: typeof STATE_FORMAT;
+  /** An observation attempt has not yet durably recorded its effect on consent. */
+  observation: "settled" | "pending";
   repository: RepositoryIdentity;
   /** The coherent checkpoint: a commit fully applied to this vault. */
   base: CommitRef & { files: Manifest };
@@ -96,10 +113,10 @@ export interface StoredState {
   carry: Record<string, Ref | null>;
   operation: Operation | null;
   pause: Pause | null;
-  review: { head: string; conflicts: StoredConflict[] } | null;
+  review: { head: string; scope: string; local: Manifest; conflicts: StoredConflict[] } | null;
   decisions: Record<string, StoredChoice>;
   recovery: RecoveryRecord[];
-  /** Content-addressed bytes (base64) referenced by carry, decisions, review and recovery. */
+  /** Content-addressed bytes (base64) referenced by carry, decisions, review, step origins and recovery. */
   blobs: Record<string, string>;
   counter: number;
 }
@@ -134,7 +151,7 @@ function array(value: unknown, at: string): unknown[] {
   return value;
 }
 
-const field = (value: object, key: string): unknown => Reflect.get(value, key);
+const field = (value: object, key: string): unknown => Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
 
 function text(value: unknown, at: string): string {
   if (typeof value !== "string" || value.length === 0) fail(at, "expected a non-empty string");
@@ -169,7 +186,7 @@ function ref(value: unknown, at: string): Ref {
 }
 
 function manifest(value: unknown, at: string): Manifest {
-  const result: Manifest = {};
+  const result: Manifest = safeDictionary();
   for (const [key, entry] of dictionary(value, at)) result[path(key, at)] = ref(entry, `${at}[${key}]`);
   return result;
 }
@@ -186,51 +203,90 @@ const VERSION_KINDS: readonly VersionConflictKind[] = [
   "local-deletion",
   "remote-deletion",
 ];
-const STEP_STATUSES: readonly StepStatus[] = ["pending", "applied", "changed", "blocked", "kept"];
+const STEP_STATUSES: readonly StepStatus[] = ["pending", "applied", "changed", "blocked", "kept", "revoked"];
 const PAUSE_REASONS: readonly PauseReason[] = ["repository-changed", "history-rewritten", "base-mismatch"];
-const RECOVERY_REASONS: readonly RecoveryReason[] = ["sync", "enrollment", "restore"];
+const RECOVERY_REASONS: readonly RecoveryReason[] = ["sync", "enrollment", "restore", "incoming", "carried", "publication-recovery", "conflict-edit", "migration"];
 const CHOICE_KINDS: readonly ChoiceKind[] = ["mine", "remote", "both", "edit"];
 
-function step(value: unknown, at: string): StoredStep {
-  const raw = object(value, at, ["path", "expected", "next", "status", "reason"]);
+function step(value: unknown, at: string, oldApproval: boolean): StoredStep {
+  const raw = object(value, at, ["path", "expected", "next", "status", "reason", ...(oldApproval ? [] : ["consent"])]);
   const status = literal(field(raw, "status"), `${at}.status`, STEP_STATUSES);
   const reason = nullable(field(raw, "reason"), `${at}.reason`, text);
   if ((status === "blocked") !== (reason !== null)) fail(at, "blocked steps, and only they, carry a reason");
   const expected = nullable(field(raw, "expected"), `${at}.expected`, ref);
   const next = nullable(field(raw, "next"), `${at}.next`, ref);
   if (!expected && !next) fail(at, "a step must change something");
-  return { path: path(field(raw, "path"), `${at}.path`), expected, next, status, reason };
+  // Old operations cannot prove which steps depended on approval. Treat all
+  // of them as reviewed; use a conservative origin to require a new decision.
+  const consent: StepConsent = oldApproval
+    ? { kind: "reviewed", base: next ? null : expected }
+    : stepConsent(field(raw, "consent"), `${at}.consent`);
+  if (!next && consent.kind !== "reviewed") fail(at, "deletions require reviewed consent");
+  if (status === "revoked" && consent.kind !== "reviewed") fail(at, "only reviewed steps can be revoked");
+  return { path: path(field(raw, "path"), `${at}.path`), expected, next, status, reason, consent };
 }
 
-function steps(value: unknown, at: string): StoredStep[] {
-  const parsed = array(value, at).map((item, index) => step(item, `${at}[${index}]`));
+function steps(value: unknown, at: string, oldApproval: boolean): StoredStep[] {
+  const parsed = array(value, at).map((item, index) => step(item, `${at}[${index}]`, oldApproval));
   if (new Set(parsed.map((item) => item.path)).size !== parsed.length) fail(at, "duplicate step path");
   return parsed;
 }
 
-function operation(value: unknown, at: string): Operation {
+function stepConsent(value: unknown, at: string): StepConsent {
+  if (typeof value !== "object" || value === null) fail(at, "expected step consent");
+  const kind = literal(field(value, "kind"), `${at}.kind`, ["automatic", "reviewed"] as const);
+  const raw = object(value, at, ["kind", ...(kind === "reviewed" ? ["base"] : [])]);
+  return kind === "automatic" ? { kind } : { kind, base: nullable(field(raw, "base"), `${at}.base`, ref) };
+}
+
+function approval(value: unknown, at: string): OperationApproval {
+  if (typeof value !== "object" || value === null) fail(at, "expected operation approval");
+  const kind = literal(field(value, "kind"), `${at}.kind`, ["valid", "revoked"] as const);
+  const raw = object(value, at, ["kind", ...(kind === "valid" ? ["local"] : [])]);
+  return kind === "revoked" ? { kind } : { kind, local: manifest(field(raw, "local"), `${at}.local`) };
+}
+
+function incoming(value: unknown, at: string): IncomingPreservation {
+  if (typeof value !== "object" || value === null) fail(at, "expected incoming preservation");
+  if (field(value, "kind") === "legacy") {
+    object(value, at, ["kind"]);
+    return { kind: "legacy" };
+  }
+  const raw = object(value, at, ["kind", "recoveryId"]);
+  literal(field(raw, "kind"), `${at}.kind`, ["captured"]);
+  return { kind: "captured", recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text) };
+}
+
+function operation(value: unknown, at: string, legacy: boolean): Operation {
   if (typeof value !== "object" || value === null) fail(at, "expected an object");
   const kind = literal(field(value, "kind"), `${at}.kind`, ["publish", "apply"] as const);
+  const oldApproval = !Object.hasOwn(value, "approval");
+  const parsedApproval = oldApproval ? { kind: "revoked" } satisfies OperationApproval : approval(field(value, "approval"), `${at}.approval`);
+  const operationApproval: OperationApproval = legacy ? { kind: "revoked" } : parsedApproval;
   if (kind === "publish") {
-    const raw = object(value, at, ["kind", "id", "parent", "candidate", "target", "steps", "recoveryId"]);
+    const raw = object(value, at, ["kind", "id", "parent", "candidate", "target", "steps", "recoveryId", ...(legacy ? [] : ["incoming"]), ...(oldApproval ? [] : ["approval"])]);
     return {
       kind,
       id: text(field(raw, "id"), `${at}.id`),
       parent: oid(field(raw, "parent"), `${at}.parent`),
       candidate: commitRef(object(field(raw, "candidate"), `${at}.candidate`, ["commit", "tree"]), `${at}.candidate`),
       target: manifest(field(raw, "target"), `${at}.target`),
-      steps: steps(field(raw, "steps"), `${at}.steps`),
+      steps: steps(field(raw, "steps"), `${at}.steps`, oldApproval),
+      approval: operationApproval,
       recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text),
+      incoming: legacy ? { kind: "legacy" } : incoming(field(raw, "incoming"), `${at}.incoming`),
     };
   }
-  const raw = object(value, at, ["kind", "id", "target", "steps", "recoveryId"]);
+  const raw = object(value, at, ["kind", "id", "target", "steps", "recoveryId", ...(legacy ? [] : ["incoming"]), ...(oldApproval ? [] : ["approval"])]);
   const target = object(field(raw, "target"), `${at}.target`, ["commit", "tree", "files"]);
   return {
     kind,
     id: text(field(raw, "id"), `${at}.id`),
     target: { ...commitRef(target, `${at}.target`), files: manifest(field(target, "files"), `${at}.target.files`) },
-    steps: steps(field(raw, "steps"), `${at}.steps`),
+    steps: steps(field(raw, "steps"), `${at}.steps`, oldApproval),
+    approval: operationApproval,
     recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text),
+    incoming: legacy ? { kind: "legacy" } : incoming(field(raw, "incoming"), `${at}.incoming`),
   };
 }
 
@@ -306,6 +362,9 @@ export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> 
     if (item.kind === "collision") continue;
     for (const entry of [item.base, item.local, item.remote]) if (entry) oids.add(entry.oid);
   }
+  for (const step of state.operation?.steps ?? []) {
+    if (step.consent.kind === "reviewed" && step.consent.base) oids.add(step.consent.base.oid);
+  }
   for (const record of state.recovery) for (const entry of Object.values(record.files)) oids.add(entry.oid);
   return oids;
 }
@@ -313,8 +372,10 @@ export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> 
 /** Parses untrusted stored data. `undefined`/`null` mean "never enrolled". */
 export async function parseState(value: unknown): Promise<StoredState> {
   const at = "state";
+  const oldObservation = typeof value === "object" && value !== null && !Object.hasOwn(value, "observation");
   const raw = object(value, at, [
     "format",
+    ...(oldObservation ? [] : ["observation"]),
     "repository",
     "base",
     "carry",
@@ -326,9 +387,11 @@ export async function parseState(value: unknown): Promise<StoredState> {
     "blobs",
     "counter",
   ]);
-  if (field(raw, "format") !== STATE_FORMAT) fail(`${at}.format`, "unsupported state format");
+  const legacy = field(raw, "format") === "github-vault-sync/1";
+  if (!legacy && field(raw, "format") !== STATE_FORMAT) fail(`${at}.format`, "unsupported state format");
+  const observation = oldObservation ? "pending" : literal(field(raw, "observation"), `${at}.observation`, ["settled", "pending"] as const);
   const base = object(field(raw, "base"), `${at}.base`, ["commit", "tree", "files"]);
-  const carry: Record<string, Ref | null> = {};
+  const carry: Record<string, Ref | null> = safeDictionary();
   for (const [key, entry] of dictionary(field(raw, "carry"), `${at}.carry`)) {
     carry[path(key, `${at}.carry`)] = nullable(entry, `${at}.carry[${key}]`, ref);
   }
@@ -348,24 +411,33 @@ export async function parseState(value: unknown): Promise<StoredState> {
     reviewRaw === null
       ? null
       : (() => {
-          const item = object(reviewRaw, `${at}.review`, ["head", "conflicts"]);
+          const item = object(reviewRaw, `${at}.review`, ["head", "conflicts", ...(legacy ? [] : ["scope", "local"])]);
           return {
             head: oid(field(item, "head"), `${at}.review.head`),
+            scope: legacy ? "legacy" : text(field(item, "scope"), `${at}.review.scope`),
+            local: legacy ? safeDictionary<Ref>() : manifest(field(item, "local"), `${at}.review.local`),
             conflicts: array(field(item, "conflicts"), `${at}.review.conflicts`).map((entry, index) =>
               conflict(entry, `${at}.review.conflicts[${index}]`),
             ),
           };
         })();
-  const decisions: Record<string, StoredChoice> = {};
+  const decisions: Record<string, StoredChoice> = safeDictionary();
   for (const [key, entry] of dictionary(field(raw, "decisions"), `${at}.decisions`)) {
     decisions[oid(key, `${at}.decisions`)] = choice(entry, `${at}.decisions[${key}]`);
   }
   const records = array(field(raw, "recovery"), `${at}.recovery`).map((entry, index) => recovery(entry, `${at}.recovery[${index}]`));
   if (new Set(records.map((record) => record.id)).size !== records.length) fail(`${at}.recovery`, "duplicate record id");
-  const counter = field(raw, "counter");
+  let counter = field(raw, "counter");
   if (typeof counter !== "number" || !Number.isSafeInteger(counter) || counter < 0) fail(`${at}.counter`, "expected a counter");
-  const op = nullable(field(raw, "operation"), `${at}.operation`, operation);
+  const op = nullable(field(raw, "operation"), `${at}.operation`, (value, at) => operation(value, at, legacy));
+  const operationRaw = field(raw, "operation");
+  const unscopedOperation = op !== null && typeof operationRaw === "object" &&
+    operationRaw !== null && !Object.hasOwn(operationRaw, "approval");
+  const retireReview = legacy || unscopedOperation || observation === "pending";
   if (op) {
+    if (op.approval.kind === "valid" && op.steps.some((item) => item.status === "revoked")) {
+      fail(`${at}.operation.approval`, "a revoked step cannot retain valid approval");
+    }
     // Every byte an operation may overwrite must be in its recovery record.
     const record = records.find((item) => item.id === op.recoveryId);
     if (op.recoveryId && !record) fail(`${at}.operation.recoveryId`, "missing recovery record");
@@ -375,9 +447,22 @@ export async function parseState(value: unknown): Promise<StoredState> {
         fail(`${at}.operation.steps`, `no preimage recorded for ${item.path}`);
       }
     }
+    if (op.incoming.kind === "captured") {
+      const incomingId = op.incoming.recoveryId;
+      const incomingRecord = records.find((item) => item.id === incomingId);
+      if (op.incoming.recoveryId && !incomingRecord) fail(`${at}.operation.incoming`, "missing incoming recovery record");
+      const target = op.kind === "publish" ? op.target : op.target.files;
+      for (const item of op.steps) {
+        const saved = incomingRecord?.files[item.path];
+        const intended = target[item.path];
+        if (item.next && !(saved && intended && saved.oid === item.next.oid && saved.mode === item.next.mode && intended.oid === saved.oid && intended.mode === saved.mode)) {
+          fail(`${at}.operation.incoming`, `no incoming bytes recorded for ${item.path}`);
+        }
+      }
+    }
   }
 
-  const blobs: Record<string, string> = {};
+  const blobs: Record<string, string> = safeDictionary();
   for (const [key, data] of dictionary(field(raw, "blobs"), `${at}.blobs`)) {
     const id = oid(key, `${at}.blobs`);
     if (typeof data !== "string") fail(`${at}.blobs[${key}]`, "expected base64 data");
@@ -391,19 +476,43 @@ export async function parseState(value: unknown): Promise<StoredState> {
     blobs[id] = data;
   }
 
+  if (retireReview) {
+    if (op) op.approval = { kind: "revoked" };
+    // Invalidating approval must not discard an edited replacement or an older
+    // captured local version that now exists only in the retired review.
+    const localVersions: Manifest = safeDictionary();
+    for (const item of review?.conflicts ?? []) {
+      if (item.kind !== "collision" && item.local) localVersions[item.path] = item.local;
+    }
+    const preserve = (files: Manifest) => {
+      if (Object.keys(files).length === 0) return;
+      if (typeof counter !== "number") fail(`${at}.counter`, "expected a counter");
+      counter += 1;
+      records.push({ id: `migration-${counter}`, createdAt: new Date(0).toISOString(), reason: "migration", commit: oid(field(base, "commit"), `${at}.base.commit`), files, pinned: true });
+    };
+    preserve(localVersions);
+    for (const [id, decision] of Object.entries(decisions)) {
+      if (decision.kind !== "edit") continue;
+      const item = review?.conflicts.find((item) => item.id === id);
+      const path = item && item.kind !== "collision" ? item.path : `Recovered conflict ${id}.md`;
+      preserve(safeDictionary([[path, decision.entry]]));
+    }
+  }
+
   const state: StoredState = {
     format: STATE_FORMAT,
+    observation,
     repository: identity(field(raw, "repository"), `${at}.repository`),
     base: { ...commitRef(base, `${at}.base`), files: manifest(field(base, "files"), `${at}.base.files`) },
     carry,
     operation: op,
     pause,
-    review,
-    decisions,
+    review: retireReview ? null : review,
+    decisions: retireReview ? safeDictionary() : decisions,
     recovery: records,
     blobs,
     counter,
   };
-  for (const id of referencedBlobs(state)) if (!(id in blobs)) fail(`${at}.blobs`, `missing referenced blob ${id}`);
+  for (const id of referencedBlobs(state)) if (!Object.hasOwn(blobs, id)) fail(`${at}.blobs`, `missing referenced blob ${id}`);
   return state;
 }

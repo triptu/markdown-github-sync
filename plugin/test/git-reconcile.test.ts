@@ -1,12 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { entryFromText, entryText } from "../src/git-sync/codec";
+import { entryFromText, entryText, isSyncablePath } from "../src/git-sync/codec";
 import { diff, mergeText, reconcile, siblingPath, splitLines } from "../src/git-sync/reconcile";
 import type { Choice, VersionConflict } from "../src/git-sync/reconcile";
 import { bytes, snapshot } from "./git-fakes";
 
 const lines = (count: number, edit: Record<number, string> = {}) =>
   Array.from({ length: count }, (_, index) => `${edit[index] ?? `line ${index}`}\n`).join("");
+
+test("keep both is offered only when the generated sibling fits the path limit", async () => {
+  const prefix = ("a".repeat(200) + "/").repeat(20);
+  const suffixLength = siblingPath("n.md", "0".repeat(40)).length - "n.md".length;
+  for (const siblingLength of [4096, 4097]) {
+    const path = prefix + "n".repeat(siblingLength - prefix.length - 3 - suffixLength) + ".md";
+    assert.ok(isSyncablePath(path));
+    const base = await snapshot({ [path]: "base" });
+    const local = await snapshot({ [path]: "local" });
+    const remote = await snapshot({ [path]: "remote" });
+    assert.equal(siblingPath(path, local[path]!.oid).length, siblingLength);
+    const plan = await reconcile({ base, local, remote, decisions: {} });
+    assert.ok(plan.kind === "needs-decision");
+    const conflict = plan.conflicts[0]!;
+    assert.ok(conflict.kind !== "collision");
+    assert.equal(conflict.choices.includes("both"), siblingLength === 4096);
+    assert.equal(conflict.sibling !== null, siblingLength === 4096);
+    if (conflict.sibling) {
+      const resolved = await reconcile({ base, local, remote, decisions: { [conflict.id]: { kind: "both" } } });
+      assert.ok(resolved.kind === "ready");
+      assert.ok(Object.keys(resolved.target).every(isSyncablePath));
+      assert.equal(resolved.target[conflict.sibling]?.data, local[path]!.data);
+    }
+  }
+});
 
 async function merge(base: string, local: string, remote: string, path = "n.md") {
   const result = await mergeText({ path, base: await entryFromText(base), local: await entryFromText(local), remote: await entryFromText(remote) });
@@ -143,4 +168,54 @@ test("keep both is withheld when the sibling name is already taken", async () =>
   const conflict = plan.kind === "needs-decision" ? (plan.conflicts[0] as VersionConflict) : null;
   assert.equal(conflict?.sibling, null);
   assert.deepEqual(conflict?.choices, ["mine", "remote", "edit"]);
+});
+
+test("prototype-key additions, updates and deletions use only own file entries", async () => {
+  const entry = await entryFromText("prototype path bytes");
+  for (const path of ["__proto__", "constructor", "toString"]) {
+    const local = Object.fromEntries([[path, entry]]);
+    const plan = await reconcile({ base: {}, local, remote: {}, decisions: {} });
+    assert.equal(plan.kind, "ready", path);
+    if (plan.kind !== "ready") return assert.fail();
+    assert.equal(Object.getPrototypeOf(plan.target), null);
+    assert.equal(Object.getPrototypeOf(plan.outgoing), null);
+    assert.equal(plan.target[path]?.oid, entry.oid);
+    assert.equal(plan.outgoing[path]?.oid, entry.oid);
+    const deletion = await reconcile({ base: local, local: {}, remote: local, decisions: {} });
+    assert.ok(deletion.kind === "needs-decision" && deletion.conflicts[0]?.kind === "local-deletion", path);
+  }
+});
+
+test("a decision is valid only within its head and review generation", async () => {
+  const versions = { base: await snapshot({ "n.md": "base" }), local: {}, remote: await snapshot({ "n.md": "base" }) };
+  const first = await reconcile({ ...versions, decisions: {}, reviewScope: "head1:generation1" });
+  assert.ok(first.kind === "needs-decision");
+  const conflict = first.conflicts[0]!;
+  const decisions: Record<string, Choice> = { [conflict.id]: { kind: "mine" } };
+  assert.equal((await reconcile({ ...versions, decisions, reviewScope: "head1:generation1" })).kind, "ready");
+  for (const reviewScope of ["head2:generation1", "head1:generation2"]) {
+    const next = await reconcile({ ...versions, decisions, reviewScope });
+    assert.ok(next.kind === "needs-decision");
+    assert.notEqual(next.conflicts[0]?.id, conflict.id);
+  }
+});
+
+test("incoming steps distinguish automatic updates from reviewed replacements and retain conflict origins", async () => {
+  const base = await snapshot({ "automatic.md": "old", "conflict.md": "base", "gone.md": "delete me" });
+  const local = await snapshot({ "automatic.md": "old", "conflict.md": "local", "gone.md": "delete me" });
+  const remote = await snapshot({ "automatic.md": "new", "conflict.md": "remote" });
+  const review = await reconcile({ base, local, remote, decisions: {} });
+  assert.ok(review.kind === "needs-decision");
+  const decisions: Record<string, Choice> = {};
+  for (const item of review.conflicts) {
+    assert.ok(item.kind !== "collision");
+    decisions[item.id] = { kind: item.path === "conflict.md" ? "both" : "remote" };
+  }
+  const plan = await reconcile({ base, local, remote, decisions });
+  assert.ok(plan.kind === "ready");
+  assert.deepEqual(plan.incoming.find((step) => step.path === "automatic.md")?.consent, { kind: "automatic" });
+  assert.deepEqual(plan.incoming.find((step) => step.path === "conflict.md")?.consent, { kind: "reviewed", base: base["conflict.md"] });
+  assert.deepEqual(plan.incoming.find((step) => step.path === "gone.md")?.consent, { kind: "reviewed", base: base["gone.md"] });
+  const sibling = siblingPath("conflict.md", local["conflict.md"]!.oid);
+  assert.deepEqual(plan.incoming.find((step) => step.path === sibling)?.consent, { kind: "reviewed", base: null });
 });
