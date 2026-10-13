@@ -48,6 +48,7 @@ const configText = (id: string, revision: number): string =>
   `${JSON.stringify({ acceptanceFixture: id, revision, inert: true })}\n`;
 const noteText = (id: string, side: "remote" | "local"): string =>
   `Native configuration acceptance ${id}: ${side} note.\n`;
+const hidden = (path: string): boolean => path.split("/").some(segment => segment.startsWith("."));
 
 function parseState(value: unknown): State {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid configuration acceptance state");
@@ -101,6 +102,7 @@ export default class NativeConfigurationAcceptance extends Plugin {
       for (const child of listed.folders) await walk(child);
     };
     await walk(".obsidian");
+    if (await files.exists(".gitignore")) found[".gitignore"] = await this.sha256(".gitignore");
     return found;
   }
 
@@ -162,7 +164,7 @@ export default class NativeConfigurationAcceptance extends Plugin {
   private async assertNoOtherHiddenPublished(state: State, remote: GitHubRepository): Promise<void> {
     const head = await remote.head();
     const after = Object.fromEntries(Object.entries(head.files)
-      .filter(([path]) => path.startsWith(".obsidian/") && path !== configurationPath)
+      .filter(([path]) => hidden(path) && path !== configurationPath)
       .map(([path, entry]) => [path, entry.oid]));
     await this.check(state, "no other hidden configuration published", JSON.stringify(Object.entries(after).sort()) ===
       JSON.stringify(Object.entries(state.remoteHiddenBefore).sort()));
@@ -193,10 +195,15 @@ export default class NativeConfigurationAcceptance extends Plugin {
         const head = await remote.head();
         if (await files.exists(configurationPath) || Object.hasOwn(head.files, configurationPath))
           throw new Error("Synthetic configuration path is already occupied");
+        if (await files.exists(".gitignore")) {
+          const localIgnore = await files.readBinary(".gitignore");
+          if (!head.files[".gitignore"] || await hashBlob(new Uint8Array(localIgnore)) !== head.files[".gitignore"].oid)
+            throw new Error("Local root .gitignore differs from GitHub and could publish without hidden consent");
+        }
         const runId = crypto.randomUUID();
         state = { format: 1, productionSha256, runId, fixtureInstallation, stage: "created", originalAutomatic: plugin.settings.automatic,
           hiddenBefore: Object.create(null), remoteHiddenBefore: Object.fromEntries(Object.entries(head.files)
-            .filter(([path]) => path.startsWith(".obsidian/")).map(([path, entry]) => [path, entry.oid])),
+            .filter(([path]) => hidden(path)).map(([path, entry]) => [path, entry.oid])),
           notePath: `Native Configuration Acceptance ${runId}.md`, commits: { initial: head.oid },
           prepared: null, uiHostLifetimeId: null, failure: null, checks: [] };
         await this.save(state);
