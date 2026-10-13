@@ -300,7 +300,9 @@ export default class GitVaultSync extends Plugin {
   fileHistory(input: Parameters<GitHubRepository["history"]>[0]) {
     return this.owner().run(async () => {
       if (!this.repository || !this.session) throw new Error("Connect this vault to GitHub first.");
-      return this.repository.history(input);
+      const status = await this.rawSession?.status();
+      if (status?.kind !== "enrolled") throw new Error("Enroll this device before browsing its history.");
+      return this.repository.history({ ...input, at: input.at ?? status.commit });
     });
   }
   compactRecovery() {
@@ -976,10 +978,10 @@ class RestoreModal extends Modal {
         }));
       } catch (error) { if (current(revision) && selection === this.previewRevision) output.createEl("p", { text: failure(error) }); }
     };
-    const load = async (filePath: string, revision: number, at?: string, page = 1): Promise<void> => {
+    const load = async (filePath: string, revision: number, at?: string, page = 1): Promise<boolean> => {
       try {
         const result = await this.plugin.fileHistory({ path: filePath, at, page });
-        if (!current(revision)) return;
+        if (!current(revision)) return false;
         if (page === 1) history.empty();
         for (const version of result.entries) {
           new Setting(history)
@@ -996,11 +998,12 @@ class RestoreModal extends Modal {
           const nextPage = result.nextPage;
           const more = new Setting(history).addButton(button => button.setButtonText("Older versions").onClick(async () => {
             button.setDisabled(true);
-            await load(filePath, revision, result.at, nextPage);
-            more.settingEl.remove();
+            if (await load(filePath, revision, result.at, nextPage)) more.settingEl.remove();
+            else button.setDisabled(false);
           }));
         }
-      } catch (error) { if (current(revision)) history.createEl("p", { text: failure(error) }); }
+        return true;
+      } catch (error) { if (current(revision)) history.createEl("p", { text: failure(error) }); return false; }
     };
     const controls = new Setting(el).setName("File path").setDesc("You can also enter the path of a deleted note.")
       .addText(text => text.setValue(path).setPlaceholder("Notes/My note.md").onChange(value => {

@@ -367,3 +367,19 @@ test("native same-byte recreate/delete events invalidate an approval already loa
     if (previous) Object.defineProperty(globalThis, "document", previous); else Reflect.deleteProperty(globalThis, "document");
   }
 });
+
+test("history browser starts at this device's restorable checkpoint when GitHub is ahead", async () => {
+  const {repo, plugin} = await setup();
+  const checkpoint = repo.branchHead;
+  await repo.push({"a.md": await entryFromText("new remote version\n")});
+  let requested: Parameters<GitHubRepository["history"]>[0] | undefined;
+  Object.assign(repo, {history: async (input: Parameters<GitHubRepository["history"]>[0]) => {
+    requested = input;
+    return {at: input.at!, entries: [], nextPage: null};
+  }});
+  await plugin.fileHistory({path: "a.md"});
+  assert.equal(requested?.at, checkpoint);
+  assert.notEqual(requested?.at, repo.branchHead);
+  await plugin.fileHistory({path: "a.md", at: checkpoint, page: 2});
+  assert.deepEqual(requested, {path: "a.md", at: checkpoint, page: 2});
+});

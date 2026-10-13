@@ -1,0 +1,35 @@
+{
+  "completed": true,
+  "repo": "your-name/vault-sync-test",
+  "branch": "refs/heads/v2-ledger-proof-fd0b67c4-e221-40af-b485-0efb94ec9c31",
+  "ledger": "refs/vault-sync/devices/proof-fd0b67c4-e221-40af-b485-0efb94ec9c31",
+  "baseline": "9471df028e8fbf9d34c9d5528a66d45211ba5b2f",
+  "finalReceipt": "715379905b16f41f2d8150d2ec23bff752c93574",
+  "checks": [
+    {
+      "name": "custom ledger namespace can be created with absent-ref CAS",
+      "pass": true
+    },
+    {
+      "name": "branch and receipt advance together",
+      "pass": true
+    },
+    {
+      "name": "branch CAS failure leaves ledger unchanged",
+      "pass": true
+    },
+    {
+      "name": "cancellation seal rejects delayed publication without changing branch",
+      "pass": true
+    },
+    {
+      "name": "publication winner prevents late cancellation",
+      "pass": true
+    },
+    {
+      "name": "branch rewind leaves accepted receipt reachable",
+      "pass": true
+    }
+  ],
+  "scope": "Live GitHub API semantics only; synthetic free-plan private repository, existing gh credential. Not engine implementation or fine-grained PAT acceptance."
+}
