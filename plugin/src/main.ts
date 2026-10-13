@@ -475,7 +475,7 @@ function describeOutcome(outcome: SyncOutcome): string {
         ? `Committed · ${outcome.carried.length} newer local edits pending`
         : `Content synced · ${outcome.commit.slice(0, 7)}`;
     case "needs-decision":
-      return `${outcome.conflicts.length} decisions needed`;
+      return `${outcome.conflicts.length} decisions needed${outcome.published ? " · other changes published" : ""}${outcome.carried.length ? ` · ${outcome.carried.length} drafts retained` : ""}`;
     case "blocked":
       return `${outcome.steps.length} file updates held · open Changes`;
     case "publication-unknown":
@@ -484,6 +484,8 @@ function describeOutcome(outcome: SyncOutcome): string {
       return "Waiting for GitHub to confirm the upload; retrying automatically";
     case "contended":
       return "Another device is publishing; retrying shortly";
+    case "native-error":
+      return "Recovery evidence needs attention · open Changes";
   }
 }
 class GitSettings extends PluginSettingTab {
@@ -598,7 +600,7 @@ class GitSettings extends PluginSettingTab {
       }),
     );
     el.createEl("p", {
-      text: "V1 holds existing attachment replacements and deletions when safe atomic application is unavailable. Review them in Changes. Local recovery is retained in .git-vault-sync; keep an independent backup.",
+      text: "Review conflicts, interrupted operations, and files above the size limit in Changes. Original files retained in .git-vault-sync are not deleted automatically; inspect storage in Local recovery.",
       cls: "git-sync-muted",
     });
   }
@@ -720,6 +722,14 @@ class ChangesModal extends Modal {
         cls: "git-sync-muted",
       });
       if (status.pause) el.createEl("p", { text: status.pause.detail });
+      for (const error of status.nativeErrors) {
+        new Setting(el).setName(error.path ?? "Recovery evidence")
+          .setDesc(error.detail);
+      }
+      for (const file of status.unreadable ?? []) {
+        new Setting(el).setName(file.path)
+          .setDesc(`${file.size.toLocaleString()} bytes · exceeds the sync size limit. This file is left untouched; other readable files can sync. Move it outside the vault or reduce its size before retrying.`);
+      }
       if (status.phase === "publication-unknown")
         new Setting(el)
           .setName("Publication needs review")
@@ -849,8 +859,20 @@ class ConflictModal extends Modal {
         cls: "git-sync-preview",
       });
     }
+    if ("oversize" in this.conflict && this.conflict.oversize.length) {
+      el.createEl("h3", { text: "Large recovery files" });
+      el.createEl("p", { text: "These originals remain in local recovery. Inspect or export them before choosing a version below. Confirming a decision does not delete the originals." });
+      for (const source of this.conflict.oversize) {
+        new Setting(el).setName(`${source.size.toLocaleString()} bytes`)
+          .setDesc(source.sourcePath)
+          .addButton(button => button.setButtonText("Inspect and export").onClick(() =>
+            new RecoveryModal(this.app, this.plugin).open()));
+      }
+    }
     if ("expected" in this.conflict) {
-      for (const [label, value] of [["Before the interrupted operation", this.conflict.expected], ["Intended update", this.conflict.next], ["Recovered bytes", this.conflict.found]] as const) {
+      const versions: Array<readonly [string, Entry | null]> = [["Before the interrupted operation", this.conflict.expected], ["Intended update", this.conflict.next]];
+      if (this.conflict.kind !== "oversize-write") versions.push(["Recovered bytes", this.conflict.found]);
+      for (const [label, value] of versions) {
         el.createEl("h3", { text: label });
         el.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
       }

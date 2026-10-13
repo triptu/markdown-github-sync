@@ -92,6 +92,19 @@ function harness() {
     return { ...listing, files: [...listing.files, ...docs.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")) };
   };
   const adapter = Object.assign(files, {
+    stat: async (path: string) => {
+      const value = docs.get(path);
+      if (value) return { type: "file", size: value.data.byteLength, mtime: value.file.stat.mtime, ctime: 1 };
+      const text = files.values.get(path);
+      if (text !== undefined) return { type: "file", size: new TextEncoder().encode(text).byteLength, mtime: 1, ctime: 1 };
+      return files.folders.has(path) ? { type: "folder", size: 0, mtime: 1, ctime: 1 } : null;
+    },
+    copy: async (from: string, to: string) => {
+      if (await files.exists(to)) throw Error("Destination exists");
+      const value = docs.get(from);
+      if (!value) throw Error("Missing binary file");
+      docs.set(to, { file: new loaded.TFile(to, { ...value.file.stat }), data: value.data.slice() });
+    },
     readBinary: async (path: string) => { const value = docs.get(path); if (!value) throw Error("Missing binary file"); return value.data.slice().buffer; },
     writeBinary: async (path: string, data: ArrayBuffer) => { docs.set(path, { file: new loaded.TFile(path, { size: data.byteLength, mtime: 1 }), data: new Uint8Array(data).slice() }); },
     remove: async (path: string) => { docs.delete(path); files.values.delete(path); },
@@ -432,6 +445,25 @@ test("the wired plugin never publishes a torn native note and continues syncing 
   assert.ok(conflict);
   assert.equal((await next.session!.resolve({ conflictId: conflict.id, choice: { kind: "next" } })).kind, "recorded");
   await next.syncOnce();
+  assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), remote);
+  assert.equal(entryText(repo.headFiles()["a.md"]), remote);
+});
+
+test("the first interrupted-write decision applies without a second review", async () => {
+  const base = Array.from({ length: 10 }, (_, index) => `line ${index}\n`).join("");
+  const remote = base.replace("line 1\n", "remote line 1\n");
+  const { repo, host, plugin } = await setup(base);
+  await repo.push({ "a.md": await entryFromText(remote) });
+  host.tearWrite(); await assert.rejects(plugin.syncOnce(), /torn native write/);
+  plugin.onunload(); const next = host.create(true); await next.initialize();
+  const review = await next.session!.sync();
+  assert.equal(review.kind, "needs-decision");
+  if (review.kind !== "needs-decision") throw Error("Missing first decision");
+  const conflict = review.conflicts.find(item => item.kind === "interrupted-write");
+  assert.ok(conflict);
+  assert.equal((await next.session!.resolve({ conflictId: conflict.id, choice: { kind: "next" } })).kind, "recorded");
+  const result = await next.session!.sync();
+  assert.ok(result.kind === "synced" || result.kind === "up-to-date", JSON.stringify(result));
   assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), remote);
   assert.equal(entryText(repo.headFiles()["a.md"]), remote);
 });

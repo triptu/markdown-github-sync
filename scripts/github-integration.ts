@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { GitHubRepository, encodeGitData, gitBlobOid } from "../plugin/src/git-sync/github";
+import { GitHubRepository, GitHubError, encodeGitData, gitBlobOid } from "../plugin/src/git-sync/github";
 import type { GitHubRequest, GitHubResponse, GitHubTransport } from "../plugin/src/git-sync/github";
 import { SyncSession } from "../plugin/src/git-sync/session";
 import { MemoryVault, MemoryStore } from "../plugin/test/git-fakes";
@@ -74,7 +74,7 @@ async function run(): Promise<void> {
     let response: "acknowledged" | "unconfirmed";
     try { response = await client.publish({ parent, candidate: prepared.oid, receipt: prepared.receipt, anchor }); }
     catch (error) {
-      if (!(error instanceof Error) || error.message !== "Synthetic response loss after server completion") throw error;
+      if (!(error instanceof GitHubError) || error.message !== "GitHub transport failed; request outcome may be unknown") throw error;
       response = "unconfirmed";
     }
     const after = await client.readLedger();
