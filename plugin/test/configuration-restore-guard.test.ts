@@ -76,6 +76,62 @@ async function assertStaleFlushHeld(data: Awaited<ReturnType<typeof fixture>>, s
 }
 
 for (const guarded of [true, false]) {
+  test(`${guarded ? "existing" : "new"} guard: a stale flush before direct restore publication stays held`, async () => {
+    const data = await fixture(guarded);
+    const writer = data.session("host-2");
+    assert.equal((await restore(writer, data.historical)).kind, "restored");
+    const installed = (await state(data.store)).configurationGuards[PATH];
+    assert.equal(installed?.hostLifetimeId, "host-2");
+    assert.equal(installed?.applied?.oid, (await entryFromText(OLD)).oid);
+
+    await data.vault.write(PATH, NEW); // Editor flushes its pre-restore in-memory bytes before publication.
+    await writer.sync();
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW);
+    assert.equal(data.vault.text(PATH), NEW);
+    const listing = await writer.listConfiguration();
+    assert.ok(listing.kind === "configuration" && listing.guarded.some((item) => item.path === PATH));
+    assert.equal((await state(data.store)).configurationGuards[PATH]?.applied?.oid, installed.applied?.oid);
+    await writer.sync();
+    const stillHeld = await writer.listConfiguration();
+    assert.ok(stillHeld.kind === "configuration" && stillHeld.guarded.some((item) => item.path === PATH));
+  });
+
+  test(`${guarded ? "existing" : "new"} guard: resumed restore after head moves keeps re-consent through a stale flush`, async () => {
+    const data = await fixture(guarded);
+    failRestoreRecordSave(data.store);
+    await assert.rejects(restore(data.first, data.historical), Crash);
+    data.store.fault = null;
+    await data.repository.push({ "note.md": await entryFromText("remote note") });
+
+    const writer = data.session("host-2");
+    await writer.sync();
+    assert.equal(data.vault.text(PATH), OLD);
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW, "moved head does not authorize publication");
+    assert.equal((await state(data.store)).configurationGuards[PATH]?.hostLifetimeId, "host-2");
+    const listing = await writer.listConfiguration();
+    assert.ok(listing.kind === "configuration" && listing.guarded.some((item) => item.path === PATH));
+    assert.equal((await writer.previewGuardedConfigurationPublication(PATH)).kind, "preview", "the restored bytes can be re-consented");
+
+    await data.vault.write(PATH, NEW);
+    await writer.sync();
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), NEW);
+    const afterFlush = await writer.listConfiguration();
+    assert.ok(afterFlush.kind === "configuration" && afterFlush.guarded.some((item) => item.path === PATH));
+
+    await data.vault.write(PATH, OLD);
+    const preview = await writer.previewGuardedConfigurationPublication(PATH);
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") throw Error("Missing re-consent preview");
+    assert.equal((await writer.consentGuardedConfigurationPublication({ path: PATH, token: preview.token })).kind, "recorded");
+    await writer.sync();
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), OLD, "fresh consent publishes the reviewed restore");
+    await data.vault.write(PATH, NEW);
+    await writer.sync();
+    assert.equal(entryText(data.repository.fullHeadFiles()[PATH]!), OLD);
+    const afterPublication = await writer.listConfiguration();
+    assert.ok(afterPublication.kind === "configuration" && afterPublication.guarded.some((item) => item.path === PATH));
+  });
+
   test(`${guarded ? "existing" : "new"} guard: direct restore before first sync protects the writing host`, async () => {
     const data = await fixture(guarded);
     const second = data.session("host-2");

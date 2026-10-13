@@ -39,6 +39,7 @@ import type {
   RecoveryRecord,
   RestoreOperation,
   ConfigurationOperation,
+  ConfigurationGuard,
   StoredConflict,
   StoredState,
   StoredStep,
@@ -329,7 +330,9 @@ export class SyncSession {
           if (!scope.includes(path)) continue;
           const unreadable = this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path);
           const entry = local[path] ?? null;
-          if (unreadable || !sameEntry(entry, guard.applied)) guarded.push({ path, applied: guard.applied, local: entry && toRef(entry), unreadable });
+          if (unreadable || !sameEntry(entry, guard.applied) || needsConfigurationReconsent(guard, entry, head.oid, scope.digest)) {
+            guarded.push({ path, applied: guard.applied, local: entry && toRef(entry), unreadable });
+          }
         }
       }
       return { kind: "configuration", rules: state.scope.rules,
@@ -411,7 +414,7 @@ export class SyncSession {
     const local = await this.#capture(state, "guarded configuration preview", false, scope);
     if (this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path)) return { kind: "unreadable" };
     const entry = local[path] ?? null;
-    if (sameEntry(entry, guard.applied)) return { kind: "missing" };
+    if (sameEntry(entry, guard.applied) && !needsConfigurationReconsent(guard, entry, head.oid, scope.digest)) return { kind: "missing" };
     const version = entry && toRef(entry);
     const token = await digestText(JSON.stringify(["configuration-publication/1", this.#previewSession, state.base.commit, head.oid, scope.digest, path, guard, version]));
     return { kind: "preview", token, path, head: head.oid, scopeDigest: scope.digest, applied: guard.applied, version, entry };
@@ -798,6 +801,7 @@ export class SyncSession {
         const guard = state.configurationGuards[preview.path];
         if (guard) {
           guard.hostLifetimeId = this.#hostLifetimeId;
+          guard.applied = toRef(preview.historical);
           guard.consent = { version: toRef(preview.historical), head: state.base.commit, scope: state.scope.digest };
         }
         state.operation = null;
@@ -1036,7 +1040,8 @@ export class SyncSession {
         guard.hostLifetimeId = this.#hostLifetimeId;
         guardsChanged = true;
       }
-      if (observed.kind === "unknown" || sameEntry(observed.entry, guard.applied)) continue;
+      if (observed.kind === "unknown" || (sameEntry(observed.entry, guard.applied) &&
+          !needsConfigurationReconsent(guard, observed.entry, head.oid, headScope.digest))) continue;
       if (!authorized) this.#guarded.push(path);
     }
     // A deferred live path and every unconsented hidden addition are held out
@@ -1305,6 +1310,9 @@ export class SyncSession {
     const guard = state.configurationGuards[step.path];
     if (writtenNow && guard) guard.hostLifetimeId = this.#hostLifetimeId;
     if (installed && guard && step.next) {
+      // An already-installed restore observed on a new host retains its old
+      // guard, which the first observation may retire.
+      if (guard.hostLifetimeId === this.#hostLifetimeId) guard.applied = step.next;
       guard.consent = { version: step.next, head: state.base.commit, scope: state.scope.digest };
     }
     state.operation = null;
@@ -2528,6 +2536,13 @@ function base64Length(data: string): number {
 
 function sameRef(a: { oid: string; mode: string } | null | undefined, b: { oid: string; mode: string } | null | undefined): boolean {
   return (a ?? null) === null ? (b ?? null) === null : !!b && a!.oid === b.oid && a!.mode === b.mode;
+}
+
+function needsConfigurationReconsent(guard: ConfigurationGuard, entry: Entry | null, head: string, scope: string): boolean {
+  // A restore may set applied to its own bytes before publication. A moved
+  // head still invalidates that review, even though local equals applied.
+  const consent = guard.consent;
+  return consent !== null && sameRef(consent.version, entry) && (consent.head !== head || consent.scope !== scope);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
