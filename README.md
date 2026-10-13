@@ -1,30 +1,20 @@
-# Cloud Vault Sync
+# GitHub Vault Sync
 
-**Current status: do not use v0.1 on a real vault.** Independent safety review reproduced stale-device overwrites and propagated deletions. The proposed replacement uses GitHub commits as the sole shared authority and needs no Cloudflare service. It is not implemented yet. Read the [GitHub sync proposal](docs/github-sync-proposal.md), explore the [interactive proposal](docs/github-sync-proposal.html), and see the [design review](docs/github-sync-review.md).
+An Obsidian plugin that syncs notes through ordinary commits in a private GitHub repository. Runs inside Obsidian on desktop and Android, without a companion Git app or a hosted sync server.
 
-Open the interactive proposal from this checkout, or run `node scripts/export-proposal.mjs` to create `dist/github-sync-proposal.html`, a portable page with its fonts, styles, and interactions embedded. Its controls simulate sync; they do not access your vault or GitHub.
+**0.2.0-beta.1 — tested on Android emulator; ready for a separate test vault.** The current bundle passed automatic sync across restart, conflict resolution, held binary/deletion checks, and recovery export against a private synthetic GitHub repository. Independent core and native persistence reviews passed within their stated scope. See the [native acceptance record](docs/verification/android-conflict.md). Your existing Git-backed vault should remain the recovery baseline during adoption; this beta does not yet provide automatic application of incoming deletions or existing binary replacements.
 
-The documentation below describes the earlier experimental prototype.
+## How it works
 
-A self-hosted Obsidian community plugin for encrypted note and attachment sync across desktop and mobile, with a Cloudflare Worker, SQLite Durable Object and R2 backend. This is an independent implementation, not a client for Obsidian's paid service. Version 0.1.0 is tested in automated simulations and Cloudflare's local runtime; it has not yet been exercised inside desktop Obsidian or on a physical phone.
+Saved device edits remain local drafts until the plugin publishes a commit to GitHub. Each device downloads only committed versions. Independent file edits reconcile automatically when publications do not race; overlapping edits appear in a conflict inbox. Simultaneous publication can pause for reviewed recovery, as described below. Publishing compares the exact expected branch head so a competing device cannot silently replace another device's update.
 
-[Interactive architecture walkthrough](docs/architecture.html) — download and open in a browser to explore the sync flow, conflicts and project status.
+Sync runs while Obsidian is open: after saved edits, on return to the foreground, and periodically. **Sync now** is also available. Android can suspend Obsidian in the background; leave it open until the status shows content synced before switching devices.
 
-## What works
+The plugin journals recovery data locally before applying changes. Markdown replacement uses Obsidian's atomic text operation. Existing binary replacements and incoming deletions are held because the native API does not expose an atomic compare-and-replace/delete operation. These holds require review; they are not silently applied.
 
-- Initial union of files from each device; edits and attachments up to 8 MiB per file.
-- Offline edits, deletion tombstones and rename reconciliation (upload new path, delete old path).
-- Concurrent edits preserved in separate conflict files. Those copies sync on the next pass.
-- AES-256-GCM encryption of content, paths and file timestamps. A generated random key stays on your devices. HKDF separates encryption and HMAC naming keys; paths become opaque HMAC object IDs.
-- Optimistic revision checks, authenticated downloads, restart reconciliation, and rollback/missing-history checks against each device's saved baseline.
-- Remote revision history with recovery into a separate file, and local recovery copies before replacement or deletion.
-- Sync after local changes, every 30 seconds while open, on app startup and on return to the foreground.
+## Build and install in a test vault
 
-Hidden paths—including `.obsidian`, `.trash`, `.git`, and the local recovery folder—are excluded. Settings/plugins, empty folders, selective sync, automatic text merge, delta compression, background mobile services and collaborative editing are not implemented. Use this on a copied vault first, with Obsidian Sync/iCloud/other sync disabled for that vault. Keep independent backups.
-
-## Build
-
-Use Node 22 LTS or newer, npm and zip:
+Requires Node 22 or newer, npm and zip. Obsidian 1.11.4 or newer is required for SecretStorage.
 
 ```sh
 npm run setup
@@ -32,55 +22,40 @@ npm run check
 npm run package
 ```
 
-The installable files are in `dist/cloud-vault-sync/`; the transfer archive is `dist/cloud-vault-sync.zip`. The plugin bundle uses Obsidian's mobile-compatible APIs and Web Crypto, with no Node runtime imports.
+Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` into `<test-vault>/.obsidian/plugins/github-vault-sync/`. The archive is `dist/github-vault-sync.zip`. Enable community plugins and **GitHub Vault Sync**.
 
-## Host on Cloudflare
+1. Use a fresh test vault outside another sync service. Keep your original Git checkout as a rollback copy. The plugin refuses a vault containing `.git` or a detected competing sync plugin.
+2. In settings, enter the GitHub owner, repository and existing branch.
+3. Create a fine-grained GitHub token scoped to that repository with Contents read/write and Metadata read. Select it through Obsidian's secret control. The plugin stores a secret identifier in its settings, not the token itself.
+4. Save settings, acknowledge that this plugin owns syncing in this vault, then preview enrollment. Review the proposed actions before confirming.
+5. Open **Changes and status** to inspect pending edits and conflicts. Use **Sync now** or leave automatic sync enabled.
 
-See [server/README.md](server/README.md) for the API and operations details. From this repository:
-
-```sh
-cd server
-npx wrangler login
-npx wrangler r2 bucket create cipher-vault-sync
-npx wrangler secret put SYNC_TOKEN
-npm run deploy
-```
-
-Generate a private token with `openssl rand -hex 32` and enter it at the secret prompt. Enable R2 in your Cloudflare account. Copy the deployed HTTPS Worker origin. This uses Wrangler's checked configuration directly; Alchemy is optional and not required. No infrastructure has been deployed by this project build.
-
-## First laptop
-
-1. Close any other sync tool for a copied/test vault.
-2. Copy `dist/cloud-vault-sync/main.js` and `manifest.json` into `<vault>/.obsidian/plugins/cloud-vault-sync/`.
-3. Reload Obsidian, allow community plugins, and enable **Cloud Vault Sync**.
-4. Open its settings. Enter the Worker URL and server access token. Click **Generate** to create the vault ID and encryption key, then **Save**.
-5. Click **Sync now**. Check the status for errors, then enable **Automatic sync**.
-6. Open **Show setup code**. Transfer this code privately to the other devices. It contains both the access token and decryption key.
-
-## Other laptops and phones
-
-Install the same plugin files in the other vault's `.obsidian/plugins/cloud-vault-sync/` directory and enable it. Choose **Import setup code**, paste the first device's code, then **Sync now** and enable automatic sync. Use an empty vault for the simplest first download; existing files are unioned and differing files receive conflict copies.
-
-On Android, a file manager or USB transfer can copy the folder into the local vault. On iOS, transfer the plugin folder into the vault in Obsidian's Files container; a desktop-to-Files transfer can be needed to access the hidden `.obsidian` directory. Community plugin installation on mobile is a manual step for this unpublished plugin. Keep the app open until its sync finishes before switching devices. Mobile OSes suspend Obsidian in the background.
-
-Never generate a fresh encryption key for an existing remote vault. Keep the setup code in a password manager: losing all copies of the key makes remote files unrecoverable. Local plugin `data.json` stores credentials and baseline state in plaintext, protected only by the device's own filesystem security. Transfer the setup code, not `data.json`, to another device.
+Install and enroll each device separately. Do not copy device journal files or app-local storage between devices. Plugin installation on Android currently requires copying the three build files into the vault's hidden `.obsidian/plugins` folder; ordinary syncing then happens entirely inside Obsidian.
 
 ## Conflicts and recovery
 
-A conflicting local edit becomes `Note (conflict <uuid>).md` before the remote revision is applied. Review both files and merge manually. Edit-versus-delete preserves the edited bytes in a conflict file; local deletion versus a newer remote edit restores the remote edit. Missing local files are uploaded as deletions only when the device has previously synchronized them.
+The conflict inbox shows the common version, local draft and GitHub version. Available decisions include retaining either version, keeping both, or editing merged Markdown. Decisions are reviewed before publishing.
 
-Use **Cloud Vault Sync: Browse file history** from the command palette, or **Browse history** in settings. Enter the original vault-relative path (also works for deleted files), load versions and recover one as a new file. Local pre-replacement copies live in `.cloud-vault-sync-recovery/`, outside normal sync; remote deletions also go through Obsidian's local trash. Remove recovery copies manually only after checking your backups.
+An uncertain publication, including some competing-device publication races, pauses sync rather than replaying a possibly accepted commit. The status view offers a reviewed recovery flow that archives the candidate and local draft before fresh enrollment. Sequential independent-file edits converge automatically; simultaneous publishing may require this recovery step.
 
-Obsidian offers atomic processing for text files, but no atomic compare-and-swap for binary replacement or trash. Byte comparisons and backups reduce risk; a simultaneous external attachment write or a write in the small pre-trash window can still race. Avoid editing attachments in another app during sync. Case-only and Unicode-normalization path collisions are rejected, including old tombstones; use names that differ beyond case/normalization. A case-only rename cannot reuse a tombstoned path in this version.
+The recovery view exports captured files into a separate hidden folder. Historical restore accepts a vault-relative path and a full GitHub commit SHA, previews the result, and restores it as a local draft that can then be committed normally.
 
-## Limits and operations
+Local journal records and immutable objects live under `.git-vault-sync/`. They are excluded from sync. Physical journal files currently remain indefinitely, but the browsable recovery index keeps only the latest 20 unpinned records; pinned recovery stays until explicitly discarded. Storage usage grows with edits; there is no garbage collector yet. Preserve that directory when investigating interrupted or corrupt state.
 
-This is a personal server with one bearer token granting access to every vault on that deployment. The server can observe opaque object IDs, revision counts, encrypted sizes, server timestamps and deletion flags. It cannot recover file contents or names from the stored envelopes without your key. A compromised server can omit data or replay old ciphertext to a fresh client; encryption is not a complete malicious-server rollback defense. Devices with an existing baseline reject version regression and missing known objects.
+## Boundaries
 
-Full inventories and full file revisions are used. Changed remote revisions are downloaded twice: an authentication preflight, then a bounded-memory apply pass. There is a 20,000-object limit per vault, including tombstones. Files larger than 8 MiB stop the pass with an error; move them outside the vault to continue. Remote history and idempotency records are retained indefinitely, so storage and request costs grow with use. There is no retention/garbage collection, key rotation wizard, multi-user ACL, rate limiter, or automated disaster recovery. Do not configure R2 expiry rules. The service requires both its Durable Object metadata and R2 data to recover from a server loss.
+- Hidden path components, including `.obsidian`, `.git` and `.trash`, are excluded. The remote copies of excluded paths are preserved.
+- Maximum file size: 8 MiB. Maximum decoded vault snapshot: 128 MiB. Git LFS pointers, symlinks, submodules and unsafe/colliding paths are rejected when in scope.
+- GitHub receives readable file content; this is not end-to-end encrypted sync. Enrollment and sync refuse public or unknown repository visibility. Use a narrowly scoped token; a repository owner can still change visibility outside the plugin.
+- The plugin manages GitHub objects directly; it does not maintain a local `.git` checkout. Terminal Git can continue in your separate original checkout.
+- Unsaved editor buffers, external writers, physical-device failures and hardware power-loss durability are not established by emulator checks.
 
-## Investigation and validation
+## Verification
 
-[research/FINDINGS.md](research/FINDINGS.md) explains the inspected Obsidian 1.14.4 behavior, evidence hashes and source locations, and separates observations from design choices. REA's retained analysis was partial because of memory/time limits; the focused shipped-source inspection supplied the sync findings. Proprietary Obsidian artifacts are excluded from source control and the plugin package.
+[Quint](formal/quint/) provides the readable specification with executed bounded checks and negative controls; its [verification report](docs/verification/quint.md) lists the bounds and coverage gaps. Quint liveness and refinement of the implementation are not proven. The retained [TLA+ baseline](formal/README.md) has executed finite safety and conditional liveness checks, deliberate negative controls, and an [independent audit](formal/REVIEW.md). These checks describe their abstractions and assumptions; they are not a proof of the TypeScript implementation.
 
-Tests cover offline reconciliation, conflicts, authentication/tampering, deletion, in-flight edits, persistence failure, server isolation, idempotent retries, and concurrent revision checks. See [docs/TESTING.md](docs/TESTING.md) for the device acceptance checklist and remaining verification boundaries.
+[GitHub client evidence](docs/github-client.md), [engine API](docs/engine-api.md), and [Android evidence](docs/verification/android-native.md) document separate layers of testing. The final check passed 239 plugin tests, four retained legacy server tests, typechecking and the build. Native acceptance used Obsidian 1.14.4 on Android 15. Physical Android hardware, fine-grained PAT authorization and hardware power-loss durability remain untested.
+
+[Interactive design proposal](docs/github-sync-proposal.html) explains the intended architecture. Run `node scripts/export-proposal.mjs` for a portable standalone copy.
+
+The repository retains the [earlier Cloudflare prototype](docs/legacy-cloudflare-prototype.md) and its server code for historical reference. The GitHub plugin does not use that server. [Reverse-engineering findings](research/FINDINGS.md) describe the original investigation of Obsidian Sync; this plugin is an independent implementation.

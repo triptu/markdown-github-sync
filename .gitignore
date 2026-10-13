@@ -8,3 +8,7 @@ research/artifacts/
 research/evidence-bundle.json
 *.log
 .DS_Store
+
+_apalache-out/
+
+__pycache__/

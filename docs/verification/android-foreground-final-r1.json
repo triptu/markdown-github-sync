@@ -1,0 +1,24 @@
+{
+  "completed": true,
+  "checks": [
+    {
+      "name": "automatic enabled",
+      "pass": true
+    },
+    {
+      "name": "prior journal loads after upgrade",
+      "pass": true
+    },
+    {
+      "name": "automatic independent-file convergence without Sync now",
+      "pass": true
+    }
+  ],
+  "commit": "c29aa916d4176d32d899be74278a4a97e104c0ea",
+  "elapsedMs": 7963,
+  "branch": "native-android-1791894436601",
+  "device": "Android 15 emulator",
+  "obsidian": "1.14.4",
+  "artifactSha256": "4d56fb84be847299e855d08ff40e43ccceb60b94532d9cfdb5715e6706e7d009",
+  "scope": "Combined native ownership/mode fixes and core r4. Core r5 pending; not final release acceptance."
+}

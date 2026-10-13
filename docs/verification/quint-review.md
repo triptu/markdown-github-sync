@@ -1,6 +1,6 @@
 # Independent Quint review — 2026-10-13
 
-The checked finite protocol model is accepted within its stated bounds. One actionable runner bug remains: timeout/error exits can be misclassified as successful negative controls. It did not affect this review's actual checker results, which exited normally. This is not implementation approval, an implementation refinement proof, a filesystem durability proof, or a Quint liveness result.
+The checked finite protocol model is accepted within its stated bounds. The initial review found one runner bug: timeout/error exits could be misclassified as successful negative controls. That bug was fixed and independently rechecked; see the follow-up verdict below. It did not affect this review's actual checker results, which exited normally. This is not implementation approval, an implementation refinement proof, a filesystem durability proof, or a Quint liveness result.
 
 Review was confined to the supplied scratch tree. No agents, commits, core edits, real vaults, or remote repositories were used. The only authored project file is this report; the authorized runner regenerated its evidence. Temporary mutation/reproduction files were kept under `/tmp`. Existing uncommitted engine changes belong to separate work and are not validated by these formal results.
 
