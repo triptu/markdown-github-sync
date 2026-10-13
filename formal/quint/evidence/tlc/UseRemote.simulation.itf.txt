@@ -1,0 +1,29 @@
+Raw trace: UseRemote.simulation.itf.json
+
+State 0: initial; head=0; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 1: save; head=0; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 1, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 2: external; head=1; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 1, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 3: review; head=1; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": false, "live": {"0": 1, "1": 0}, "phase": "resolving", "recovery": [0, 1], "target": 0}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 4: decision; head=1; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "remote", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": false, "live": {"0": 1, "1": 0}, "phase": "resolving", "recovery": [0, 1], "target": 0}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 5: journal-resolved; head=1; failures=[]
+  device 0: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "remote", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 1, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 6: replace; head=1; failures=[]
+  device 0: {"accounted": [0], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "remote", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 3, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 7: replace; head=1; failures=[]
+  device 0: {"accounted": [0, 1], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "remote", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 3, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
+State 8: checkpoint-complete; head=1; failures=[]
+  device 0: {"accounted": [0, 1], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 1, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 3, "1": 0}, "phase": "idle", "recovery": [0, 1], "target": 1}
+  device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}

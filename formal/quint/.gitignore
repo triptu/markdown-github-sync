@@ -4,3 +4,5 @@ _generated/
 _apalache-out/
 
 !evidence/**/*.log
+
+.runner.lock

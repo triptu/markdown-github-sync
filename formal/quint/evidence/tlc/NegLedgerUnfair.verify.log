@@ -1,0 +1,1185 @@
+exit=1
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /private/tmp/vault-sync-quint-v2/formal/quint/_apalache-out/server/2026-10-13T21-15-46_18086875883678591888
+# APALACHE version: 0.62.1 | build: a321771                       I@21:15:46.448
+Starting checker server on port 53218...                          I@21:15:46.450
+The Apalache server is running on port 53218. Press Ctrl-C to stop.
+Oct 13, 2026 9:15:48 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@21:15:48.473
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.13.154548
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 127 and seed 1014149313413310993 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 95647] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/NegLedgerUnfair.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/NegLedgerUnfair.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/Integers.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/Sequences.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/FiniteSets.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/TLC.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/Apalache.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/Variants.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/Naturals.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/tlc-8959318643732999413/TLCExt.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module NegLedgerUnfair
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module NegLedgerUnfair
+Starting... (2026-10-13 21:15:49)
+Implied-temporal checking--satisfiability problem has 1 branches.
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 21:15:49.
+Progress(28) at 2026-10-13 21:15:52: 312,130 states generated, 67,664 distinct states found, 0 states left on queue.
+Checking temporal properties for the complete state space with 67664 total distinct states at (2026-10-13 21:15:52)
+Error: Temporal property q_temporalProps was violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0} @@ 2 :> {0} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0} @@
+        3 :> {0} @@
+        4 :> {0} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 2 ]
+
+State 2: <NegLedgerUnfair_ledger_prepare(1) line 225, col 3 to line 308, col 12 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "prepared",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 2 ]
+
+State 3: <NegLedgerUnfair_ledger_prepare(0) line 225, col 3 to line 308, col 12 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "prepared",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "prepared",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 2 ]
+
+State 4: <NegLedgerUnfair_ledger_markDispatched(0) line 314, col 3 to line 330, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "prepared",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 2 ]
+
+State 5: <NegLedgerUnfair_ledger_outage line 145, col 3 to line 154, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "prepared",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> FALSE,
+  quiet |-> FALSE,
+  budget |-> 1 ]
+
+State 6: <NegLedgerUnfair_ledger_markDispatched(1) line 314, col 3 to line 330, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> FALSE,
+  quiet |-> FALSE,
+  budget |-> 1 ]
+
+State 7: <NegLedgerUnfair_ledger_outage line 145, col 3 to line 154, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 0 ]
+
+State 8: <NegLedgerUnfair_ledger_sendPublish(0) line 336, col 3 to line 360, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> FALSE,
+  budget |-> 0 ]
+
+State 9: <NegLedgerUnfair_ledger_quiesce line 160, col 3 to line 165, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> FALSE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 10: <NegLedgerUnfair_ledger_sendPublish(1) line 336, col 3 to line 360, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1, 2},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 11: <NegLedgerUnfair_ledger_prepareSeal(1) line 366, col 3 to line 423, col 10 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1, 2},
+  sealQueue |-> {},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 12: <NegLedgerUnfair_ledger_sendSeal(1) line 429, col 3 to line 455, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 0,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "dispatched",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1, 2},
+  sealQueue |-> {2},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 13: <NegLedgerUnfair_ledger_prepareSeal(0) line 366, col 3 to line 423, col 10 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 0,
+  ledger |-> (0 :> 0 @@ 1 :> 0),
+  chain |-> (0 :> {0} @@ 1 :> {0}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1, 2},
+  sealQueue |-> {2},
+  accepted |-> {},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 14: <NegLedgerUnfair_ledger_deliverPublish(2) line 638, col 3 to line 719, col 8 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 0 @@ 1 :> 4),
+  chain |-> (0 :> {0} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 0,
+              active |-> 2,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1},
+  sealQueue |-> {2},
+  accepted |-> {2},
+  cancelled |-> {},
+  consumed |-> {},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 15: <NegLedgerUnfair_ledger_settle(1) line 461, col 3 to line 543, col 10 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 0 @@ 1 :> 4),
+  chain |-> (0 :> {0} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "accepted" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> FALSE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 4,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1},
+  sealQueue |-> {2},
+  accepted |-> {2},
+  cancelled |-> {},
+  consumed |-> {1},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 16: <NegLedgerUnfair_ledger_sendSeal(0) line 429, col 3 to line 455, col 7 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 0 @@ 1 :> 4),
+  chain |-> (0 :> {0} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "accepted" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 4,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {1},
+  sealQueue |-> {1, 2},
+  accepted |-> {2},
+  cancelled |-> {},
+  consumed |-> {1},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 17: <NegLedgerUnfair_ledger_deliverPublish(1) line 638, col 3 to line 719, col 8 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 0 @@ 1 :> 4),
+  chain |-> (0 :> {0} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "accepted" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 4,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {1, 2},
+  accepted |-> {2},
+  cancelled |-> {},
+  consumed |-> {1},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 18: <NegLedgerUnfair_ledger_deliverSeal(1) line 725, col 3 to line 776, col 8 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 3 @@ 1 :> 4),
+  chain |-> (0 :> {0, 3} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "accepted" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 4,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {2},
+  accepted |-> {2},
+  cancelled |-> {1},
+  consumed |-> {1},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 19: <NegLedgerUnfair_ledger_deliverSeal(2) line 725, col 3 to line 776, col 8 of module NegLedgerUnfair>
+NegLedgerUnfair_ledger_s = [ head |-> 2,
+  ledger |-> (0 :> 3 @@ 1 :> 4),
+  chain |-> (0 :> {0, 3} @@ 1 :> {0, 4}),
+  ops |->
+      << [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 2,
+           seal |-> 3,
+           verdict |-> "undecided" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 4,
+           seal |-> 5,
+           verdict |-> "accepted" ],
+         [ parent |-> 0,
+           anchor |-> 0,
+           receipt |-> 0,
+           seal |-> 0,
+           verdict |-> "unused" ] >>,
+  recorded |-> {1, 2},
+  sealed |-> {1, 2},
+  dev |->
+      ( 0 :>
+            [ anchor |-> 0,
+              active |-> 1,
+              phase |-> "sealing",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] @@
+        1 :>
+            [ anchor |-> 4,
+              active |-> 0,
+              phase |-> "idle",
+              loaded |-> TRUE,
+              sent |-> TRUE,
+              sealSent |-> TRUE,
+              rounds |-> 0 ] ),
+  publishQueue |-> {},
+  sealQueue |-> {},
+  accepted |-> {2},
+  cancelled |-> {1},
+  consumed |-> {1},
+  ancestry |-> (0 :> {0} @@ 1 :> {0, 1} @@ 2 :> {0, 2} @@ 3 :> {0}),
+  nodeAncestors |->
+      ( 0 :> {0} @@
+        1 :> {0} @@
+        2 :> {0, 2} @@
+        3 :> {0, 3} @@
+        4 :> {0, 4} @@
+        5 :> {0, 5} @@
+        6 :> {0} @@
+        7 :> {0} ),
+  failures |-> {},
+  online |-> TRUE,
+  quiet |-> TRUE,
+  budget |-> 0 ]
+
+State 20: Stuttering
+Warning: The stuttering counterexample above may be caused by the absence of a behavior specification (SPECIFICATION). Only INIT and NEXT have been provided, so TLC permits infinite stuttering. To rule out such counterexamples, use SPECIFICATION Spec, with Spec asserting a suitable fairness constraint (compare Chapter 8, page 87ff of Specifying Systems at https://lamport.azurewebsites.net/tla/book.html).
+Finished checking temporal properties in 00s at 2026-10-13 21:15:52
+312130 states generated, 67664 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 28.
+Finished in 03s at (2026-10-13 21:15:52)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-D917Mg/NegLedgerUnfair_TTrace_1791906348.tla
+
+[violation] Found an issue (3370ms).
+error: found a counterexample

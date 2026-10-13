@@ -1,0 +1,46 @@
+builtin.qnt: sha256 8d1f0925f5276811e4704f0e01ff288aaeea4c9cca99b93059b541df3a445352
+703:   /// `weakFair(a, v)` is true when
+704:   /// `eventually(always(a.mustChange(v).enabled())).implies(always(eventually(a.mustChange(v))))`
+705:   /// is true.
+706:   ///
+707:   /// This is the weak fairness condition.
+708:   ///
+709:   /// The weak fairness condition can be expressed in English as (from Specifying Systems):
+710:   ///
+711:   /// 1. It's always the case that, if A is enabled forever, then an A step eventually occurs.
+712:   /// 1. A is infinitely often disabled, or infinitely many A steps occur.
+713:   /// 1. If A is eventually enabled forever, then infinitely many A steps occur.
+714:   ///
+715:   /// ### Examples
+716:   ///
+717:   /// ```quint
+718:   /// var x: int
+719:   /// action Init = x' = 0
+720:   /// action Next = any {
+721:   ///   x' = x + 1,
+722:   ///   x' = x,
+723:   /// }
+724:   ///
+725:   /// temporal Property = Next.weakFair(Set(x)).implies(eventually(x == 10))
+726:   /// ```
+727:   temporal weakFair(a, b): (bool, a) => bool
+cliCommands.js: sha256 574ff57f2d2c601b778d337fcbb64b74912c89c78738ca9f06060c965d5ad9bf
+495:     // Warn when using temporal properties with Apalache, which has only experimental support
+496:     if (prev.args.temporal && prev.args.backend !== 'tlc') {
+497:         console.warn(chalk_1.default.yellow('\n  WARNING: Apalache has experimental support for temporal properties and might give incorrect results.\n' +
+498:             '  Consider using --backend tlc, which fully supports temporal properties.\n'));
+499:         const confirmed = await askUserYesNo('Do you want to proceed with Apalache anyway? (y/N) ');
+500:         if (!confirmed) {
+501:             return (0, cliReporting_1.cliErr)('Aborted: re-run with --backend tlc for full temporal property support', {
+502:                 ...verifying,
+tlc.js: sha256 30d69d445952c1ff928923155b2caf6a1955243efe21420c467a0fd5bb0179ec
+85: function generateCfg(config) {
+86:     let cfg = `INIT q_init\nNEXT q_step\n`;
+87:     if (config.hasInvariant) {
+88:         cfg += `INVARIANT q_inv\n`;
+89:     }
+90:     if (config.hasTemporal) {
+91:         cfg += `PROPERTY q_temporalProps\n`;
+92:     }
+93:     return cfg;
+94: }

@@ -1,0 +1,272 @@
+exit=1
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /private/tmp/vault-sync-quint-v2/formal/quint/_apalache-out/server/2026-10-13T21-18-56_17560566798625963489
+# APALACHE version: 0.62.1 | build: a321771                       I@21:18:56.188
+Starting checker server on port 53978...                          I@21:18:56.190
+The Apalache server is running on port 53978. Press Ctrl-C to stop.
+Oct 13, 2026 9:18:57 PM com.google.protobuf.GeneratedMessage warnPre22Gencode
+WARNING: Vulnerable protobuf generated type in use: io.grpc.reflection.v1alpha.ServerReflectionRequest
+As of 2022/09/29 (release 21.7) makeExtensionsImmutable should not be called from protobuf gencode. If you are seeing this message, your gencode is vulnerable to a denial of service attack. You should regenerate your code using protobuf 25.6 or later. Use the latest version that meets your needs. However, if you understand the risks and wish to continue with vulnerable gencode, you can set the system property `-Dcom.google.protobuf.use_unsafe_pre22_gencode` on the command line to silence this warning. You also can set `-Dcom.google.protobuf.error_on_unsafe_pre22_gencode` to throw an error instead. See security vulnerability: https://github.com/protocolbuffers/protobuf/security/advisories/GHSA-h4h5-3hr4-j3g2
+PASS #0: SanyParser                                               I@21:18:58.193
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.10.13.154858
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 47 and seed -8206148333128600726 with 2 workers on 14 cores with 2048MB heap and 64MB offheap memory [pid: 658] (Mac OS X 26.6 aarch64, Homebrew 23.0.2 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/NegNativeGuard.tla (file:/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/NegNativeGuard.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/Integers.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Integers.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/Sequences.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/FiniteSets.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/TLC.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/Apalache.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Apalache.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/Variants.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Variants.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/_TLCTrace.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/Naturals.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/tlc-5008804109609024677/TLCExt.tla (jar:file:/private/tmp/vault-sync-quint-v2/formal/quint/.tools/apalache-dist-0.62.1/apalache/lib/apalache.jar!/tla2sany/StandardModules/TLCExt.tla)
+Semantic processing of module Naturals
+Semantic processing of module Integers
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Apalache
+Semantic processing of module Variants
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module NegNativeGuard
+Linting of module Apalache
+Linting of module Variants
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module NegNativeGuard
+Starting... (2026-10-13 21:18:58)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 21:18:58.
+Error: Invariant q_inv is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        operation |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        recovery |-> {},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> FALSE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [ local |-> (0 :> -1 @@ 1 :> -1),
+        remote |-> (0 :> -1 @@ 1 :> -1),
+        head |-> -1 ],
+  staged |->
+      [ local |-> (0 :> -1 @@ 1 :> -1),
+        remote |-> (0 :> -1 @@ 1 :> -1),
+        head |-> -1 ],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 2: <NegNativeGuard_durability_observe line 232, col 3 to line 237, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        operation |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        recovery |-> {},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> FALSE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [ local |-> (0 :> -1 @@ 1 :> -1),
+        remote |-> (0 :> -1 @@ 1 :> -1),
+        head |-> -1 ],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 3: <NegNativeGuard_durability_persistObservation line 243, col 3 to line 263, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        operation |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> FALSE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [ local |-> (0 :> -1 @@ 1 :> -1),
+        remote |-> (0 :> -1 @@ 1 :> -1),
+        head |-> -1 ],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 4: <NegNativeGuard_durability_approve line 269, col 3 to line 281, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        operation |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> FALSE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 5: <NegNativeGuard_durability_persistApproval line 287, col 3 to line 297, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        operation |->
+            [ local |-> (0 :> -1 @@ 1 :> -1),
+              remote |-> (0 :> -1 @@ 1 :> -1),
+              head |-> -1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> FALSE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 6: <NegNativeGuard_durability_prepare line 303, col 3 to line 331, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 1 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        operation |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> TRUE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  lastSave |-> 1,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 7: <NegNativeGuard_durability_save line 170, col 3 to line 178, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 2 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        operation |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> TRUE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  lastSave |-> 2,
+  failures |-> {},
+  hint |-> FALSE ]
+
+State 8: <NegNativeGuard_durability_replace(0) line 68, col 3 to line 103, col 7 of module NegNativeGuard>
+NegNativeGuard_durability_s = [ remote |-> (0 :> 3 @@ 1 :> 3),
+  head |-> 1,
+  live |-> (0 :> 3 @@ 1 :> 1),
+  disk |->
+      [ approval |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        operation |->
+            [ local |-> (0 :> 1 @@ 1 :> 1),
+              remote |-> (0 :> 3 @@ 1 :> 3),
+              head |-> 1 ],
+        recovery |-> {1},
+        done |-> {},
+        checkpoint |-> 0,
+        active |-> TRUE,
+        accounted |-> (0 :> -1 @@ 1 :> -1) ],
+  view |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  staged |->
+      [local |-> (0 :> 1 @@ 1 :> 1), remote |-> (0 :> 3 @@ 1 :> 3), head |-> 1],
+  lastSave |-> 2,
+  failures |-> {"overwrite-newer"},
+  hint |-> FALSE ]
+
+804 states generated, 192 distinct states found, 69 states left on queue.
+The depth of the complete state graph search is 9.
+Finished in 00s at (2026-10-13 21:18:58)
+Trace exploration spec path: /var/folders/ns/ryhzyz1x4l98zk09wyv58_gw0000gn/T/quint-tlc-7p3dDX/NegNativeGuard_TTrace_1791906538.tla
+
+[violation] Found an issue (398ms).
+error: found a counterexample

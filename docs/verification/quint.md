@@ -1,122 +1,125 @@
-# Readable Quint checks for GitHub-authoritative vault sync
+# Quint-only protocol checks
 
-The Quint model checks a synthetic protocol, not the TypeScript implementation or a real vault. It uses two devices, two files, abstract file contents `0..3`, and commit IDs `0..5`. Every run starts with both devices at the initial commit. There are no credentials, vault paths, or GitHub network requests in the model.
+Quint is the sole maintained specification language. Handwritten `VaultSync.tla`, `MCIndependent.tla`, their configurations/evidence, and the `reference-tla` duplicate are retired; Git history at `e780b4c` preserves them. `scripts/check-model.sh` delegates to the Quint runner. Generated TLA is transient compiler output, never a second authored specification.
 
-Read [vaultSync.qnt](../../formal/quint/vaultSync.qnt) for protocol actions and safety properties, and [cases.qnt](../../formal/quint/cases.qnt) for the small adversarial schedules. Per-case modules in `formal/quint/models/` instantiate the same protocol with its safeguards enabled or one deliberate mutation.
+The selected contract is Opus design §§2–6, with the parent's choice to retain one confirmation for genuine branch rewrites. These are **finite synthetic model checks, not a TypeScript refinement proof**. The ledger, content reconciliation, consent persistence, and native transaction models are separate abstractions; their composition has not been proved.
 
-## Reproduce
+## Reproduce and evidence
 
-Prerequisites: Python 3, Node >=18/npm, and a JDK >=21. Quint is pinned to **0.33.0** by the local package and lockfile. Apalache is pinned to **0.62.1**; the runner validates its JAR SHA-256 before executing it. The supported TLC backend is the TLC bundled in that same pinned JAR. The actual Node/Java versions, input hashes, complete commands, exit codes, timings, and results are recorded in `results.json`.
-
-```sh
-# Default: typecheck, 1,000 sampled runs, then finite checking with TLC.
-python3 scripts/check-quint.py
-
-# Actual bounded SMT checks, with both a positive and a broken model.
-python3 scripts/check-quint.py --backend=apalache --only UnknownRewind NegReplay
-
-# Sampled execution only; this does not establish a formal result.
-python3 scripts/check-quint.py --simulate-only
-
-# Any selected case can use the Apalache backend; the timeout is a failure,
-# never interpreted as a successful verification.
-python3 scripts/check-quint.py --backend=apalache --only Independent --timeout=180
-```
-
-On first use the runner installs the locked npm dependencies and downloads the pinned Apalache distribution into `formal/quint/.tools/`. It selects an installed compatible JDK on macOS, or honors a compatible `JAVA_HOME`. It uses an unused loopback port instead of connecting to another thread's checker. Downloads, checker scratch files, and npm dependencies are ignored. Reviewable evidence is saved under `formal/quint/evidence/{tlc,apalache,simulation}/`.
-
-The official [Quint repository](https://github.com/quint-co/quint), [getting-started guide](https://quint.sh/docs/getting-started), and [model-checker guide](https://quint.sh/docs/model-checkers) distinguish simulation from model checking. The installed CLI's `verify --help` documents both supported backends. **TLC does not honor `--max-steps` as a depth bound**: our harness bounds its own turn counter and stutters at the final turn. TLC then enumerates the entire finite harness. Apalache checks only executions up to the explicit `--max-steps` bound. Neither result is a proof for arbitrary devices, files, event schedules, or histories.
-
-## Recorded results
-
-The final default run typechecked all 14 selected modules, sampled 1,000 runs for each positive case, and obtained the expected result for every TLC check: seven positive passes and seven invariant violations from deliberate broken variants. Its unrestricted four-transition `Core` harness reached 26,649 distinct states. The focused positive schedules reached their declared completion witness in every sampled run. See [TLC summary](../../formal/quint/evidence/tlc/summary.md) and its raw logs for the actual finite checks.
-
-The selected [Apalache evidence](../../formal/quint/evidence/apalache/summary.md) additionally checks accepted-publication/response-loss/revert and unknown/force-rewind cases, with replay and uncaptured-newer-draft negative controls. Each result has an explicit transition bound. The runner uses symbolic bounded checking with `random-transitions` disabled.
-
-An earlier unrestricted six-transition TLC run timed out after 180 seconds. Its partial search is **not a pass**. The exploratory log, original model/harness/runner snapshots, and recorded hashes are retained in `formal/quint/evidence/exploratory/`. The final suite uses the smaller four-transition core bound; the longer focused schedules remain checked separately.
-
-## Cases and controls
-
-The case schedule is part of the specification being checked. `Core` permits arbitrary modeled actions up to its short harness bound; the other cases explore only their listed schedule, including nondeterministic choices where indicated. Every intermediate state is checked. Positive scheduled runs also check `completed`, a state assertion at the final turn. The simulator reports `witness` in all 1,000 positive scheduled traces; this prevents an incomplete or disabled schedule from looking like a useful successful simulation.
-
-| case | transitions | behavior checked |
-|---|---:|---|
-| Core | 4 | Arbitrary interleavings of modeled saves, publications, external edits, rewinds, lost responses, application, decisions, and crashes within the short bound. |
-| Independent | 21 | Both devices edit different files and prepare at the same head; either request can win. The loser rereads and publishes the merged tree, and both clients reach that head without conflict. |
-| ResponseLoss | 13 | A publication is accepted, its response disappears, and an ordinary later commit reverts its content. Ancestry confirms the publication; apply it once, then follow the revert. No new candidate is created. |
-| UnknownRewind | 6 | An accepted request loses its response, then the owner rewinds to its parent. Reconciliation retains the candidate and draft in `held`; the unchanged parent does not authorize replay. |
-| ExactPublish | 5 | A candidate's parent is removed by a rewind before processing. Generic fast-forward would resurrect history; exact-parent comparison rejects the delayed request. |
-| Application | 8 | Journal, replace one file, crash, save a newer draft on the remaining file, carry and capture it, then advance the whole checkpoint. |
-| StaleDecision | 7 | After a conflict decision, either the local draft or remote content changes. Refresh the review and require a fresh decision. |
-
-| broken module | mutation | property that must fail |
-|---|---|---|
-| NegReplay | Replay a candidate whose success is unknown and absent from current ancestry. | `unknownHeld` |
-| NegFastForward | Accept any ancestor of the candidate as the old head. | `exactHead` |
-| NegJournal | Start replacement without a durable apply journal. | `journalFirst` |
-| NegGuard | Replace despite a newer editor save. | `newerPreserved` |
-| NegCapture | Carry a newer draft without capturing its bytes. | `carriedCaptured` |
-| NegCheckpoint | Advance the checkpoint after just one file. | `wholeCheckpoint` |
-| NegStaleDecision | Apply an old decision against changed local or remote versions. | `scopedDecisions` |
-
-The runner succeeds only when each positive model passes and each broken model produces its expected invariant violation. Parse failures, backend errors, and timeouts are failures of the check, not successful negative controls. For example:
+Requires a POSIX host, Python 3, Node/npm, and Java 21+. Quint **0.33.0** is lockfile-pinned. Apalache **0.62.1** is checksum-pinned before execution; its JAR supplies TLC.
 
 ```sh
-python3 scripts/check-quint.py --only NegGuard NegCapture NegCheckpoint
-python3 scripts/check-quint.py --backend=apalache --only NegReplay
+python3 scripts/test-check-quint.py
+python3 scripts/check-quint.py --timeout 240
+# Equivalent compatibility entry point:
+scripts/check-model.sh --timeout 240
+# Genuine temporal checks (TLC only):
+python3 scripts/check-quint.py --only Ledger LedgerDiverged NegLedgerUnfair NativeReplace NativeDelete NativeCreate NativeText NativeHandoff LiveIndependent LiveConflict NegUnfair
+# Bounded SMT checks, not temporal verification:
+python3 scripts/check-quint.py --backend apalache --only UnknownRewind NegReplay
+# Sampling is not model checking:
+python3 scripts/check-quint.py --simulate-only --only Core Application
 ```
 
-Raw verification logs are authoritative. Simulation ITF files and their compact `.txt` renderings are review aids; they are explicitly labeled simulation. Apalache also prints its concrete counterexample in its verification log. TLC emits a concrete invariant counterexample in its verification log.
+The default run typechecks each model, samples up to 10,000 executions of safety cases with seed `0x123456`, and invokes TLC. Temporal cases go directly to TLC. Every negative must violate its specified property; a parse error, timeout, signal, wrong violation class, missing temporal-check evidence, or unexpected exit fails. Apalache/simulation temporal requests are rejected before execution. A sampling miss is not relabeled as a detected bug.
 
-## Properties and assumptions
+The runner locks each evidence directory, clears selected stale artifacts, marks the invocation incomplete before checking, hashes inputs before execution, and rejects changed inputs. `results.json` records selected cases, full-suite status, properties, bounds, commands, versions, source hashes, timings, exits, and verdicts. Unselected leftover logs are not results of the current invocation. Raw logs are authoritative; simulation ITF traces are labeled separately. See the [TLC summary](../../formal/quint/evidence/tlc/summary.md), [TLC manifest](../../formal/quint/evidence/tlc/results.json), and [Apalache summary](../../formal/quint/evidence/apalache/summary.md).
 
-`safe` combines exact expected-head comparison, holding unresolved publication outcomes, journaling before replacement, preserving a mismatched newer draft, durable capture of carried drafts, whole-batch checkpoint advancement, decision freshness, checkpoints referencing accepted commits, no resurrection of removed commits, and preservation of the latest editor save.
+The committed final TLC run completed with 55/55 expected results: 24 positive passes and 31 negative controls, including nine conditional temporal passes and two temporal counterexamples. Six runner regressions and the two selected bounded Apalache checks passed. Exact state counts and interpretation are in the [execution record](quint-review.md#executed-final-results).
 
-Some obligations are transition properties: immutable ghost failure flags record when processing accepted a nonmatching head, replacement lacked a journal or guard, an incomplete batch changed its checkpoint, or a stale decision was used. These flags are specification instrumentation, not proposed implementation fields. Structural properties additionally check the actual checkpoint commit status, removed ancestry, saved values, and captured draft membership in recovery. `independentNoConflict` applies only to the restricted independent-edit case; external same-file edits can legitimately cause conflicts elsewhere.
+## Temporal support investigated and exercised
 
-Assumptions and exclusions:
+The [pinned builtin documentation](https://github.com/quint-co/quint/blob/v0.33.0/docs/content/docs/builtin.md) defines `always`, `eventually`, and `weakFair(action, variables)`. The [pinned CLI](https://github.com/quint-co/quint/blob/v0.33.0/quint/src/cliCommands.ts) recommends TLC and warns that Apalache temporal support is experimental. Installed `verify --help` exposes `--temporal`; the TLC backend emits `PROPERTY q_temporalProps`. Installed-source excerpts and SHA-256 are in [toolchain evidence](../../formal/quint/evidence/toolchain/temporal-support.txt).
 
-- One already-enrolled repository and branch; repository identity, path identities, and file existence are fixed. No enrollment, rename, delete, path collision, excluded-file behavior, binary writes, symlinks, credentials, rate limits, or permission changes are checked.
-- Immutable Git objects and ancestry sets are correct. Publication is an atomic exact-head compare-and-swap; GitHub API behavior is an implementation/testing obligation. External commits can edit or revert abstract bytes; owner rewinds are separate actions.
-- A compare-and-replace and its modeled capture/carry bookkeeping are grouped into one action. The journal is durable before that action. `crash` preserves the journal and its accounted paths. This does not cover every crash point between adapter disk writes and journal writes; idempotent recovery and fault-injection tests remain necessary.
-- A save is a persisted editor save. Unsaved buffers and writers bypassing the assumed atomic adapter primitive are outside the model.
-- All modeled unknown outcomes without confirmation in ancestry are held. There is no automatic exit from held. Explicit recovery, abandonment, and branch adoption are not modeled.
-- The latest save can be live, a captured draft, recovery data, or bytes that were ever published. Counting historical publication is intentional for owner rewinds; this is not a backup guarantee for rewritten remote history. Recovery is never pruned in the model.
-- At most three editor saves occur. Commit allocation stops at five noninitial objects; that finite guard can bind. No claim about unlimited retries or allocation slack is made. The focused positive schedules use at most three objects and do not exhaust the bound.
-- The tree-level stale-decision check holds repository/base/path scope fixed and invalidates a decision when captured local or remote bytes change. It does not establish every implementation conflict-ID scope rule. Byte-identical histories, review refresh ordering, and explicit branch-adoption scopes need code tests.
+The runner actually invokes these properties through TLC. Fairness is the antecedent of a checked temporal implication, not a finite completion deadline. Ledger, native, and content-progress graphs have **no turn cutoff**. A finite graph contains infinite behaviors; TLC checks those behaviors using fingerprint-based enumeration, not a deductive all-sizes proof. `completed`/`witness` assertions in scenario harnesses remain bounded safety checks and are never described as liveness.
 
-## Mapping to the implementation
+## Ledger contract and temporal obligation
 
-The mapping names correspondence obligations, not a verified refinement between Quint and TypeScript. Implementation files may change while workers integrate; review these methods again before release.
+[ledger.qnt](../../formal/quint/ledger.qnt) models two installations, one live publication per installation, immutable candidate/receipt/seal identities, persistence before dispatch, durable acceptance/cancellation settlement, queued late delivery, crashes, restart, outages, branch rewinds, and monotonic first-parent ledger ancestry. Receipt identity is a fixed function of its candidate operation; its first-parent lineage is the saved ledger anchor. Actual Git commit serialization, second-parent parsing, and receipt metadata validation are implementation boundaries, not checked byte encodings. A seal shares that anchor. All responses are treated as unconfirmed; fresh ledger reads decide the result. The validated-ack optimization is omitted. Queued requests eventually receive server service under the stated fairness assumption; request drops and repeated transport retries are not modeled. Lost responses and delayed requests are modeled.
 
-| Quint | implementation | required correspondence |
+Publication atomically compares both branch parent and ledger anchor, then moves both. A seal compares the same saved anchor and moves only the ledger. `receipt` means accepted; a recorded `seal` means cancelled; the anchor means undecided. Neither errors, absent receipts, nor branch ancestry yields rejection. Receipt and seal cannot both win. Advanced anchors fence delayed old requests permanently within the checked history; receipts remain reachable across branch rewind. Settlement saves the verdict and the new durable anchor together. Accepted intents are consumed and cannot be republished.
+
+Bounds: three total operation identities (installation 0 can retry once; installation 1 has one attempt), two environment faults shared among crash/outage/rewind, and immutable ledger nodes. `quiet` disables future faults and restores network service. Weak fairness of each client and server implies:
+
+```text
+always(quiet => eventually(all recorded operations have a final verdict))
+```
+
+This is **per-operation settlement**, not eventual publication of every dirty edit under unlimited adverse races. The finite allocation can prevent preparing another attempt after cancellation. The three-round per-sync counter/reschedule transition is represented, but the three-operation domain does not exercise three cancellations for one installation. Backoff timing, unbounded attempts, ledger GC, and full ledger/content/native composition are not verified. The model does not assume that fair service alone makes publication defeat sealing on some future attempt.
+
+`LedgerPublishWins` and `LedgerSealWins` separately exercise both orders, crash/restart before settlement, receipt/seal exclusion, a later operation, branch rewind, and delayed delivery after the old anchor is permanently fenced. Their 16-step witnesses establish scenario coverage; the `Ledger` temporal property is independent of those schedules. `NegLedgerUnfair` supplies the infinite-stuttering negative.
+
+`LedgerDiverged` permits an out-of-contract foreign ledger value. It checks that a client records divergence and stops automatic mutation, and that fair recovery eventually yields a verdict including divergence. It intentionally does not assert ledger ancestry preservation after tampering. Normal safety excludes ledger deletion/rewind, copied installations, and malicious exact receipt substitution. Reviewed re-anchoring, absent-ref initialization races, and duplicate-installation diagnostics remain implementation obligations.
+
+Ledger negative controls: `NegLedgerAbsent` infers cancellation from anchor/absence; `NegLedgerSplit` separates branch and receipt effects; `NegLedgerAnchor` ignores the saved publication anchor; `NegSealAnchor` seals the current value instead of the saved anchor; `NegLedgerJournal` forgets durable identity after a crash; `NegLedgerReplay` prepares another publication for an accepted intent. Each must fail its named invariant.
+
+## Native transaction contract
+
+[nativeTxn.qnt](../../formal/quint/nativeTxn.qnt) models one path and exact abstract hashes: expected E, target N, absent, a partial stage/text write, a newer writer value, and a byte value representing a legitimate prefix. Separate transitions persist the intent, write an incomplete stage, finish/verify the stage, atomically displace the path into a nonexisting hold, verify hold bytes, install with a no-clobber rename, recheck/preserve hold bytes, complete, roll back, or report a conflict. Crashes clear volatile verification and retain completed disk operations. E and N are pinned before the intent.
+
+`NativeReplace`, `NativeDelete`, and `NativeCreate` cover rename transactions. A newer write before displacement is restored or preserved; a recreated destination is never clobbered; a held-file write after verification is rechecked and retained. `NativeText` treats any recovered value other than E/N as interrupted, retaining E/N/current. Prefix resemblance never licenses replacement. Up to two writer/crash events occur; after quiescence and weakly fair worker steps the transaction terminates as applied, changed, or interrupted. This is actual conditional temporal termination, not a claim every interference must end at N.
+
+`NegNativeClobber`, `NegNativeRehash`, and `NegPrefixGuess` respectively break no-clobber installation, discard a changed hold without capture, and overwrite a legitimate prefix as if it were a torn write. They fail exactness or latest-writer preservation.
+
+Assumptions: exact object IDs stand for collision-free hashes; stage/hold are private paths on the same volume; rename is atomic and refuses existing destinations; completed syscalls survive process death; durable recovery capture is atomic at the modeled boundary. Power loss/fsync ordering, external writes through an fd after hold removal, orphan-scan integration, mode bits, multi-path rename/collision handling, real Obsidian TFile/cache behavior, and the native worker's exact journal format are **not proved**. The model tracks the latest injected external write and pinned E/N, not every historical overwrite by an external writer.
+
+## Native issue handoff after independent review
+
+The independent native review `/tmp/github-v2-native-review-r1.md` reports **FAIL / not ready**: interrupted process bytes were returned as ordinary `changed` bytes and could be merged and published; displaced/orphan bytes could remain hidden. Passing these specifications does not clear that implementation finding.
+
+[nativeHandoff.qnt](../../formal/quint/nativeHandoff.qnt) models the proposed repair boundary. A durable attempted flag precedes the native effect. Interrupted, displaced, and orphan outputs create a native issue. Fetching an issue is volatile; engine ingestion persists its kind, retained bytes, and path hold before native acknowledgement is permitted. The issue path cannot automatically publish. A later edit does not clear the issue. A reviewed choice pins its preimage and applies only against the exact current expected bytes. Crashes retain both native and engine records. One independent path can publish while the issue remains unresolved.
+
+The graph has one issue path, one independent path, three issue kinds, four content values (with an unset sentinel), one later edit, and at most two crashes. With weak fairness of the automatic worker after faults stop, the issue is eventually durably ingested and the other path publishes. Human review is not assumed fair for that obligation. `NegTornPublish` collapses an issue into ordinary changed bytes and reaches automatic publication; `NegIssueAck` acknowledges before durable ingestion; `NegIssueEdit` clears a hold on a new edit; `NegAttemptFlag` executes without the durable attempt flag. Each must fail its named safety invariant.
+
+This is a boundary model, not a byte-level native proof: issue creation/recovery capture is abstract, issue enumeration and durable engine saves are assumed atomic, and only one issue instance is allocated. It does not prove the engine's actual scan/merge/candidate construction excludes held paths, compose the issue model with native syscalls or ledger publication, or validate storage retention and orphan discovery on disk. The native and publication workers must implement this handoff and reproduce the review's end-to-end counterexample as an implementation regression.
+
+## Content-version consent and content reconciliation
+
+[durability.qnt](../../formal/quint/durability.qnt) separates capture/pinning, volatile UI choice, durable approval, operation preparation, guarded replacement, durable acknowledgement/capture, checkpoint, and restart. Consent is exact local/remote content; a byte-identical remote head change and an event/self-echo do not revoke it. Expected preimages are retained before a durable choice is consumed. The old durable observation-incarnation marker is gone. A crash clears volatile UI state, not an already persisted content choice. `ConsentVersions` checks identical bytes at a new head, event echoes around multiple paths, restart, and completion without renewed consent. It is a 14-step safety witness.
+
+`NegVolatileObservation` keeps its historical test name but now removes **preimage pinning**, not an incarnation marker. `NegApprovalScope` ignores changed content. `NegNativeGuard` bypasses the exact expected-byte comparison; `NegAccountCapture` acknowledges a newer carried value before capturing it. This graph has two paths, initial local value 1, remote value 3, one later save of 2, and one remote-head advance; TLC explores it without a turn cutoff.
+
+[vaultSync.qnt](../../formal/quint/vaultSync.qnt) retains the content reconciliation obligations migrated from TLA. It has two devices/files, byte values `0..3`, three saves, and five noninitial commit slots. Its publication result abstracts a **validated receipt or seal**, rather than claiming an API error establishes rejection. Its receipt status confirms acceptance even after branch rewind; `UnknownRewind` checks that behavior. `Adoption` represents the parent's one explicit confirmation for rewritten history, retaining recovery and carried origins before a fresh conflict review. It is an atomic abstraction, not a native transaction proof.
+
+The [case harness](../../formal/quint/cases.qnt) checks an arbitrary five-transition Core prefix and focused schedules of 5–21 transitions. `--max-steps` does not bound TLC; the Core/scenario turn counters do. Apalache only checks its explicit transition bound. [progress.qnt](../../formal/quint/progress.qnt) checks fair quiescent content convergence with at most two saves, reliable terminal publication outcomes, no external Git publication/revert, no response loss/crash/rewind, and either disjoint or conflicting files. User conflict decisions are fair client actions. It also checks allocation slack and strict current-ancestry provenance. These content results do not prove a refinement from the lower-level ledger network model.
+
+## Old obligations and intentionally changed guarantees
+
+| Old obligation/control | Quint check and executed domain | Difference or remaining gap |
 |---|---|---|
-| `save`, `drafts`, `effectiveBase`, `sync` | `SyncSession.#transact`, `#effectiveBase`; pure `reconcile` | Three-way compare against a coherent checkpoint plus carried origins; outgoing changes retain independent remote paths. |
-| `candidateState`, `process` | `GitHubRepository.prepare/publish` in `github.ts`; publication journal in `session.ts` | Candidate has exactly the expected parent; GraphQL `updateRefs` uses `beforeOid`, `afterOid`, and `force:false`; operation is durably saved before the request. |
-| `loseResponse`, `reconcileUnknown` | `SyncSession.#settle/#resume` | Candidate in ancestry confirms publication. Absence does not prove failure in a rewind-capable repository; retain the operation until explicit recovery. |
-| `applying`, `applyFile`, `crash` | `#promote`, `#applySteps`, `StoredState.operation`, `LocalVault.apply` | Durable expected/target/recovery data precede replacement. Retry must recognize already-applied target bytes and leave mismatching newer bytes alone. |
-| carried draft and `finish` | `#applySteps` post-application capture and `state.carry`, `state.base` | Recapture and persist the newer bytes before advancing the checkpoint. Carry records the old origin separately from the new draft bytes. |
-| `decide`, `publishDecision` | `SyncSession.resolve`, `reconcile.ts` version conflict IDs | Decisions are keyed to the current review and local/remote/base/path scope; changes invalidate them. |
-| atomic replacement assumption | `ObsidianVault.apply` in `obsidian-vault.ts` | Markdown replacement uses `vault.process` with expected text comparison. Automatic binary replacement and deletion are blocked where an atomic safe primitive is unavailable. |
+| `TypeOK` | Quint static types plus `typeOK` in protocol safety | Fixed keys and identities; no arbitrary paths. |
+| `CommitBoundSlack` | `nextCommit <= 5` in every progress harness | No slack claim in Core/general safety; its five-slot guard can bind. |
+| `CheckpointPublished` | Current ancestry assertion in progress; `NegOptimistic` violates accepted-checkpoint safety | Rewind-capable safety uses accepted-history status, as the old rewind variant did. |
+| `CheckpointEverPublished` | `checkpointPublished` in protocol `safe` | Checks accepted status; transiently removed checkpoints are allowed around owner rewind. |
+| `LiveIsCommittedOrOwn`, `...Ever` | `liveCommittedOrOwn` in `safe` | Per-file ever-published provenance in rewind-capable safety; strict per-file current-ancestry provenance additionally checked in progress. |
+| `BaseCoherent` | Structural `baseCoherent`; `wholeCheckpoint`; `NegCheckpoint` | The primitive remains atomic at the protocol level; the separate durability model splits persistence boundaries. |
+| `CapturedEditsPreserved`, `...Ever` | `latestSavePreserved`, `carriedCaptured`; `NegGuard`, `NegCapture`, `NegDiscardRemote`; durability preservation | Ever-publication is permitted after rewind. Recovery is not pruned; only latest saves are promised. |
+| `NoBlindOverwrite` | Path-scoped durable `seen`, `noBlindOverwrite`, `scopedDecisions`; `NegSilentDraft`, `NegStaleDecision` | Content-version and base scope; a byte-identical new head does not revoke consent. No repo re-enrollment. |
+| `NoUnauthoredChange` | Own-authored values and `noUnauthoredChange`; `NegUnauthored` reconstructs unjournaled half-apply, crash, remote revert, then false local publication | Abstract immutable bytes and single-file save ownership; no executable refinement. |
+| `NoReplay` | Structural introduced-value uniqueness over device commits in current ancestry; `NegReplayUnique` | One live operation per device; all retries reuse identities. `NegLedgerReplay` checks a consumed draft cannot become a second publication. |
+| `NoResurrection` | Removed commits disjoint from current ancestry; exact-head comparison; `ExactPublish`, `NegFastForward` | Ledger graph separately checks atomic branch-plus-ledger CAS, permanent fences, and receipt retention across rewinds. |
+| `NoUncertainRetry` | `unknownHeld`; `UnknownRewind`, `NegReplay`, `NegLedgerAbsent` | Validated receipt/seal settlement supersedes permanent hold; receipt absence remains undecided. |
+| `HeldHasCandidates` | `candidateRetained` while awaiting settlement; durable ledger journal and one active operation | Permanent unknown-publication hold is retired; out-of-contract divergence still pauses. |
+| `NeverResolving` / `Independent` | `independentNoConflict` in schedule and fair unrestricted `LiveIndependent` | Two events versus the old three-event environment; stronger temporal coverage than the original Quint fixed schedule, smaller event budget than old TLA. |
+| `Convergence` / `Liveness` | Actual TLC temporal checks in `LiveConflict` and `LiveIndependent` | Two editor saves, reliable responses, no external Git edits or crashes/rewind; the retired no-rewind retry/sibling theorem is not reproduced under the selected ledger contract; per-operation settlement is checked separately in `Ledger`. |
+| `Neg_UnfairLiveness` | `NegUnfair`, actual temporal counterexample | A finite witness is not substituted. |
+| `Neg_ForgetSiblings` | Superseded by one live operation and immutable identities; `NegReplay`, `NegReplayUnique`, and ledger race controls cover retry/replay hazards | No concurrently live sibling candidates are permitted. The ledger graph includes delayed old attempts during a later operation. |
+| `Neg_NoApplyJournal` | `NegJournal` and structural `NegUnauthored` | Separate ordering and end-to-end provenance controls. |
+| `Neg_DiscardOnUseGitHub` | `UseRemote` and `NegDiscardRemote` | Recovery bytes retained before remote choice replaces local content. |
+| `Probe_OptimisticCheckpoint_Loss` | `ProbeOptimisticLoss` checks latest-save preservation despite optimistic checkpoint mutation | Focused response-loss/revert schedule only; it is not permission for optimistic checkpointing. |
+| Explicit branch `Adopt` confirmation | `Adoption` retains recovery and carried origin, then requires conflict review | Baseline abstract adoption is atomic; native crash-safe adoption is not modeled. |
+| `Rewind` safety suite | Core prefix plus `UnknownRewind`, `ExactPublish`, `Adoption`, and ledger graphs | No equally deep unrestricted replacement; current bounds are below. |
+| `Neg_FastForwardRef`, `Neg_NoApplyGuard`, `Neg_OptimisticCheckpoint`, `Neg_PartialCheckpoint` | `NegFastForward`, `NegGuard`, `NegOptimistic`, `NegCheckpoint` respectively | Named safety counterexamples, not progress checks. |
+| `Neg_ReplayOnUnknown`, `Neg_RewindUnknown`, `Neg_SilentNewDraft`, `Neg_StaleResolution` | `NegReplay`, `NegReplayUnique`, `NegSilentDraft`, `NegStaleDecision` | Rewind acceptance now comes from the receipt; old permanent-hold behavior is intentionally retired. |
+| `Core_Deep` | No equal-size replacement claim | Old four-event unrestricted exploration is not reproduced; new Core cuts off at five transitions. Progress has two-event arbitrary interleavings. |
 
-At first inspection the core's unknown-outcome path released a candidate when the branch returned to its parent, and changed-path handling retained the origin without recapturing the newer bytes. **The shared core was updated during this task:** the inspected `#settle` now holds every unconfirmed candidate, and `#applySteps` now recaptures and records newer bytes before checkpoint advancement. Those observations narrow the integration gaps; they do not replace running the implementation's regression and crash tests. This worker changed no sync implementation files.
 
-## Liveness and retained TLA+ coverage
+Retired guarantees/policies: permanent hold on ordinary uncertain publication is replaced by same-anchor sealing and automatic settlement; event/incarnation-based consent revocation is replaced by exact content versions; ordinary single-path creation/deletion needs no standing consent hold; byte-identical recreation deliberately remains the same version. Old no-replay, captured-byte preservation, exact publication comparison, and whole-checkpoint obligations remain. No unsafe absence-to-nonpublication rule is inherited.
 
-No Quint temporal liveness property was verified in this work. The fixed independent-edit schedule's final-state `completed` assertion is bounded convergence for that schedule, not eventual convergence under a fair arbitrary scheduler. `eventuallyConverged` is defined in the protocol module for illustration only; it is not passed to the verifier, and it would be false under permitted infinite stuttering or permanently held unknown outcomes.
+The original unrestricted deep TLA search is not claimed as reproduced: Core stops after five transitions, content progress has two saves, ledger has three operations/two faults, and native transactions have one path/two interference events, and issue handoff has one issue/one edit/two crashes. Arbitrary operation counts, arbitrary files/devices, bulk-deletion thresholds, migration `/2 → /3`, and the final composed implementation are quantified remaining gaps, not silently skipped checks.
 
-Quint 0.33.0 exposes `--temporal`; its official guide documents temporal checking with TLC and partial temporal support with Apalache. That tooling capability is distinct from having supplied and checked a valid fairness-based liveness specification here. A useful future theorem must explicitly constrain rewrites, continuous edits, held-state recovery, network processing, device scheduling, and user decisions.
+## Integration
 
-[reference-tla/](../../formal/quint/reference-tla/) retains a **read-only snapshot of Fable's evidence**, including its model, selected configurations, checker runner, logs, coverage records, summary, and snapshot hashes. It is supplementary evidence from Fable's run, not a newly executed check by this Quint worker. The recorded model SHA-256 is `012811b93c6a7582f8d5f2512b8c06f34241b07404a135838b163fef94cbb81a` and matches the snapshot.
+The parent supplied `github-ledger-probe.json` with six live API successes. This worker read the result and probe source but did not rerun network experiments. That supports the selected API assumptions; it does not establish engine correctness or fine-grained PAT acceptance.
 
-That retained `Liveness` run checked fair quiescent convergence in the **no-rewind** configuration (`MaxEnv=3`, `MaxCommits=6`, two devices/two files), with weak fairness of device steps and aggregate publication processing. Fair device steps include user conflict decisions. Its log reports 2,131,994 distinct states and successful temporal checking. `Neg_UnfairLiveness` retains the failure when fairness is removed. These assumptions allow no-rewind retry behavior that differs from this conservative rewind-capable Quint model; do not transfer that theorem to held outcomes or continuously changing environments.
-
-The retained TLA+ safety runs also explore longer event schedules and invariants Quint has not matched, including no blind overwrite, no unauthored changes, coherent bases, replay uniqueness, candidate sibling ambiguity, explicit branch adoption, and commit-allocation slack. Keep the parent task's canonical TLA+ artifacts and runner when integrating; this snapshot is an evidence archive, not a relocation of its runnable formal suite. Only logs actually copied into this archive are included; the retained aggregate summary mentions additional runs whose artifacts remain in Fable's suite.
-
-## Integration instructions
-
-1. Include `formal/quint/`, `scripts/check-quint.py`, and this document in the parent integration. Do not include ignored tooling or checker scratch output. No git commits were made by this worker.
-2. Run the default script and the selected Apalache command above on the integrated tree. Inspect `evidence/*/summary.md` and `results.json`; preserve both passing checks and expected violations.
-3. Keep the canonical TLA+ suite and evidence for unmatched safety/liveness coverage. Update the implementation plan to make Quint the readable entry point without deleting that evidence.
-4. Run the core's unknown-publication/force-rewind, post-application-save, stale-decision, and crash-restart tests; check actual persisted recovery bytes and operation retention. Model checking here does not establish those code behaviors.
-5. Gate any claim on its actual scope: two-device/two-file abstract protocol, bounded schedules, checked properties, and named durability/adapter assumptions. Do not describe the plugin or arbitrary vault sync as formally verified.
+The independent native safety verdict remains FAIL until the implementation fix and regression pass. Align the engine with the exact ledger identities/atomic settlement saves and durable per-path native issue ingestion before acknowledgement; align the native worker with every persistence/hash/no-clobber boundary. Then run implementation fault injection and native platform gates independently. Root TypeScript tests and Android beta acceptance were not rerun here. Root `README.md:55` and `docs/implementation-plan.md` still describe retained TLA+ and unverified Quint liveness; the integration owner must update them. Legacy `--quick`/`--deep` flags are intentionally unsupported.

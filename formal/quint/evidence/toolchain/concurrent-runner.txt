@@ -1,0 +1,4 @@
+Command: python3 scripts/check-quint.py --only Core (during full TLC run)
+exit=1
+Another runner owns this evidence directory; refusing to overwrite it
+Manifest unchanged: true

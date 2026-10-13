@@ -24,7 +24,7 @@ State 6: head-moved; head=1; failures=[]
 State 7: journal-accepted; head=1; failures=[]
   device 0: {"accounted": [], "candidate": 1, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 1, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
   device 1: {"accounted": [], "candidate": 2, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": 2}, "journal": true, "live": {"0": 0, "1": 2}, "phase": "publishing", "recovery": [0, 2], "target": 0}
-State 8: known-rejection; head=1; failures=[]
+State 8: validated-cancellation; head=1; failures=[]
   device 0: {"accounted": [], "candidate": 1, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 1, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
   device 1: {"accounted": [], "candidate": 2, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": 2}, "journal": true, "live": {"0": 0, "1": 2}, "phase": "idle", "recovery": [0, 2], "target": 0}
 State 9: prepare; head=1; failures=[]

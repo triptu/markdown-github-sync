@@ -1,5 +1,4 @@
-# downloaded TLA+ tools (pinned by sha256 in scripts/check-model.sh)
+# Downloaded tools and checker scratch output are not specifications.
 .tools/
-# TLC scratch state
 .tlc/
 states/

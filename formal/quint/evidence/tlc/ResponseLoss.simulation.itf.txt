@@ -18,7 +18,7 @@ State 4: response-lost; head=1; failures=[]
 State 5: external; head=2; failures=[]
   device 0: {"accounted": [], "candidate": 1, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 1, "1": 0}, "phase": "unknown", "recovery": [0, 1], "target": 0}
   device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
-State 6: found-in-ancestry; head=2; failures=[]
+State 6: validated-receipt; head=2; failures=[]
   device 0: {"accounted": [], "candidate": 1, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": 1, "1": -1}, "journal": true, "live": {"0": 1, "1": 0}, "phase": "applying", "recovery": [0, 1], "target": 1}
   device 1: {"accounted": [], "candidate": 0, "carry": {"0": -1, "1": -1}, "checkpoint": 0, "decisions": {"0": "none", "1": "none"}, "draft": {"0": -1, "1": -1}, "journal": false, "live": {"0": 0, "1": 0}, "phase": "idle", "recovery": [], "target": 0}
 State 7: replace; head=2; failures=[]

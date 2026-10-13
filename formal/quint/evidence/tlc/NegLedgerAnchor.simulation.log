@@ -1,0 +1,3 @@
+exit=1
+[violation] Found an issue (46ms at 174 traces/second).
+error: Invariant violated
