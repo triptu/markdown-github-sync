@@ -9,6 +9,7 @@ export interface ModeIntent {
 export interface NativeModes {
   get(path: string): FileMode;
   set(path: string, mode: FileMode): void | Promise<void>;
+  remove?(path: string): void | Promise<void>;
   begin?(path: string, expected: Entry | null, next: Entry): Promise<void>;
   cancel?(path: string): Promise<void>;
   recover?(readOid: (path: string) => Promise<string | null>): Promise<void>;
@@ -81,6 +82,15 @@ export class NativeModeStore implements NativeModes {
     const modes = Object.assign(Object.create(null), this.modes);
     const pending = Object.assign(Object.create(null), this.pending);
     modes[path] = value;
+    delete pending[path];
+    await this.commit(modes, pending);
+  }
+  async remove(path: string): Promise<void> {
+    this.assertTrusted();
+    if (!Object.hasOwn(this.modes, path) && !this.pending[path]) return;
+    const modes = Object.assign(Object.create(null), this.modes);
+    const pending = Object.assign(Object.create(null), this.pending);
+    delete modes[path];
     delete pending[path];
     await this.commit(modes, pending);
   }

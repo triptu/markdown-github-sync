@@ -67,3 +67,10 @@ test("uncertain persistence blocks captures when durable reread also fails", asy
   h.unreadable(false);
   assert.equal((await h.open()).get("folder/a.md"), "100755");
 });
+test("deleting a file clears persisted executable mode before a same-path create", async () => {
+  const h = storage(), modes = await h.open();
+  assert.equal(modes.get("folder/a.md"), "100755");
+  await modes.remove("folder/a.md");
+  assert.equal(modes.get("folder/a.md"), "100644");
+  assert.equal((await h.open()).get("folder/a.md"), "100644");
+});
