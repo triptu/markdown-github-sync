@@ -200,8 +200,12 @@ export default class NativeConfigurationAcceptance extends Plugin {
         throw new Error("Archived fixture failure missing");
       if (await files.exists(resultPath)) {
         const result: unknown = JSON.parse(await files.read(resultPath));
-        if (state.stage !== "fixture-published" || typeof result !== "object" || result === null ||
-            Reflect.get(result, "completed") !== false || Reflect.get(result, "failedAt") !== "fixture-published")
+        if (typeof result !== "object" || result === null) throw new Error("Unexpected result after fixture resume");
+        if (state.stage === "complete" && Reflect.get(result, "completed") === true ||
+            state.stage === "failed" && Reflect.get(result, "completed") === false)
+          return;
+        if (state.stage !== "fixture-published" || Reflect.get(result, "completed") !== false ||
+            Reflect.get(result, "failedAt") !== "fixture-published")
           throw new Error("Unexpected result after fixture resume");
         const archive: unknown = JSON.parse(await files.read(evidencePath));
         if (typeof archive !== "object" || archive === null ||
@@ -249,6 +253,7 @@ export default class NativeConfigurationAcceptance extends Plugin {
         return;
       }
     }
+    if (await files.exists(resultPath)) return;
     let state: State | null = null;
     try {
       if (await files.exists(statePath)) state = parseState(JSON.parse(await files.read(statePath)));
