@@ -1,8 +1,18 @@
 # GitHub-native Obsidian sync — original proposal
 
-> **Implementation status (14 October 2026):** This document records the original design. The [current visual architecture](architecture.html) separates implemented behavior, reviewed code, model checks and build-specific Android evidence. The integrated production source passed 437 tests, typechecking and build; a later journal regression passed its focused suite. Quint scope review is closed. Current Android configuration/restart acceptance, final writing-host review, real editor-race acceptance and packaging remain open. This is not approval to replace the real vault.
+> **Implementation status (14 October 2026):** This is the original design record. The [current visual architecture](architecture.html) reports build-specific acceptance and the open configuration device gate. The current plugin suite passed 474 tests and typechecking. The installed production bundle passed separate desktop and Android content-sync runs, 21 checks each, with independent exact readback of eight final files per run. The latest new-configuration Android run stopped safely before enrollment after a zero-byte recovery temporary write. No release or real-vault cutover is approved.
 
 Status: design and isolated API experiments, 13 October 2026. Not a released plugin. The existing Cloudflare prototype is not approved for a real vault.
+
+## Current verification snapshot
+
+- [Desktop final acceptance](verification/desktop-v2.md): installed production bundle `dc3984a2da5298d8e3a651c19b8702f0999f901e6809ec2d8cc7f64e7a83d103`, 21/21 checks, eight exact final-file comparisons. The saved-note fixture used filesystem bytes; this was not a desktop editor UI pass. The two earlier failed runs and their fixes remain recorded.
+- [Android final acceptance](verification/android-v2.md): the same bundle, 21/21 checks on an Android 15 emulator, eight exact final-file comparisons. One note was typed and saved through the visible Obsidian editor; conflict and restore decisions used installed production APIs. Earlier failed configuration runs remain failed evidence.
+- [Quint scope review R3](verification/quint-scope-review-r3.md): the sole authored specification passed positive finite checks of 66,384 and 20 distinct states, plus 13 expected negative counterexamples. This is finite model evidence, not a proof of native filesystem behavior.
+- [Native host-index acknowledgement R1](verification/native-index-ack-review-r1.md) and [restore consent R7](verification/restore-consent-review-r7.md): independent scoped reviews passed, with their recorded limits.
+- **Open configuration device gate:** run `d80bc1ab-fb61-4041-aa05-ffecf98951b9` failed safely during preflight before enrollment when a recovery temporary write read back as zero bytes. Root and Fable are investigating. The [raw result](verification/android-v2-configuration-current-first-result.json) is incomplete and is not an acceptance pass. A prior configuration retry safely synchronized an unrelated note, but did not erase its original write failure.
+
+The accepted content runs do not establish physical-phone behavior, hardware power-loss durability, configuration device acceptance, or migration of the real vault.
 
 ## Recommendation
 

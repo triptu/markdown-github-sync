@@ -48,7 +48,7 @@ const situations = {
       "For an uncertain upload, the per-installation ledger receipt or seal settles whether its candidate was accepted or cancelled.",
       "On restart, the plugin resumes or pauses with recoverable bytes. It does not infer a deletion from a missing file or repeat an uncertain publication."
     ],
-    footnote: "The tested Android bundle passed both process-kill boundaries: five setup and eight recovery checks each. Later configuration changes are outside that bundle.",
+    footnote: "Earlier Android process-kill runs passed both native rename boundaries on their recorded bundle. This does not settle the current configuration recovery-write failure or prove power-loss durability.",
     caution: true
   },
   config: {
@@ -61,7 +61,7 @@ const situations = {
       "Incoming live configuration is deferred. New hidden local files need exact consent before they can publish.",
       "Ignore rules and built-in protected paths are rechecked, while credentials, caches, and recovery state remain excluded."
     ],
-    footnote: "The tested Android bundle used legacy visible-file mode. Fable requested migration and stale-writer fixes; configuration UI and migration still need Android acceptance.",
+    footnote: "Scoped code reviews passed. The latest new-configuration Android run stopped safely before enrollment on a zero-byte recovery temporary write. Configuration device acceptance remains open.",
     caution: true
   }
 };
