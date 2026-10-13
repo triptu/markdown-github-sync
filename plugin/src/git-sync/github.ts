@@ -235,6 +235,7 @@ export class GitHubRepository implements Repository {
   }
   async identity(): Promise<RepositoryIdentity> {
     const repo = record(await this.rest(""));
+    if (repo.private !== true) throw new GitHubError("Sync requires a private GitHub repository; public or unknown visibility is refused");
     const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
     return { id, owner, name, branch: this.options.branch };

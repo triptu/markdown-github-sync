@@ -64,7 +64,7 @@ class FakeGitHub implements GitHubTransport {
     const intercepted = this.intercept?.(request); if (intercepted) return intercepted;
     const body: unknown = request.body ? JSON.parse(request.body) : undefined;
     const url = new URL(request.url), path = url.pathname.replace("/repos/owner/repo", "");
-    if (!path) return response({ node_id: "R_stable", owner: { login: "owner" }, name: "repo" });
+    if (!path) return response({ private: true, node_id: "R_stable", owner: { login: "owner" }, name: "repo" });
     if (path.startsWith("/git/ref/")) return response({ ref: "refs/heads/main", object: { type: "commit", sha: this.head } });
     if (path.startsWith("/git/commits/") && request.method === "GET") return response(this.commits.get(path.split("/").pop() ?? "") ?? null);
     if (path.startsWith("/git/trees/") && request.method === "GET") return response(this.trees.get(path.split("/").pop() ?? "") ?? null);
@@ -430,3 +430,14 @@ test("blob transfer concurrency never exceeds one within preparation", async () 
   await repo.prepare(await repo.head(), { "a.bin": file("a"), "b.bin": file("b") }, "sequential uploads");
   assert.equal(maximum, 1);
 });
+
+for (const visibility of [false, undefined, "true", null]) {
+  test(`identity refuses non-private or malformed visibility: ${String(visibility)}`, async () => {
+    const api = new FakeGitHub();
+    api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo"
+      ? response({ private: visibility, node_id: "R_stable", owner: { login: "owner" }, name: "repo" }) : undefined;
+    await assert.rejects(client(api).identity(), /private GitHub repository/);
+    assert.equal(api.requests.length, 1);
+    assert.equal(api.requests[0].method, "GET");
+  });
+}
