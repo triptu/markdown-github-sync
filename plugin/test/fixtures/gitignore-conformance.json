@@ -1,0 +1,152 @@
+{
+  "generator": "scripts/gitignore-fixture.mjs",
+  "oracle": "git check-ignore --no-index --quiet; core.ignorecase=false; core.precomposeunicode=false; no global/system excludes",
+  "patterns": "# root rules used by the synthetic vault\n.obsidian/cache/\n.obsidian/workspace\n.obsidian/plugins/vikalp/data.json\n*.tmp\n!important.tmp\n/root-only.md\n**/draft?.md\n\\#literal.md\n\\!literal.md\ntrailing\\ \ncafé.md\nFoo.txt\nignored-parent/\n!ignored-parent/child.md\nopen-parent/*\n!open-parent/child.md\n.gitignore\n",
+  "rows": [
+    {
+      "path": "notes.md",
+      "description": "plain content",
+      "ignored": false
+    },
+    {
+      "path": ".obsidian/app.json",
+      "description": "configuration file",
+      "ignored": false
+    },
+    {
+      "path": ".obsidian/plugins/vikalp/rules/.builtin-rules.json",
+      "description": "dotted filename in config",
+      "ignored": false
+    },
+    {
+      "path": ".obsidian/cache/index",
+      "description": "ignored config directory",
+      "ignored": true
+    },
+    {
+      "path": ".obsidian/cache/deep/index",
+      "description": "ignored config descendant",
+      "ignored": true
+    },
+    {
+      "path": ".obsidian/workspace",
+      "description": "ignored exact config path",
+      "ignored": true
+    },
+    {
+      "path": ".obsidian/workspace/file",
+      "description": "ignored parent directory",
+      "ignored": true
+    },
+    {
+      "path": ".obsidian/plugins/vikalp/data.json",
+      "description": "tracked-looking file ignored by policy",
+      "ignored": true
+    },
+    {
+      "path": "draft.tmp",
+      "description": "glob",
+      "ignored": true
+    },
+    {
+      "path": "docs/draft.tmp",
+      "description": "glob in subdirectory",
+      "ignored": true
+    },
+    {
+      "path": "important.tmp",
+      "description": "negation",
+      "ignored": false
+    },
+    {
+      "path": "docs/important.tmp",
+      "description": "negation in subdirectory",
+      "ignored": false
+    },
+    {
+      "path": "root-only.md",
+      "description": "anchored root",
+      "ignored": true
+    },
+    {
+      "path": "docs/root-only.md",
+      "description": "anchored nested",
+      "ignored": false
+    },
+    {
+      "path": "draft1.md",
+      "description": "double-star root",
+      "ignored": true
+    },
+    {
+      "path": "docs/deep/draft2.md",
+      "description": "double-star nested",
+      "ignored": true
+    },
+    {
+      "path": "docs/deep/drafts.md",
+      "description": "question mark mismatch",
+      "ignored": true
+    },
+    {
+      "path": "#literal.md",
+      "description": "escaped hash",
+      "ignored": true
+    },
+    {
+      "path": "!literal.md",
+      "description": "escaped exclamation",
+      "ignored": true
+    },
+    {
+      "path": "trailing ",
+      "description": "escaped trailing space",
+      "ignored": true
+    },
+    {
+      "path": "trailing",
+      "description": "without trailing space",
+      "ignored": false
+    },
+    {
+      "path": "café.md",
+      "description": "Unicode exact",
+      "ignored": true
+    },
+    {
+      "path": "café.md",
+      "description": "Unicode decomposed",
+      "ignored": false
+    },
+    {
+      "path": "Foo.txt",
+      "description": "case exact",
+      "ignored": true
+    },
+    {
+      "path": "foo.txt",
+      "description": "case variant",
+      "ignored": false
+    },
+    {
+      "path": "ignored-parent/child.md",
+      "description": "negation cannot reopen parent",
+      "ignored": true
+    },
+    {
+      "path": "open-parent/other.md",
+      "description": "ignored child",
+      "ignored": true
+    },
+    {
+      "path": "open-parent/child.md",
+      "description": "negated child",
+      "ignored": false
+    },
+    {
+      "path": ".gitignore",
+      "description": "control file override",
+      "ignored": true
+    }
+  ]
+}
