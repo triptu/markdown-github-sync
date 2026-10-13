@@ -45,7 +45,7 @@ class FakeGitHub implements GitHubTransport {
   sequence = 0;
   mutation: "normal" | "lost" | "lost-later" | "failed" | "rejected" | "error-after" = "normal";
   refs = new Map<string, string>();
-  ledgerQuery: "normal" | "errors" | "other-ref" = "normal";
+  ledgerQuery: "normal" | "other-ref" | "not-commit" | "prefix-list" = "normal";
   intercept?: (request: GitHubRequest) => GitHubResponse | undefined;
   constructor(initial: Snapshot = { "note.md": file("base\r\n"), ".obsidian/config.json": file("secret config"), "nested/.cache/skip": file("skip") }) {
     this.head = this.addCommit(initial);
@@ -68,6 +68,13 @@ class FakeGitHub implements GitHubTransport {
     const body: unknown = request.body ? JSON.parse(request.body) : undefined;
     const url = new URL(request.url), path = url.pathname.replace("/repos/owner/repo", "");
     if (!path) return response({ private: true, node_id: "R_stable", owner: { login: "owner" }, name: "repo" });
+    if (path.startsWith("/git/ref/vault-sync/devices/") && request.method === "GET") {
+      const name = `refs/${decodeURIComponent(path.slice("/git/ref/".length))}`;
+      const value = this.refs.get(name);
+      if (this.ledgerQuery === "prefix-list") return response([{ ref: `${name}-other`, object: { type: "commit", sha: "d".repeat(40) } }]);
+      if (value === undefined) return response({ message: "Not Found" }, 404);
+      return response({ ref: this.ledgerQuery === "other-ref" ? "refs/vault-sync/devices/other" : name, object: { type: this.ledgerQuery === "not-commit" ? "tag" : "commit", sha: value } });
+    }
     if (path.startsWith("/git/ref/")) return response({ ref: "refs/heads/main", object: { type: "commit", sha: this.head } });
     if (path.startsWith("/git/commits/") && request.method === "GET") return response(this.commits.get(path.split("/").pop() ?? "") ?? null);
     if (path.startsWith("/git/trees/") && request.method === "GET") return response(this.trees.get(path.split("/").pop() ?? "") ?? null);
@@ -99,12 +106,9 @@ class FakeGitHub implements GitHubTransport {
     if (path === "/git/commits" && "tree" in body && typeof body.tree === "string" && "parents" in body && Array.isArray(body.parents) && body.parents.every(p => typeof p === "string")) {
       const sha = this.addCommit(Object.fromEntries(this.files.get(body.tree) ?? []), body.parents.map(String)); return response(this.commits.get(sha), 201);
     }
-    if (path === "/graphql" && "query" in body && typeof body.query === "string" && body.query.startsWith("query Ledger") && "variables" in body && typeof body.variables === "object" && body.variables !== null && "ref" in body.variables && typeof body.variables.ref === "string") {
-      assert.ok("id" in body.variables && body.variables.id === "R_stable");
-      if (this.ledgerQuery === "errors") return response({ errors: [{ message: "generic error" }] });
-      const value = this.refs.get(body.variables.ref);
-      const name = this.ledgerQuery === "other-ref" ? "other" : body.variables.ref.slice("refs/vault-sync/devices/".length);
-      return response({ data: { node: { ref: value === undefined ? null : { prefix: "refs/vault-sync/devices/", name, target: { oid: value } } } } });
+    if (path === "/graphql" && "query" in body && typeof body.query === "string" && body.query.startsWith("query")) {
+      // Live GitHub: Repository.ref is null for existing refs outside heads/tags.
+      return response({ data: { node: { ref: null } } });
     }
     if (path === "/graphql" && "variables" in body && typeof body.variables === "object" && body.variables !== null && "input" in body.variables) {
       const input: unknown = body.variables.input;
@@ -443,21 +447,31 @@ test("publication refuses mismatched receipts and candidates before any mutation
   assert.equal(api.requests.filter(r => r.body?.includes("updateRefs")).length, 0);
   assert.equal(api.head, parent.oid);
 });
-test("ledger reads are fresh GraphQL POSTs and fail closed on malformed or foreign answers", async () => {
-  const api = new FakeGitHub(), repo = client(api);
+test("ledger reads are fresh exact-ref REST GETs, not GraphQL (null for custom refs), and fail closed on malformed answers", async () => {
+  const api = new FakeGitHub(); const repo = client(api);
   assert.equal(repo.ledgerRef(), LEDGER);
   assert.deepEqual(await repo.readLedger(), { kind: "absent" });
-  assert.ok(api.requests.at(-1)!.method === "POST" && api.requests.at(-1)!.url.endsWith("/graphql"));
+  const first = api.requests.at(-1)!;
+  assert.ok(first.method === "GET" && new URL(first.url).pathname === `/repos/owner/repo/git/ref/vault-sync/devices/${INSTALLATION}`);
+  assert.equal(first.headers["Cache-Control"], "no-cache");
   api.refs.set(LEDGER, "c".repeat(40));
-  assert.deepEqual(await repo.readLedger(), { kind: "present", value: "c".repeat(40) });
-  api.ledgerQuery = "errors";
-  await assert.rejects(repo.readLedger(), /ledger read failed/);
+  assert.deepEqual(await repo.readLedger(), { kind: "present", value: "c".repeat(40) }, "present via REST although GraphQL reports null");
+  assert.notEqual(api.requests.at(-1)!.url, first.url, "every read has a unique URL");
+  assert.ok(!api.requests.some(r => r.url.endsWith("/graphql")), "GraphQL never decides the ledger");
   api.ledgerQuery = "other-ref";
   await assert.rejects(repo.readLedger(), /another ref/);
+  api.ledgerQuery = "not-commit";
+  await assert.rejects(repo.readLedger(), /commit/);
+  api.ledgerQuery = "prefix-list";
+  assert.deepEqual(await repo.readLedger(), { kind: "absent" }, "a prefix list without the exact ref is absence");
   api.ledgerQuery = "normal";
-  api.intercept = r => r.url.endsWith("graphql") ? response({ data: { node: {} } }) : undefined;
-  await assert.rejects(repo.readLedger(), /Malformed ledger/);
-  api.intercept = r => r.url.endsWith("graphql") ? response({}, 429, { "retry-after": "120" }) : undefined;
+  api.intercept = r => r.url.includes("/git/ref/vault-sync/") ? response([{ ref: LEDGER, object: { type: "commit", sha: "c".repeat(40) } }]) : undefined;
+  await assert.rejects(repo.readLedger(), /Ambiguous/);
+  api.intercept = r => r.url.includes("/git/ref/vault-sync/") ? response({ ref: LEDGER }) : undefined;
+  await assert.rejects(repo.readLedger(), /Malformed/);
+  api.intercept = r => r.url.includes("/git/ref/vault-sync/") ? response({}, 500) : undefined;
+  await assert.rejects(repo.readLedger(), error => error instanceof GitHubError && error.status === 500);
+  api.intercept = r => r.url.includes("/git/ref/vault-sync/") ? response({}, 429, { "retry-after": "120" }) : undefined;
   await assert.rejects(repo.readLedger(), error => error instanceof GitHubError && error.retryAt === 1_120_000);
 });
 test("the installation identity is required and validated; there is no default ledger", async () => {

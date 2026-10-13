@@ -42,7 +42,6 @@ const ENCODED_LIMIT = 4 * Math.ceil(FILE_LIMIT / 3);
 const INSTALLATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ZERO_OID = "0".repeat(40);
 const UPDATE_REFS = "mutation Publish($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }";
-const READ_LEDGER = "query Ledger($id: ID!, $ref: String!) { node(id: $id) { ... on Repository { ref(qualifiedName: $ref) { prefix name target { oid } } } } }";
 const encoder = new TextEncoder();
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new GitHubError("Malformed GitHub object");
@@ -226,13 +225,13 @@ export class GitHubRepository implements Repository {
     this.cache.set(key, { object, cost });
     this.cacheCost += cost;
   }
-  private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<GitHubResponse> {
+  private async request(url: string, method: "GET" | "POST" = "GET", body?: unknown, extra: Record<string, string> = {}): Promise<GitHubResponse> {
     let token: string;
     try { token = await this.options.token(); } catch { throw new GitHubError("GitHub credential unavailable"); }
     if (!token || /[\r\n]/.test(token)) throw new GitHubError("GitHub credential unavailable");
     let response: GitHubResponse;
     try {
-      response = await this.options.transport.request({ url, method, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      response = await this.options.transport.request({ url, method, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch { throw new GitHubError("GitHub transport failed; request outcome may be unknown"); }
     if (!Number.isInteger(response.status)) throw new GitHubError("Malformed GitHub HTTP status");
     const headers = new Map(Object.entries(record(response.headers)).map(([key, value]) => [key.toLowerCase(), string(value)]));
@@ -474,16 +473,29 @@ export class GitHubRepository implements Repository {
     if (value.parents.length !== (anchor === null ? 0 : 1) || (anchor !== null && value.parents[0] !== anchor)) throw new GitHubError("Seal must extend exactly the anchor");
     await this.updateRefs([{ name: this.ledger, beforeOid: anchor ?? ZERO_OID, afterOid: seal }], seal);
   }
-  /** GraphQL POST: never served from an HTTP cache. Any malformed answer throws rather than claiming absence. */
+  /**
+   * Exact-ref REST read with a unique URL and `no-cache`, so no HTTP cache can
+   * answer it. GraphQL `Repository.ref` returns null for existing refs outside
+   * `refs/heads`/`refs/tags`, so it is never used here. 404 means "not
+   * observed", which the engine never treats as proof of nonpublication; only
+   * the ledger CAS (receipt or seal) decides. Malformed answers throw.
+   */
   async readLedger(): Promise<LedgerRead> {
-    const identity = await this.identity();
-    const response = record((await this.request("https://api.github.com/graphql", "POST", { query: READ_LEDGER, variables: { id: identity.id, ref: this.ledger } })).json);
-    if (response.errors !== undefined) throw new GitHubError("GitHub ledger read failed");
-    const node = record(record(response.data).node);
-    if (!("ref" in node)) throw new GitHubError("Malformed ledger read");
-    if (node.ref === null) return { kind: "absent" };
-    const ref = record(node.ref);
-    if (`${string(ref.prefix)}${string(ref.name)}` !== this.ledger) throw new GitHubError("Ledger read returned another ref");
-    return { kind: "present", value: oid(record(ref.target).oid) };
+    const url = `${this.base}/git/ref/${this.ledger.slice("refs/".length).split("/").map(encodeURIComponent).join("/")}?fresh=${globalThis.crypto.randomUUID()}`;
+    let response: GitHubResponse;
+    try { response = await this.request(url, "GET", undefined, { "Cache-Control": "no-cache", Pragma: "no-cache" }); }
+    catch (error) {
+      if (error instanceof GitHubError && error.status === 404 && error.retryAt === undefined) return { kind: "absent" };
+      throw error;
+    }
+    // A prefix match answers with a list; it must not contain the exact ref.
+    if (Array.isArray(response.json)) {
+      if (response.json.some(item => record(item).ref === this.ledger)) throw new GitHubError("Ambiguous ledger read");
+      return { kind: "absent" };
+    }
+    const ref = record(response.json), object = record(ref.object);
+    if (ref.ref !== this.ledger) throw new GitHubError("Ledger read returned another ref");
+    if (object.type !== "commit") throw new GitHubError("Ledger ref does not point to a commit");
+    return { kind: "present", value: oid(object.sha) };
   }
 }
