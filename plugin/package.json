@@ -1,6 +1,6 @@
 {
-  "name": "open-vault-sync",
-  "version": "0.1.0",
+  "name": "github-vault-sync",
+  "version": "0.2.0-beta.1",
   "private": true,
   "scripts": {
     "build": "node build.mjs",

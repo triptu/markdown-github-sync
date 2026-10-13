@@ -1,497 +1,1031 @@
 import {
+  App,
+  Modal,
+  Notice,
   Plugin,
   PluginSettingTab,
+  SecretComponent,
   Setting,
-  Notice,
   requestUrl,
-  Modal,
-  App,
-  TextComponent,
 } from "obsidian";
+import { GitHubRepository } from "./git-sync/github";
 import {
-  SyncEngine,
-  type SyncState,
-  type Transport,
-  type Head,
-  type RemoteObject,
-} from "./engine";
-import { generateSecret, VaultCrypto, base64ToBytes } from "./crypto";
-import { ObsidianVaultPort } from "./vault-port";
+  SyncSession,
+  type SessionStatus,
+  type SyncOutcome,
+  type EnrollmentPreview,
+  type ChoiceInput,
+  type PublicationRecoveryPreview,
+} from "./git-sync/session";
+import { parseState } from "./git-sync/state";
+import type { Entry, FileMode, RepositoryIdentity } from "./git-sync/contracts";
+import type { VersionConflict } from "./git-sync/reconcile";
+import { decodeBase64, encodeBase64, entryText } from "./git-sync/codec";
+import { GitObsidianVault } from "./git-sync/obsidian-vault";
+import { FileJournalStore } from "./git-sync/store";
+import { ForegroundScheduler } from "./git-sync/scheduler";
+import { PluginOwnership } from "./git-sync/ownership";
+import { NativeModeStore, parseModes } from "./git-sync/native-modes";
+import { defaultSettings, parseSettings, type Settings } from "./settings";
 
-interface Connection {
-  endpoint: string;
-  vaultId: string;
-  token: string;
-  secret: string;
+const installationKey = "github-vault-sync-installation-v2";
+function failure(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Sync failed. Your local files have been retained.";
 }
-interface Saved {
-  connection: Connection;
-  enabled: boolean;
-  state?: SyncState;
+function entryPreview(value: Entry | null): string {
+  if (!value) return "File absent";
+  const decoded = entryText(value);
+  return decoded === null
+    ? `Binary file · ${decodeBase64(value.data).length.toLocaleString()} bytes · ${value.oid.slice(0, 10)}`
+    : decoded.slice(0, 16000) +
+        (decoded.length > 16000
+          ? "\n[Preview truncated; full bytes retained]"
+          : "");
 }
-const empty = (): Connection => ({
-  endpoint: "",
-  vaultId: "",
-  token: "",
-  secret: "",
-});
-function validate(c: Connection) {
-  const url = new URL(c.endpoint);
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== "/"
-  )
-    throw new Error("Use an HTTPS Worker origin, without a path or query.");
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(c.vaultId))
-    throw new Error(
-      "Vault ID must be 16–128 letters, digits, dashes or underscores.",
+export default class GitVaultSync extends Plugin {
+  settings: Settings = defaultSettings();
+  session: SyncSession | null = null;
+  statusText = "Set up GitHub sync";
+  private scheduler: ForegroundScheduler | null = null;
+  private statusElement: HTMLElement | null = null;
+  private ready = false;
+  private ownership: PluginOwnership | null = null;
+  private unloaded = false;
+  private rawSession: SyncSession | null = null;
+  private modes: NativeModeStore | null = null;
+  private owner(): PluginOwnership {
+    if (this.unloaded) throw new Error("This sync instance has retired.");
+    return this.ownership ??= new PluginOwnership(this.app);
+  }
+  private listeners = new Set<() => void>();
+  async onload(): Promise<void> {
+    this.owner();
+    try {
+      await this.owner().run(async () => {
+        const settings = parseSettings(await this.loadData());
+        this.owner().assertActive();
+        this.settings = settings;
+      });
+    } catch (error) {
+      new Notice(failure(error), 12000);
+      return;
+    }
+    this.statusElement = this.addStatusBarItem();
+    this.statusElement.addClass("git-sync-status");
+    this.statusElement.onclick = () => new ChangesModal(this.app, this).open();
+    this.setStatus("Set up GitHub sync");
+    this.addSettingTab(new GitSettings(this.app, this));
+    this.addRibbonIcon("git-branch", "GitHub sync: changes and status", () =>
+      new ChangesModal(this.app, this).open(),
     );
-  if (c.token.length < 32)
-    throw new Error("Server token must be at least 32 characters.");
-  if (base64ToBytes(c.secret).length !== 32)
-    throw new Error("Use the generated 32-byte encryption key.");
-}
-export default class CloudVaultSync extends Plugin {
-  saved: Saved = { connection: empty(), enabled: false };
-  status = "Not connected";
-  private engine?: SyncEngine;
-  private busy = false;
-  private stopped = false;
-  private timer?: number;
-  private statusEl!: HTMLElement;
-  async onload() {
-    const data = await this.loadData();
-    if (data) this.saved = data;
-    this.statusEl = this.addStatusBarItem();
-    this.setStatus(this.saved.enabled ? "Waiting for sync" : "Paused");
-    this.addSettingTab(new SyncSettings(this.app, this));
     this.addCommand({
       id: "sync-now",
       name: "Sync now",
       callback: () => {
-        void this.sync(true);
+        void this.syncNow();
       },
     });
     this.addCommand({
-      id: "history",
-      name: "Browse file history",
-      callback: () => {
-        new HistoryModal(this.app, this).open();
-      },
+      id: "changes",
+      name: "Review changes and conflicts",
+      callback: () => new ChangesModal(this.app, this).open(),
     });
-    this.addRibbonIcon("refresh-cw", "Sync vault", () => {
-      void this.sync(true);
+    this.addCommand({
+      id: "restore",
+      name: "Restore a historical file",
+      callback: () => new RestoreModal(this.app, this).open(),
     });
-    this.registerInterval(
-      window.setInterval(() => {
-        if (this.saved.enabled) void this.sync();
-      }, 30000),
+    this.addCommand({
+      id: "recovery",
+      name: "Browse local recovery",
+      callback: () => new RecoveryModal(this.app, this).open(),
+    });
+    this.scheduler = new ForegroundScheduler(
+      () => this.syncOnce(),
+      () => this.ready && this.settings.automatic && this.session !== null,
+      () => !document.hidden,
+      (error) => this.setStatus(failure(error)),
     );
-    const schedule = () => {
-      if (this.timer) window.clearTimeout(this.timer);
-      this.timer = window.setTimeout(() => {
-        if (this.saved.enabled) void this.sync();
-      }, 1500);
+    const schedule = () => this.scheduler?.schedule();
+    const changed = (path: string) => {
+      if (this.unloaded) return;
+      if (path.split("/").some(part => part.startsWith("."))) return;
+      void this.notifyLocalChange().then(schedule).catch(error => this.setStatus(failure(error)));
     };
-    this.registerEvent(this.app.vault.on("create", schedule));
-    this.registerEvent(this.app.vault.on("modify", schedule));
-    this.registerEvent(this.app.vault.on("delete", schedule));
-    this.registerEvent(this.app.vault.on("rename", schedule));
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        changed(file.path);
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        changed(file.path);
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        changed(file.path);
+      }),
+    );
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (this.unloaded) return;
+      if ([oldPath, file.path].every(path => path.split("/").some(part => part.startsWith(".")))) return;
+      void this.recordRename(oldPath, file.path).then(schedule).catch(error => this.setStatus(failure(error)));
+    }));
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (!document.hidden && this.saved.enabled) void this.sync();
+      if (!document.hidden) schedule();
     });
     this.app.workspace.onLayoutReady(() => {
-      if (this.saved.enabled) void this.sync();
+      if (this.unloaded) return;
+      this.ready = true;
+      void this.initialize().catch((error) => this.setStatus(failure(error)));
     });
   }
-  onunload() {
-    this.stopped = true;
-    if (this.timer) window.clearTimeout(this.timer);
+  onunload(): void {
+    this.unloaded = true;
+    this.ready = false;
+    this.scheduler?.stop();
+    void this.ownership?.retire();
+    this.listeners.clear();
   }
-  private setStatus(text: string) {
-    this.status = text;
-    this.statusEl.setText(`Cloud Sync: ${text}`);
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
   }
-  async persist() {
-    await this.saveData(this.saved);
+  setStatus(value: string): void {
+    this.statusText = value;
+    this.statusElement?.setText(`GitHub: ${value}`);
+    for (const fn of this.listeners) fn();
   }
-  async configure(connection: Connection) {
-    if (this.busy) throw new Error("Wait for the current sync to finish.");
-    validate(connection);
-    connection = {
-      ...connection,
-      endpoint: new URL(connection.endpoint).origin,
-    };
-    // Binding existing baseline to a different remote/key is unsafe; use a new local vault instead.
-    const previous = this.saved.connection;
+  initialize(): Promise<void> {
+    return this.owner().run(() => this.initializeOwned());
+  }
+  private async initializeOwned(): Promise<void> {
+    const owner = this.owner();
+    owner.assertActive();
+    await owner.drainAdmissions();
+    // Invalidate queued callbacks holding previews from the prior configuration.
+    this.rawSession = null;
+    this.session = null;
+    this.modes = null;
     if (
-      this.saved.state &&
-      (connection.endpoint !== previous.endpoint ||
-        connection.vaultId !== previous.vaultId ||
-        connection.secret !== previous.secret)
+      !this.settings.owner ||
+      !this.settings.repository ||
+      !this.settings.secretId
+    )
+      return;
+    let installation: unknown = this.app.loadLocalStorage(installationKey);
+    if (installation === null || installation === undefined) {
+      installation = crypto.randomUUID();
+      this.app.saveLocalStorage(installationKey, installation);
+    }
+    if (
+      typeof installation !== "string" ||
+      !/^[a-f0-9-]{36}$/.test(installation)
     )
       throw new Error(
-        "This vault already has sync history. Set up a new local vault to change server, vault ID, or encryption key.",
+        "Invalid device identity. Preserve the local journal before recovery.",
       );
-    this.saved.connection = { ...connection };
-    this.engine = undefined;
-    await this.persist();
-    this.setStatus("Connection saved");
-  }
-  async api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-    if (this.stopped) throw new Error("Plugin unloaded");
-    const c = this.saved.connection;
-    validate(c);
-    const response = await requestUrl({
-      url: `${c.endpoint.replace(/\/$/, "")}/v1/vaults/${c.vaultId}${path}`,
-      method,
-      headers: {
-        Authorization: `Bearer ${c.token}`,
-        "Content-Type": "application/json",
+    if (!this.app.secretStorage)
+      throw new Error(
+        "Obsidian 1.11.4 or newer is required for secret storage.",
+      );
+    const repository = new GitHubRepository({
+      owner: this.settings.owner,
+      name: this.settings.repository,
+      branch: this.settings.branch,
+      token: async () => {
+        owner.assertActive();
+        const token = this.app.secretStorage.getSecret(this.settings.secretId);
+        if (!token) throw new Error("Choose a GitHub token in settings.");
+        return token;
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      throw: false,
+      transport: {
+        request: async ({ url, method, headers, body }) => {
+          owner.assertActive();
+          const response = await requestUrl({
+            url,
+            method,
+            headers,
+            body,
+            throw: false,
+          });
+          let json: unknown = null;
+          try {
+            json = JSON.parse(response.text);
+          } catch {
+            /* Parsed as invalid by repository boundary. */
+          }
+          return { status: response.status, headers: response.headers, json };
+        },
+      },
     });
-    if (response.status < 200 || response.status >= 300) {
-      const error = new Error(
-        response.status === 401
-          ? "Server rejected the access token."
-          : `Sync server returned ${response.status}.`,
-      ) as Error & { status: number };
-      error.status = response.status;
-      throw error;
+    const files = owner.fence(this.app.vault.adapter);
+    const store = new FileJournalStore(files, installation);
+    const modes: Record<string, FileMode> = Object.create(null);
+    const raw = await store.load();
+    if (raw !== null) {
+      const state = await parseState(raw);
+      for (const [path, ref] of Object.entries(state.base.files)) modes[path] = ref.mode;
     }
-    return response.json as T;
+    const modeKey = `github-vault-sync-modes-${installation}`;
+    const storedModes: unknown = this.app.loadLocalStorage(modeKey);
+    if (storedModes !== null && storedModes !== undefined)
+      Object.assign(modes, parseModes(storedModes));
+    this.modes = await NativeModeStore.open(new FileJournalStore(files, installation, "modes"), modes);
+    await this.transferRenamesOwned();
+    const rawSession = new SyncSession({
+      repository: owner.fence(repository),
+      vault: owner.fence(new GitObsidianVault(this.app, owner.fence(this.modes), () => {
+        owner.assertActive();
+        if (owner.hasPendingRenames()) throw new Error("A vault rename is pending. Retry after its mode metadata is saved.");
+      })),
+      store: owner.fence(store),
+      deviceName: this.settings.deviceName,
+    });
+    owner.assertActive();
+    this.rawSession = rawSession;
+    this.session = owner.queued(rawSession, () => this.rawSession === rawSession);
+    const pendingChange = owner.pendingLocalChange();
+    if (pendingChange !== null) {
+      const result = await rawSession.notifyLocalChange();
+      if (result.kind === "invalidated" || result.kind === "unenrolled") owner.acknowledgeLocalChange(pendingChange);
+    }
+    const status = await rawSession.status();
+    this.setStatus(
+      status.kind === "unenrolled"
+        ? "Review enrollment in settings"
+        : status.kind === "corrupt"
+          ? status.detail
+          : "Ready to sync",
+    );
+    if (status.kind === "enrolled") this.scheduler?.schedule(1000);
   }
-  async sync(manual = false) {
-    if (this.busy || this.stopped) return;
-    this.busy = true;
-    this.setStatus("Syncing…");
-    try {
-      validate(this.saved.connection);
-      if (!this.engine) {
-        const transport: Transport = {
-          heads: () => this.api("/heads"),
-          get: (id, version) =>
-            this.api(`/objects/${id}${version ? `?version=${version}` : ""}`),
-          put: (id, body) => this.api(`/objects/${id}`, "PUT", body),
-        };
-        const port = new ObsidianVaultPort(this.app);
-        this.engine = new SyncEngine({
-          vaultId: this.saved.connection.vaultId,
-          secret: this.saved.connection.secret,
-          transport,
-          port: {
-            list: () => {
-              this.guard();
-              return port.list();
-            },
-            read: (p) => {
-              this.guard();
-              return port.read(p);
-            },
-            write: (...a) => {
-              this.guard();
-              return port.write(...a);
-            },
-            remove: (...a) => {
-              this.guard();
-              return port.remove(...a);
-            },
-          },
-          state: this.saved.state,
-          saveState: async (state) => {
-            this.saved.state = state;
-            await this.persist();
-          },
-        });
-      }
-      const r = await this.engine.sync();
-      this.setStatus(
-        `${r.uploaded} sent · ${r.downloaded} received${r.conflicts ? ` · ${r.conflicts} conflicts` : ""}${r.deferred ? " · retry pending" : ""}`,
+  async assertSingleWriter(): Promise<void> {
+    if (await this.app.vault.adapter.exists(".git"))
+      throw new Error(
+        "Use a fresh plugin-owned vault. Keep your existing Git checkout as the rollback copy.",
       );
-      if (manual || r.conflicts) new Notice(`Cloud Sync: ${this.status}`);
-    } catch (e) {
-      this.setStatus(e instanceof Error ? e.message : "Sync failed");
-      if (manual) new Notice(this.status, 8000);
-    } finally {
-      this.busy = false;
+    const path = `${this.app.vault.configDir}/community-plugins.json`;
+    if (await this.app.vault.adapter.exists(path)) {
+      const plugins: unknown = JSON.parse(
+        await this.app.vault.adapter.read(path),
+      );
+      const conflicts = [
+        "obsidian-git",
+        "obsidian-livesync",
+        "remotely-save",
+        "remotely-sync",
+        "cloud-vault-sync",
+      ];
+      if (
+        Array.isArray(plugins) &&
+        plugins.some((id) => typeof id === "string" && conflicts.includes(id))
+      )
+        throw new Error(
+          "Disable the other sync plugin in this vault before enrolling or syncing.",
+        );
     }
   }
-  private guard() {
-    if (this.stopped) throw new Error("Plugin unloaded");
+  private observeLocalChange(): Promise<unknown> {
+    // This call must happen at observation time: the engine retires the active generation synchronously.
+    const owner = this.owner();
+    const revision = owner.recordLocalChange();
+    if (this.rawSession) return this.rawSession.notifyLocalChange().then(result => {
+      if (result.kind === "invalidated" || result.kind === "unenrolled") owner.acknowledgeLocalChange(revision);
+      return result;
+    });
+    return Promise.resolve();
+  }
+  async notifyLocalChange(): Promise<void> {
+    const owner = this.owner();
+    owner.assertActive();
+    await owner.track(this.observeLocalChange());
+  }
+  private async transferRenamesOwned(): Promise<void> {
+    if (!this.modes) return;
+    const owner = this.owner();
+    for (const rename of owner.pendingRenames()) {
+      owner.assertActive();
+      await this.modes.rename(rename.from, rename.to);
+      owner.acknowledgeRename(rename.id);
+    }
+  }
+  async recordRename(from: string, to: string): Promise<void> {
+    const owner = this.owner();
+    owner.recordRename(from, to);
+    await owner.track(this.observeLocalChange(), () => this.transferRenamesOwned());
+  }
+  syncOnce(): Promise<void> {
+    return this.owner().run(async () => {
+      if (!this.rawSession || !this.ready) return;
+      await this.assertSingleWriter();
+      this.owner().assertActive();
+      this.setStatus("Checking saved changes…");
+      const outcome = await this.rawSession.sync();
+      this.setStatus(describeOutcome(outcome));
+    });
+  }
+  async syncNow(): Promise<void> {
+    if (!this.session) {
+      new Notice(
+        "Configure your repository and review enrollment in GitHub Vault Sync settings.",
+      );
+      return;
+    }
+    await this.scheduler?.now();
+  }
+  private async repositoryBinding(): Promise<RepositoryIdentity | null> {
+    if (this.rawSession) {
+      const status = await this.rawSession.status();
+      if (status.kind === "corrupt") throw new Error(status.detail);
+      return status.kind === "enrolled" ? status.repository : null;
+    }
+    const installation: unknown = this.app.loadLocalStorage(installationKey);
+    if (installation === null || installation === undefined) return null;
+    if (typeof installation !== "string") throw new Error("Invalid device identity.");
+    const store = new FileJournalStore(this.owner().fence(this.app.vault.adapter), installation);
+    const state = await store.load();
+    return state === null ? null : (await parseState(state)).repository;
+  }
+  saveConfiguration(next: Settings): Promise<void> {
+    // Parse synchronously at admission; later edits to the form cannot alter queued saves.
+    const saved = parseSettings(next);
+    return this.owner().run(async () => {
+      const binding = await this.repositoryBinding();
+      if (binding &&
+          (saved.owner.toLowerCase() !== binding.owner.toLowerCase() ||
+           saved.repository.toLowerCase() !== binding.name.toLowerCase() ||
+           saved.branch !== binding.branch))
+        throw new Error("Repository and branch are bound to this vault. Enroll a fresh vault to change them.");
+      this.owner().assertActive();
+      await this.saveData(saved);
+      this.owner().assertActive();
+      this.settings = parseSettings(saved);
+      if (!binding || !this.rawSession) await this.initializeOwned();
+      else this.scheduler?.schedule();
+    });
+  }
+  exportRecoveryCopy(id: string): Promise<string> {
+    return this.owner().run(async () => {
+      const snapshot = await this.rawSession?.exportRecovery({ id });
+      if (!snapshot || ("kind" in snapshot && typeof snapshot.kind === "string"))
+        throw new Error("Recovery record is unavailable.");
+      const files = this.owner().fence(this.app.vault.adapter);
+      const directory = `.git-vault-sync-export-${crypto.randomUUID()}`;
+      await files.mkdir(directory);
+      for (const [path, value] of Object.entries(snapshot)) {
+        const segments = path.split("/");
+        segments.pop();
+        let parent = directory;
+        for (const segment of segments) {
+          parent += `/${segment}`;
+          if (!(await files.exists(parent))) await files.mkdir(parent);
+        }
+        await files.writeBinary(`${directory}/${path}`, decodeBase64(value.data).buffer);
+      }
+      return directory;
+    });
+  }
+
+}
+function describeOutcome(outcome: SyncOutcome): string {
+  switch (outcome.kind) {
+    case "unenrolled":
+      return "Review enrollment in settings";
+    case "corrupt":
+      return `Recovery needed: ${outcome.detail}`;
+    case "paused":
+      return `Paused: ${outcome.pause.detail}`;
+    case "up-to-date":
+      return `Content synced · ${outcome.commit.slice(0, 7)}`;
+    case "synced":
+      return outcome.carried.length
+        ? `Committed · ${outcome.carried.length} newer local edits pending`
+        : `Content synced · ${outcome.commit.slice(0, 7)}`;
+    case "needs-decision":
+      return `${outcome.conflicts.length} decisions needed`;
+    case "blocked":
+      return `${outcome.steps.length} file updates held · open Changes`;
+    case "publication-unknown":
+      return "Publication uncertain · open Changes to review";
+    case "rejected":
+      return outcome.message;
+    case "contended":
+      return "Another device is publishing; retrying shortly";
   }
 }
-class SyncSettings extends PluginSettingTab {
+class GitSettings extends PluginSettingTab {
   constructor(
     app: App,
-    private plugin: CloudVaultSync,
+    private plugin: GitVaultSync,
   ) {
     super(app, plugin);
   }
-  display() {
+  display(): void {
     const el = this.containerEl;
     el.empty();
-    const p = this.plugin;
-    const draft = { ...p.saved.connection };
-    el.createEl("h2", { text: "Cloud Vault Sync" });
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "GitHub Vault Sync" });
+    el.createEl("p", {
+      text: "Saved notes become commits in your private repository. Only accepted GitHub versions are shared. Configuration files are excluded.",
+    });
+    const draft = { ...this.plugin.settings };
+    new Setting(el).setName("GitHub owner").addText((t) =>
+      t
+        .setValue(draft.owner)
+        .setPlaceholder("Your username")
+        .onChange((v) => (draft.owner = v.trim())),
+    );
+    new Setting(el).setName("Repository").addText((t) =>
+      t
+        .setValue(draft.repository)
+        .setPlaceholder("notes")
+        .onChange((v) => (draft.repository = v.trim())),
+    );
     new Setting(el)
-      .setName("Sync status")
-      .setDesc(p.status)
+      .setName("Branch")
+      .addText((t) =>
+        t.setValue(draft.branch).onChange((v) => (draft.branch = v.trim())),
+      );
+    new Setting(el)
+      .setName("GitHub token")
+      .setDesc(
+        "Use a fine-grained token for this repository with Contents read/write and Metadata read. The token stays in Obsidian SecretStorage, outside vault files.",
+      )
+      .addComponent((container) =>
+        new SecretComponent(this.app, container)
+          .setValue(draft.secretId)
+          .onChange((v) => (draft.secretId = v ?? "")),
+      );
+    new Setting(el)
+      .setName("Device name")
+      .setDesc("Included in commit messages.")
+      .addText((t) =>
+        t.setValue(draft.deviceName).onChange((v) => (draft.deviceName = v)),
+      );
+    new Setting(el)
+      .setName("Automatic sync")
+      .setDesc(
+        "Publish saved changes after a short pause; check for remote changes every minute while Obsidian is active.",
+      )
+      .addToggle((t) =>
+        t.setValue(draft.automatic).onChange((v) => (draft.automatic = v)),
+      );
+    new Setting(el).addButton((b) =>
+      b
+        .setButtonText("Save settings")
+        .setCta()
+        .onClick(async () => {
+          b.setDisabled(true);
+          try {
+            await this.plugin.saveConfiguration(draft);
+            new Notice("Settings saved.");
+          } catch (error) {
+            new Notice(failure(error), 12000);
+          } finally {
+            b.setDisabled(false);
+          }
+        }),
+    );
+    el.createEl("h3", { text: "Enroll this device" });
+    el.createEl("p", {
+      text: "Start with a fresh vault and keep your existing vault as a backup. Disable Obsidian Sync, Git, cloud-folder sync, and other sync tools for this vault. Enrollment previews all differences before making changes.",
+    });
+    let soleWriter = false;
+    new Setting(el)
+      .setName("This plugin is the only sync writer")
+      .addToggle((t) => t.onChange((v) => (soleWriter = v)));
+    new Setting(el).addButton((b) =>
+      b.setButtonText("Preview enrollment").onClick(async () => {
+        if (!soleWriter) {
+          new Notice(
+            "Confirm that other sync tools are disabled for this vault.",
+          );
+          return;
+        }
+        b.setDisabled(true);
+        try {
+          await this.plugin.assertSingleWriter();
+          if (!this.plugin.session)
+            throw new Error("Save repository and token settings first.");
+          const preview = await this.plugin.session.previewEnrollment();
+          if (preview.kind !== "preview") {
+            new Notice(
+              preview.kind === "corrupt"
+                ? preview.detail
+                : "This device is already enrolled.",
+            );
+            return;
+          }
+          new EnrollmentModal(this.app, this.plugin, preview).open();
+        } catch (error) {
+          new Notice(failure(error), 12000);
+        } finally {
+          b.setDisabled(false);
+        }
+      }),
+    );
+    el.createEl("p", {
+      text: "V1 holds existing attachment replacements and deletions when safe atomic application is unavailable. Review them in Changes. Local recovery is retained in .git-vault-sync; keep an independent backup.",
+      cls: "git-sync-muted",
+    });
+  }
+}
+class EnrollmentModal extends Modal {
+  constructor(
+    app: App,
+    private plugin: GitVaultSync,
+    private preview: EnrollmentPreview,
+  ) {
+    super(app);
+  }
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "Review this device" });
+    el.createEl("p", {
+      text: `${this.preview.repository.owner}/${this.preview.repository.name} · ${this.preview.repository.branch} · ${this.preview.commit.slice(0, 7)}`,
+    });
+    el.createEl("p", {
+      text: `${this.preview.unchanged} unchanged files; ${this.preview.items.length} differences. Local-only files may be published after enrollment. Conflicting files require a decision.`,
+    });
+    const list = el.createDiv({ cls: "git-sync-list" });
+    for (const item of this.preview.items)
+      list.createEl("p", {
+        text: `${item.action.replaceAll("-", " ")} · ${item.path}`,
+      });
+    new Setting(el)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) =>
+        b
+          .setButtonText("Enroll and sync")
+          .setCta()
+          .onClick(async () => {
+            b.setDisabled(true);
+            try {
+              await this.plugin.assertSingleWriter();
+              const outcome = await this.plugin.session?.enroll({
+                token: this.preview.token,
+              });
+              if (outcome?.kind === "stale") {
+                this.close();
+                new EnrollmentModal(
+                  this.app,
+                  this.plugin,
+                  outcome.preview,
+                ).open();
+                return;
+              }
+              if (outcome?.kind !== "enrolled")
+                throw new Error(
+                  "Enrollment could not complete. Reopen the preview.",
+                );
+              this.close();
+              await this.plugin.syncNow();
+              new ChangesModal(this.app, this.plugin).open();
+            } catch (error) {
+              new Notice(failure(error), 12000);
+              b.setDisabled(false);
+            }
+          }),
+      );
+  }
+}
+class ChangesModal extends Modal {
+  private unsubscribe: (() => void) | null = null;
+  private summary: HTMLElement | null = null;
+  constructor(
+    app: App,
+    private plugin: GitVaultSync,
+  ) {
+    super(app);
+  }
+  onOpen(): void {
+    this.unsubscribe = this.plugin.subscribe(() =>
+      this.summary?.setText(this.plugin.statusText),
+    );
+    void this.render();
+  }
+  onClose(): void {
+    this.unsubscribe?.();
+  }
+  async render(): Promise<void> {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "Changes" });
+    this.summary = el.createEl("p", { text: this.plugin.statusText });
+    new Setting(el)
       .addButton((b) =>
         b
           .setButtonText("Sync now")
           .setCta()
           .onClick(async () => {
-            await p.sync(true);
-            this.display();
+            b.setDisabled(true);
+            await this.plugin.syncNow();
+            await this.render();
           }),
-      );
-    new Setting(el)
-      .setName("Automatic sync")
-      .setDesc(
-        "Sync changes while Obsidian is open; check other devices every 30 seconds.",
       )
-      .addToggle((t) =>
-        t.setValue(p.saved.enabled).onChange(async (v) => {
-          p.saved.enabled = v;
-          await p.persist();
+      .addButton((b) =>
+        b.setButtonText("Refresh").onClick(() => {
+          void this.render();
         }),
       );
-    el.createEl("h3", { text: "Connection" });
-    const inputs: Partial<Record<keyof Connection, TextComponent>> = {};
-    const field = (name: string, key: keyof Connection, secret = false) =>
-      new Setting(el).setName(name).addText((t) => {
-        inputs[key] = t;
-        t.setValue(draft[key]);
-        t.inputEl.type = secret ? "password" : "text";
-        t.inputEl.autocomplete = "off";
-        t.onChange((v) => {
-          draft[key] = v.trim();
+    try {
+      const status = await this.plugin.session?.inspect();
+      if (!status || status.kind === "unenrolled") {
+        el.createEl("p", {
+          text: "Open GitHub Vault Sync settings to connect and enroll this device.",
         });
+        return;
+      }
+      if (status.kind === "corrupt") {
+        el.createEl("p", { text: status.detail });
+        return;
+      }
+      el.createEl("p", {
+        text: `Last checkpoint ${status.commit.slice(0, 7)} · ${status.repository.owner}/${status.repository.name}`,
+        cls: "git-sync-muted",
       });
-    field("Worker URL", "endpoint");
-    field("Server access token", "token", true);
-    field("Vault ID", "vaultId");
-    field("Encryption key", "secret", true);
-    new Setting(el)
-      .setName("New remote vault")
-      .setDesc(
-        "Generate identifiers on the first device only. Transfer the same connection details to every other device.",
-      )
-      .addButton((b) =>
-        b.setButtonText("Generate").onClick(() => {
-          draft.vaultId = crypto.randomUUID();
-          draft.secret = generateSecret();
-          inputs.vaultId?.setValue(draft.vaultId);
-          inputs.secret?.setValue(draft.secret);
-          new ConnectionModal(this.app, draft).open();
-        }),
-      );
-    new Setting(el)
-      .setName("Save connection")
-      .setDesc(
-        "Token and key are stored locally in this plugin’s data.json. Keep that file private.",
-      )
-      .addButton((b) =>
-        b.setButtonText("Save").onClick(async () => {
-          try {
-            await p.configure(draft);
-            this.display();
-          } catch (e) {
-            new Notice(String(e));
-          }
-        }),
-      );
-    new Setting(el)
-      .setName("Connect another device")
-      .addButton((b) =>
-        b
-          .setButtonText("Show setup code")
-          .onClick(() =>
-            new ConnectionModal(this.app, p.saved.connection).open(),
-          ),
-      )
-      .addButton((b) =>
-        b
-          .setButtonText("Import setup code")
-          .onClick(() =>
-            new ImportModal(this.app, p, () => this.display()).open(),
-          ),
-      );
-    el.createEl("h3", { text: "Recovery" });
-    new Setting(el)
-      .setName("File history")
-      .setDesc("Recover an older version as a separate file.")
-      .addButton((b) =>
-        b
-          .setButtonText("Browse history")
-          .onClick(() => new HistoryModal(this.app, p).open()),
-      );
-    el.createEl("p", {
-      text: "Notes and attachments up to 8 MiB sync. Hidden folders, Obsidian settings and plugins are excluded. Conflicting edits are kept as separate files. Local recovery copies are kept in .cloud-vault-sync-recovery.",
-    });
+      if (status.pause) el.createEl("p", { text: status.pause.detail });
+      if (status.phase === "publication-unknown")
+        new Setting(el)
+          .setName("Publication needs review")
+          .setDesc("The candidate is not confirmed in GitHub history. Automatic publication is held to avoid replaying a removed commit. Sync now checks again without republishing.")
+          .addButton(b => b.setButtonText("Review recovery").onClick(async () => {
+            b.setDisabled(true);
+            try {
+              const preview = await this.plugin.session?.previewPublicationRecovery();
+              if (preview?.kind === "reachable") { await this.plugin.syncNow(); await this.render(); }
+              else if (preview?.kind === "preview") new PublicationRecoveryModal(this.app, this.plugin, preview).open();
+              else throw new Error(`Recovery unavailable: ${preview?.kind ?? "not enrolled"}`);
+            } catch (error) { new Notice(failure(error), 12000); }
+            finally { b.setDisabled(false); }
+          }));
+      for (const conflict of status.conflicts) {
+        if (conflict.kind === "collision") {
+          el.createEl("p", {
+            text: `Rename these colliding paths before continuing: ${conflict.paths.join(", ")}`,
+          });
+          continue;
+        }
+        new Setting(el)
+          .setName(conflict.path)
+          .setDesc(conflict.kind.replaceAll("-", " "))
+          .addButton((b) =>
+            b.setButtonText("Review").onClick(() =>
+              new ConflictModal(this.app, this.plugin, conflict, () => {
+                void this.render();
+              }).open(),
+            ),
+          );
+      }
+      for (const step of status.blocked)
+        new Setting(el)
+          .setName(step.path)
+          .setDesc(step.reason)
+          .addButton((b) =>
+            b.setButtonText("Keep local instead").onClick(() => {
+              new ConfirmModal(
+                this.app,
+                "Keep local version?",
+                "This releases the held update. Your local version will be proposed for a later GitHub commit; conflicts may still require review.",
+                async () => {
+                  const result = await this.plugin.session?.keepLocal({
+                    path: step.path,
+                  });
+                  if (result?.kind !== "recorded")
+                    throw new Error(
+                      "The held update changed. Refresh and review again.",
+                    );
+                  await this.plugin.syncNow();
+                  await this.render();
+                },
+              ).open();
+            }),
+          );
+      const pending = status.pending ?? [];
+      el.createEl("h3", { text: `Saved local changes (${pending.length})` });
+      const list = el.createDiv({ cls: "git-sync-list" });
+      for (const change of pending)
+        list.createEl("p", { text: `${change.change} · ${change.path}` });
+      if (!pending.length)
+        list.createEl("p", { text: "No saved local changes." });
+      el.createEl("p", {
+        text: "Content sync excludes .obsidian settings, plugins, hidden files, and Git metadata. Unsaved editor text is not yet a captured draft.",
+        cls: "git-sync-muted",
+      });
+    } catch (error) {
+      el.createEl("p", { text: failure(error) });
+    }
   }
 }
-class ConnectionModal extends Modal {
+class ConflictModal extends Modal {
   constructor(
     app: App,
-    private connection: Connection,
-  ) {
-    super(app);
-  }
-  onOpen() {
-    this.contentEl.createEl("h2", { text: "Private setup code" });
-    this.contentEl.createEl("p", {
-      text: "This code grants full access to your vault. Save the connection on this device, then transfer it privately to your other devices.",
-    });
-    const t = this.contentEl.createEl("textarea");
-    t.value = JSON.stringify(this.connection);
-    t.rows = 8;
-    t.style.width = "100%";
-    t.readOnly = true;
-    t.addEventListener("click", () => t.select());
-  }
-}
-class ImportModal extends Modal {
-  constructor(
-    app: App,
-    private plugin: CloudVaultSync,
+    private plugin: GitVaultSync,
+    private conflict: VersionConflict,
     private done: () => void,
   ) {
     super(app);
   }
-  onOpen() {
-    this.contentEl.createEl("h2", { text: "Import private setup code" });
-    const t = this.contentEl.createEl("textarea");
-    t.rows = 8;
-    t.style.width = "100%";
-    new Setting(this.contentEl).addButton((b) =>
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: this.conflict.path });
+    el.createEl("p", {
+      text: "Both reviewed versions remain recoverable. Your decision is rechecked if either version changes.",
+    });
+    for (const [label, value] of [
+      ["Common version", this.conflict.base],
+      ["This device", this.conflict.local],
+      ["GitHub", this.conflict.remote],
+    ] as const) {
+      el.createEl("h3", { text: label });
+      el.createEl("pre", {
+        text: entryPreview(value),
+        cls: "git-sync-preview",
+      });
+    }
+    let choice: ChoiceInput | null = null;
+    const result = el.createEl("pre", {
+      text: "Choose a version to preview the result.",
+      cls: "git-sync-preview",
+    });
+    const buttons = new Setting(el);
+    for (const kind of this.conflict.choices) {
+      if (
+        kind === "edit" &&
+        (!/\.md$/i.test(this.conflict.path) ||
+          (this.conflict.local && entryText(this.conflict.local) === null))
+      )
+        continue;
+      buttons.addButton((b) =>
+        b
+          .setButtonText(
+            {
+              mine: this.conflict.local ? "Use mine" : "Accept local deletion",
+              remote: this.conflict.remote
+                ? "Use GitHub"
+                : "Accept GitHub deletion",
+              both: "Keep both",
+              edit: "Write merged note",
+            }[kind],
+          )
+          .onClick(() => {
+            if (kind === "edit") {
+              const editor = el.createEl("textarea", {
+                cls: "git-sync-editor",
+              });
+              editor.value =
+                entryText(this.conflict.local ?? this.conflict.remote!) ?? "";
+              choice = {
+                kind: "edit",
+                data: encodeBase64(new TextEncoder().encode(editor.value)),
+              };
+              editor.oninput = () => {
+                choice = {
+                  kind: "edit",
+                  data: encodeBase64(new TextEncoder().encode(editor.value)),
+                };
+                result.setText(editor.value);
+              };
+              result.setText(editor.value);
+            } else {
+              choice = { kind };
+              result.setText(
+                kind === "both"
+                  ? `GitHub version: ${this.conflict.path}\nYour version: ${this.conflict.sibling}`
+                  : entryPreview(
+                      kind === "mine"
+                        ? this.conflict.local
+                        : this.conflict.remote,
+                    ),
+              );
+            }
+          }),
+      );
+    }
+    new Setting(el).addButton((b) =>
       b
-        .setButtonText("Import and save")
+        .setButtonText("Confirm decision")
         .setCta()
         .onClick(async () => {
+          if (!choice) {
+            new Notice("Choose a version first.");
+            return;
+          }
+          b.setDisabled(true);
           try {
-            const v = JSON.parse(t.value);
-            await this.plugin.configure({
-              endpoint: v.endpoint,
-              token: v.token,
-              vaultId: v.vaultId,
-              secret: v.secret,
+            const resolution = await this.plugin.session?.resolve({
+              conflictId: this.conflict.id,
+              choice,
             });
+            if (resolution?.kind !== "recorded")
+              throw new Error(
+                "This conflict changed. Refresh Changes and review the new versions.",
+              );
             this.close();
+            await this.plugin.syncNow();
             this.done();
-          } catch (e) {
-            new Notice(String(e));
+          } catch (error) {
+            new Notice(failure(error), 12000);
+            b.setDisabled(false);
           }
         }),
     );
   }
 }
-class HistoryModal extends Modal {
+class PublicationRecoveryModal extends Modal {
+  constructor(app: App, private plugin: GitVaultSync, private preview: PublicationRecoveryPreview) { super(app); }
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "Review uncertain publication" });
+    el.createEl("p", { text: "Continuing archives the candidate and your current drafts locally, releases the held operation, and pauses for a fresh enrollment review. It does not change GitHub or your notes. Archived drafts can be recovered explicitly afterward." });
+    el.createEl("p", { text: `Candidate ${this.preview.candidate} · current GitHub head ${this.preview.head}`, cls: "git-sync-muted" });
+    const paths = new Set([...Object.keys(this.preview.candidateFiles), ...Object.keys(this.preview.headFiles), ...Object.keys(this.preview.localFiles)]);
+    for (const path of [...paths].sort()) {
+      const local = this.preview.localFiles[path] ?? null;
+      const remote = this.preview.headFiles[path] ?? null;
+      const candidate = this.preview.candidateFiles[path] ?? null;
+      if (local?.oid === remote?.oid && remote?.oid === candidate?.oid && local?.mode === remote?.mode && remote?.mode === candidate?.mode) continue;
+      const details = el.createEl("details");
+      details.createEl("summary", { text: path });
+      for (const [label, value] of [["This device", local], ["Current GitHub", remote], ["Held candidate", candidate]] as const) {
+        details.createEl("h3", { text: label });
+        details.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
+      }
+    }
+    new Setting(el).addButton(b => b.setButtonText("Keep held").onClick(() => this.close())).addButton(b => b.setButtonText("Archive and review enrollment").onClick(() => {
+      new ConfirmModal(this.app, "Release this held publication?", "Both the candidate and current drafts will be retained in local recovery. A fresh enrollment preview is required before syncing can resume.", async () => {
+        const result = await this.plugin.session?.recoverPublication({ token: this.preview.token });
+        if (result?.kind !== "released") throw new Error("The publication or local files changed. Close this preview and review again.");
+        this.plugin.setStatus("Paused · review enrollment");
+        this.close();
+        const enrollment = await this.plugin.session?.previewEnrollment();
+        if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment).open();
+        else new Notice("Open settings to review enrollment before resuming sync.");
+      }).open();
+    }));
+  }
+}
+class ConfirmModal extends Modal {
   constructor(
     app: App,
-    private plugin: CloudVaultSync,
+    private titleText: string,
+    private detail: string,
+    private action: () => Promise<void>,
   ) {
     super(app);
   }
-  onOpen() {
-    this.contentEl.createEl("h2", { text: "File history" });
-    let path = this.app.workspace.getActiveFile()?.path ?? "";
+  onOpen(): void {
+    this.contentEl.createEl("h2", { text: this.titleText });
+    this.contentEl.createEl("p", { text: this.detail });
     new Setting(this.contentEl)
-      .setName("Vault file path")
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) =>
+        b
+          .setButtonText("Confirm")
+          .setCta()
+          .onClick(async () => {
+            b.setDisabled(true);
+            try {
+              await this.action();
+              this.close();
+            } catch (error) {
+              new Notice(failure(error), 12000);
+              b.setDisabled(false);
+            }
+          }),
+      );
+  }
+}
+class RestoreModal extends Modal {
+  constructor(
+    app: App,
+    private plugin: GitVaultSync,
+  ) {
+    super(app);
+  }
+  onOpen(): void {
+    const el = this.contentEl;
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "Restore from GitHub history" });
+    el.createEl("p", {
+      text: "Preview a file from an earlier commit. Restoring creates a local draft and then a new commit; it never rewinds the branch.",
+    });
+    let path = this.app.workspace.getActiveFile()?.path ?? "",
+      commit = "";
+    new Setting(el)
+      .setName("File path")
       .addText((t) => t.setValue(path).onChange((v) => (path = v)));
-    const results = this.contentEl.createDiv();
-    new Setting(this.contentEl).addButton((b) =>
-      b.setButtonText("Load versions").onClick(async () => {
-        results.empty();
-        const selectedPath = path;
+    new Setting(el)
+      .setName("Historical commit")
+      .setDesc("Full commit SHA from your GitHub history.")
+      .addText((t) => t.onChange((v) => (commit = v.trim())));
+    const output = el.createDiv();
+    new Setting(el).addButton((b) =>
+      b.setButtonText("Preview restore").onClick(async () => {
+        b.setDisabled(true);
+        output.empty();
         try {
-          const c = this.plugin.saved.connection;
-          const crypt = await VaultCrypto.create(c.vaultId, c.secret);
-          const id = await crypt.id(selectedPath);
-          const loadPage = async (before?: number): Promise<void> => {
-            const response = await this.plugin.api<{
-              versions: Head[];
-              before: number | null;
-            }>(`/history/${id}${before ? `?before=${before}` : ""}`);
-            for (const v of response.versions) {
-              new Setting(results)
-                .setName(
-                  `${new Date(v.updatedAt).toLocaleString()} · revision ${v.version}${v.deleted ? " · deleted" : ""}`,
-                )
-                .addButton((button) =>
-                  button
-                    .setButtonText("Recover copy")
-                    .setDisabled(v.deleted)
-                    .onClick(async () => {
-                      try {
-                        const object = await this.plugin.api<RemoteObject>(
-                          `/objects/${id}?version=${v.version}`,
-                        );
-                        if (
-                          object.id !== id ||
-                          object.version !== v.version ||
-                          object.deleted !== v.deleted
-                        )
-                          throw new Error("History metadata mismatch.");
-                        const plain = await crypt.open(
-                          id,
-                          object.payload,
-                          object.deleted,
-                        );
-                        if (plain.content === null)
-                          throw new Error("This is a deletion marker.");
-                        const dot = selectedPath.lastIndexOf("."),
-                          split =
-                            dot > selectedPath.lastIndexOf("/")
-                              ? dot
-                              : selectedPath.length;
-                        const dest = `${selectedPath.slice(0, split)} (recovered ${v.version}-${crypto.randomUUID()})${selectedPath.slice(split)}`;
-                        if (
-                          !(await new ObsidianVaultPort(this.app).write(
-                            dest,
-                            base64ToBytes(plain.content),
-                            plain.mtime,
-                            null,
-                          ))
-                        )
-                          throw new Error("Recovery destination exists.");
-                        new Notice(`Recovered ${dest}`);
-                      } catch (e) {
-                        new Notice(String(e));
-                      }
-                    }),
-                );
-            }
-            if (response.before !== null) {
-              const more = new Setting(results).addButton((button) =>
-                button
-                  .setButtonText("Load older versions")
-                  .onClick(async () => {
-                    button.setDisabled(true);
-                    try {
-                      await loadPage(response.before!);
-                      more.settingEl.remove();
-                    } catch (e) {
-                      new Notice(String(e));
-                      button.setDisabled(false);
-                    }
-                  }),
-              );
-            }
-            if (!before && !response.versions.length)
-              results.setText("No versions found.");
-          };
-          await loadPage();
-        } catch (e) {
-          results.setText(String(e));
+          const preview = await this.plugin.session?.previewRestore({
+            path,
+            commit,
+          });
+          if (preview?.kind !== "preview")
+            throw new Error(
+              `Cannot preview restore: ${preview?.kind ?? "not enrolled"}`,
+            );
+          output.createEl("pre", {
+            text: entryPreview(preview.historical),
+            cls: "git-sync-preview",
+          });
+          new Setting(output).addButton((confirm) =>
+            confirm
+              .setButtonText("Restore as a new draft")
+              .setCta()
+              .onClick(async () => {
+                confirm.setDisabled(true);
+                try {
+                  const outcome = await this.plugin.session?.restore({
+                    token: preview.token,
+                    path,
+                    commit,
+                  });
+                  if (
+                    outcome?.kind !== "restored" &&
+                    outcome?.kind !== "unchanged"
+                  )
+                    throw new Error(
+                      `Restore held: ${outcome?.kind ?? "not enrolled"}`,
+                    );
+                  this.close();
+                  await this.plugin.syncNow();
+                } catch (error) {
+                  new Notice(failure(error), 12000);
+                  confirm.setDisabled(false);
+                }
+              }),
+          );
+        } catch (error) {
+          output.createEl("p", { text: failure(error) });
+        } finally {
+          b.setDisabled(false);
         }
       }),
     );
+  }
+}
+class RecoveryModal extends Modal {
+  constructor(
+    app: App,
+    private plugin: GitVaultSync,
+  ) {
+    super(app);
+  }
+  onOpen(): void {
+    void this.render();
+  }
+  async render(): Promise<void> {
+    const el = this.contentEl;
+    el.empty();
+    el.addClass("git-sync-panel");
+    el.createEl("h2", { text: "Local recovery" });
+    el.createEl("p", {
+      text: "Captured drafts and preimages stay on this device. Export creates a separate hidden folder and does not overwrite notes.",
+    });
+    try {
+      const records = await this.plugin.session?.listRecovery();
+      if (!Array.isArray(records)) {
+        el.createEl("p", { text: "No accessible recovery records." });
+        return;
+      }
+      for (const record of records)
+        new Setting(el)
+          .setName(`${record.createdAt} · ${record.paths.length} files`)
+          .setDesc(
+            `${record.reason} · ${record.bytes.toLocaleString()} bytes${record.pinned ? " · local-only bytes retained" : ""}`,
+          )
+          .addButton((b) =>
+            b.setButtonText("Export copy").onClick(async () => {
+              b.setDisabled(true);
+              try {
+                const directory = await this.plugin.exportRecoveryCopy(record.id);
+                new Notice(`Recovery exported to ${directory}`, 15000);
+              } catch (error) {
+                new Notice(failure(error), 12000);
+              } finally {
+                b.setDisabled(false);
+              }
+            }),
+          );
+    } catch (error) {
+      el.createEl("p", { text: failure(error) });
+    }
   }
 }

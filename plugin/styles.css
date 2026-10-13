@@ -1,0 +1,11 @@
+.git-sync-panel { max-width: 900px; margin-inline: auto; }
+.git-sync-panel h2 { margin-bottom: 12px; }
+.git-sync-panel h3 { margin-top: 24px; }
+.git-sync-muted { color: var(--text-muted); font-size: var(--font-small); }
+.git-sync-list { max-height: 300px; overflow: auto; border-block: 1px solid var(--background-modifier-border); padding-block: 8px; }
+.git-sync-list p { margin: 6px 0; overflow-wrap: anywhere; }
+.git-sync-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; padding: 16px; background: var(--background-secondary); border-radius: 8px; font: var(--font-small) var(--font-monospace); }
+.git-sync-editor { width: 100%; min-height: 160px; margin-block: 12px; }
+.git-sync-status { cursor: pointer; }
+.git-sync-panel .setting-item-control { flex-wrap: wrap; }
+@media(max-width:600px) { .git-sync-panel .setting-item { flex-wrap: wrap; gap: 12px; } .git-sync-panel .setting-item-info { flex-basis: 100%; } .git-sync-panel .setting-item-control { justify-content: flex-start; } }

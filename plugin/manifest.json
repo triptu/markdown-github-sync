@@ -1,9 +1,9 @@
 {
-  "id": "cloud-vault-sync",
-  "name": "Cloud Vault Sync",
-  "version": "0.1.0",
-  "minAppVersion": "1.6.0",
-  "description": "End-to-end encrypted sync through your own Cloudflare Worker.",
+  "id": "github-vault-sync",
+  "name": "GitHub Vault Sync",
+  "version": "0.2.0-beta.1",
+  "minAppVersion": "1.11.4",
+  "description": "GitHub-authoritative note sync with explicit conflicts and local recovery.",
   "author": "Cloud Vault Sync contributors",
   "isDesktopOnly": false
 }
