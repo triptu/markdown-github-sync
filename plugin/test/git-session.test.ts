@@ -456,6 +456,122 @@ test("history restore stages a reviewed draft that publishes as a new commit", a
   assert.ok(await repository.isAncestor(second, repository.branchHead), "history is extended, not rewound");
 });
 
+for (const when of ["before", "after"] as const) {
+  test(`restore authorization save failure ${when} durability resumes only a saved review`, async () => {
+    const historical = await entryFromText("historical", "100755");
+    const current = await entryFromText("current", "100644");
+    const repository = await MemoryRepository.create({ "n.md": historical });
+    const source = repository.branchHead;
+    await repository.push({ "n.md": current });
+    const a = await enrolled(repository);
+    const checkpoint = repository.branchHead;
+    const preview = await a.session.previewRestore({ path: "n.md", commit: source });
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") return;
+    const applyCalls = a.vault.applyCalls;
+    failSaveMatching(a.store, (state) => state.operation?.kind === "restore", when);
+    await assert.rejects(a.session.restore(preview), Crash);
+    assert.equal(a.vault.applyCalls, applyCalls, "authorization must be durable before the native write");
+    const saved = await parseState(await a.store.load());
+    assert.equal(saved.base.commit, checkpoint);
+    assert.equal(saved.operation?.kind === "restore", when === "after");
+    const outcome = await a.restart().sync();
+    assert.ok(outcome.kind === "synced" || outcome.kind === "up-to-date", JSON.stringify(outcome));
+    assert.equal(a.vault.text("n.md"), when === "after" ? "historical" : "current");
+    assert.equal(repository.headFiles()["n.md"].mode, when === "after" ? "100755" : "100644");
+    assert.equal(entryText(repository.headFiles()["n.md"]), when === "after" ? "historical" : "current");
+  });
+}
+
+for (const attempted of [false, true]) {
+  test(`reviewed restore replays exact native intent after ${attempted ? "post" : "pre"} write interruption`, async () => {
+    const historical = await entryFromText("historical", "100755");
+    const repository = await MemoryRepository.create({ "n.md": historical });
+    const source = repository.branchHead;
+    await repository.push({ "n.md": await entryFromText("current", "100644") });
+    const a = await enrolled(repository);
+    const checkpoint = repository.branchHead;
+    const preview = await a.session.previewRestore({ path: "n.md", commit: source });
+    assert.equal(preview.kind, "preview");
+    if (preview.kind !== "preview") return;
+    a.vault.pendingNext = { path: "n.md", mode: attempted ? "crash" : "refuse" };
+    if (attempted) await assert.rejects(a.session.restore(preview), Crash);
+    else assert.equal((await a.session.restore(preview)).kind, "blocked");
+    const intent = [...a.vault.intents.values()][0]!;
+    const saved = await parseState(await a.store.load());
+    assert.equal(saved.base.commit, checkpoint, "restore does not move the checkpoint to the historical commit");
+    assert.ok(saved.operation?.kind === "restore" && saved.operation.sourceCommit === source);
+    assert.equal((await a.restart().sync()).kind, "synced");
+    assert.ok(a.vault.authorizations.some((item) => item.replay.includes(intent.id)));
+    assert.equal(a.vault.text("n.md"), "historical");
+    assert.equal(repository.headFiles()["n.md"].mode, "100755");
+    assert.ok(await repository.isAncestor(checkpoint, repository.branchHead));
+  });
+}
+
+test("newer local edit after a restore interruption survives restart and is never replaced by history", async () => {
+  const historical = await entryFromText("historical", "100755");
+  const repository = await MemoryRepository.create({ "n.md": historical });
+  const source = repository.branchHead;
+  await repository.push({ "n.md": await entryFromText("current", "100644") });
+  const a = await enrolled(repository);
+  const preview = await a.session.previewRestore({ path: "n.md", commit: source });
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: "n.md", mode: "refuse" };
+  assert.equal((await a.session.restore(preview)).kind, "blocked");
+  await a.vault.write("n.md", "newer edit");
+  const intent = [...a.vault.intents.values()][0]!;
+  const outcome = await a.restart().sync();
+  assert.equal(outcome.kind, "synced");
+  assert.equal(a.vault.text("n.md"), "newer edit");
+  assert.ok(a.vault.authorizations.some((item) => item.replay.includes(intent.id)));
+  assert.equal(entryText(repository.headFiles()["n.md"]), "newer edit");
+  assert.equal((await parseState(await a.store.load())).operation, null);
+});
+
+test("a restore whose durable history no longer matches cannot authorize native replay", async () => {
+  const repository = await MemoryRepository.create({ "n.md": await entryFromText("historical", "100755") });
+  const source = repository.branchHead;
+  await repository.push({ "n.md": await entryFromText("current", "100644") });
+  const a = await enrolled(repository);
+  const preview = await a.session.previewRestore({ path: "n.md", commit: source });
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: "n.md", mode: "refuse" };
+  assert.equal((await a.session.restore(preview)).kind, "blocked");
+  const saved = JSON.parse(a.store.raw!);
+  saved.operation.sourceCommit = repository.branchHead;
+  a.store.raw = JSON.stringify(saved);
+  const authorizations = a.vault.authorizations.length;
+  await assert.rejects(a.restart().sync(), /Historical bytes differ/);
+  assert.equal(a.vault.authorizations.length, authorizations);
+  assert.equal(a.vault.intents.size, 1);
+  assert.equal(a.vault.text("n.md"), "current");
+});
+
+test("restore authorization replays only its path and cancels an unrelated native intent", async () => {
+  const repository = await MemoryRepository.create({ "n.md": await entryFromText("historical") });
+  const source = repository.branchHead;
+  await repository.push({ "n.md": await entryFromText("current") });
+  const a = await enrolled(repository);
+  const preview = await a.session.previewRestore({ path: "n.md", commit: source });
+  assert.equal(preview.kind, "preview");
+  if (preview.kind !== "preview") return;
+  a.vault.pendingNext = { path: "n.md", mode: "refuse" };
+  assert.equal((await a.session.restore(preview)).kind, "blocked");
+  const restoreIntent = a.vault.intents.get("n.md")!;
+  const kept = await entryFromText("kept");
+  a.vault.files.set("other.md", kept);
+  a.vault.pendingNext = { path: "other.md", mode: "refuse" };
+  assert.equal((await a.vault.apply("other.md", kept, await entryFromText("unreviewed"))).kind, "blocked");
+  const unrelatedIntent = a.vault.intents.get("other.md")!;
+  await a.restart().sync();
+  assert.ok(a.vault.authorizations.some((item) => item.replay.includes(restoreIntent.id) && item.cancel.includes(unrelatedIntent.id)));
+  assert.equal(a.vault.text("n.md"), "historical");
+  assert.equal(a.vault.text("other.md"), "kept");
+});
+
 test("case collisions need a rename; concurrent calls are serialized", async () => {
   const repository = await MemoryRepository.create(await snapshot({}));
   const a = await enrolled(repository, "A");

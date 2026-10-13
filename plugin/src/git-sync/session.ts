@@ -33,6 +33,7 @@ import type {
   PublishOperation,
   RecoveryReason,
   RecoveryRecord,
+  RestoreOperation,
   StoredConflict,
   StoredState,
   StoredStep,
@@ -488,6 +489,11 @@ export class SyncSession {
       if (!sameIdentity(await this.#repository.identity(), state.repository)) {
         return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before restoring history" } };
       }
+      const bound = await this.#bindLedger(state);
+      if (bound) {
+        if (bound.kind !== "paused") throw new IntegrityError("Ledger binding returned an unexpected outcome");
+        return bound;
+      }
       // No operation is in flight, so every pending native intent is cancelled.
       const native = await this.#recoverNative(state);
       if (native) return { kind: "blocked", reason: "Native recovery evidence could not be verified; open Changes" };
@@ -496,14 +502,35 @@ export class SyncSession {
       if (preview.kind !== "preview") return preview;
       if (preview.token !== input.token) return { kind: "stale", preview };
       if (sameEntry(preview.current, preview.historical)) return { kind: "unchanged" };
-      this.#record(state, "restore", preview.current ? dictionary([[preview.path, preview.current]]) : dictionary());
-      this.#record(state, "restore", dictionary([[preview.path, preview.historical]]));
+      const recoveryId = this.#record(state, "restore", preview.current ? dictionary([[preview.path, preview.current]]) : dictionary());
+      const incomingRecoveryId = this.#record(state, "restore", dictionary([[preview.path, preview.historical]]));
+      if (!incomingRecoveryId) throw new IntegrityError("Historical restore has no incoming recovery record");
+      const operation: RestoreOperation = {
+        kind: "restore",
+        id: this.#nextId(state, "restore"),
+        sourceCommit: preview.commit,
+        baseCommit: state.base.commit,
+        step: { path: preview.path, expected: preview.current ? toRef(preview.current) : null, next: toRef(preview.historical), status: "pending", decision: null, reason: null },
+        recoveryId,
+        incomingRecoveryId,
+      };
+      state.operation = operation;
       await this.#save(state);
       // The write is a compare-and-swap against the previewed bytes.
       const result = await this.#vault.apply(preview.path, preview.current, preview.historical);
-      if (result.kind === "applied") return { kind: "restored" };
-      if (result.kind === "blocked") return { kind: "blocked", reason: result.reason };
+      if (result.kind === "applied") {
+        state.operation = null;
+        await this.#save(state);
+        return { kind: "restored" };
+      }
+      if (result.kind === "blocked") {
+        markStep(operation.step, "blocked", result.reason || "Blocked by the vault adapter");
+        await this.#save(state);
+        return { kind: "blocked", reason: result.reason };
+      }
       if (result.kind === "interrupted" || result.kind === "displaced") await this.#ingest(state, [result.issue], { requiredPath: preview.path });
+      state.operation = null;
+      await this.#save(state);
       return { kind: "stale", preview: null };
     });
   }
@@ -813,6 +840,7 @@ export class SyncSession {
   async #resume(state: StoredState): Promise<{ kind: "held"; outcome: SyncOutcome } | Cancelled | { kind: "continue"; published: boolean; carried: string[] }> {
     let operation = state.operation;
     if (!operation) return { kind: "continue", published: false, carried: [] };
+    if (operation.kind === "restore") return this.#resumeRestore(state, operation);
     let published = false;
     if (operation.kind === "publish") {
       const settled = await this.#settle(state, operation);
@@ -823,6 +851,46 @@ export class SyncSession {
     const applied = await this.#resumeApply(state, operation);
     if (applied.kind === "blocked") return { kind: "held", outcome: applied.outcome };
     return { kind: "continue", published, carried: applied.carried };
+  }
+
+  async #resumeRestore(state: StoredState, operation: RestoreOperation): Promise<{ kind: "continue"; published: false; carried: string[] } | { kind: "held"; outcome: SyncOutcome }> {
+    await this.#verifyRestoreOperation(state, operation);
+    const local = await this.#capture(state, "restore resumption capture");
+    const step = operation.step;
+    const current = local[step.path] ?? null;
+    if (state.holds[step.path] || this.#quarantined(state).has(step.path) ||
+        (!sameEntry(current, step.expected) && !sameEntry(current, step.next))) {
+      state.operation = null;
+      await this.#save(state);
+      return { kind: "continue", published: false, carried: [] };
+    }
+    if (!sameEntry(current, step.next)) {
+      if (!step.next) throw new IntegrityError("Restore has no historical version");
+      const next = materialize(state, dictionary([[step.path, step.next]]))[step.path];
+      const result = await this.#vault.apply(step.path, current, next);
+      if (result.kind === "blocked") {
+        markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
+        await this.#save(state);
+        return { kind: "held", outcome: { kind: "blocked", commit: state.base.commit, steps: [{ path: step.path, reason: result.reason }] } };
+      }
+      if (result.kind === "interrupted" || result.kind === "displaced") {
+        await this.#ingest(state, [result.issue], { requiredPath: step.path });
+      }
+    }
+    state.operation = null;
+    await this.#save(state);
+    return { kind: "continue", published: false, carried: [] };
+  }
+
+  async #verifyRestoreOperation(state: StoredState, operation: RestoreOperation): Promise<void> {
+    if (state.base.commit !== operation.baseCommit ||
+        (operation.sourceCommit !== state.base.commit && !(await this.#repository.isAncestor(operation.sourceCommit, state.base.commit)))) {
+      throw new IntegrityError("Reviewed restore is outside the current checkpoint history");
+    }
+    const source = await this.#repository.readCommit(operation.sourceCommit);
+    if (source.oid !== operation.sourceCommit || !sameEntry(await verifyEntry(operation.step.path, source.files[operation.step.path]), operation.step.next)) {
+      throw new IntegrityError("Historical bytes differ from the durable restore");
+    }
   }
 
   async #resumeApply(state: StoredState, operation: ApplyOperation): Promise<Applied> {
@@ -1208,20 +1276,23 @@ export class SyncSession {
    * The only call that lets the vault mutate native recovery state; every
    * caller has already passed the identity, pause and installation fences.
    * Authorizes replay only for intents exactly matching an unfinished step of
-   * the durable accepted operation; every other intent (a kept step, an
-   * abandoned operation) is cancelled, which never installs its intent. A
+   * the durable accepted apply or reviewed restore operation. Every other
+   * intent (a kept step, an abandoned operation) is cancelled, which never
+   * installs its intent. A
    * crash on either side of the vault's cancellation save is idempotent: the
    * next pass cancels again or finds nothing. Returns an outcome only when
    * evidence of unknown scope blocks synchronization.
    */
   async #recoverNative(state: StoredState): Promise<SyncOutcome | null> {
     if (!this.#vault.recover) return null;
+    if (state.operation?.kind === "restore") await this.#verifyRestoreOperation(state, state.operation);
     const pending = await this.#pendingIntents();
-    const operation = state.operation?.kind === "apply" ? state.operation : null;
+    const operation = state.operation;
     const replay: string[] = [];
     const cancel: string[] = [];
     for (const intent of pending) {
-      const step = operation?.steps.find((item) => item.path === intent.path);
+      const step = operation?.kind === "apply" ? operation.steps.find((item) => item.path === intent.path) :
+        operation?.kind === "restore" && operation.step.path === intent.path ? operation.step : undefined;
       const authorized =
         step !== undefined &&
         (step.status === "pending" || step.status === "blocked") &&
@@ -1526,6 +1597,8 @@ export class SyncSession {
     const blocked =
       operation?.kind === "apply"
         ? operation.steps.filter((step) => step.status === "blocked").map((step) => ({ path: step.path, reason: step.reason ?? "" }))
+        : operation?.kind === "restore" && operation.step.status === "blocked"
+          ? [{ path: operation.step.path, reason: operation.step.reason ?? "" }]
         : [];
     const conflicts = (state.review?.conflicts ?? []).filter((item) => !Object.hasOwn(state.decisions, item.id)).map((item) => restoreConflict(state, item));
     const phase: Phase = state.pause
@@ -1616,7 +1689,7 @@ export class SyncSession {
     copy.decisions = dictionary(Object.entries(copy.decisions));
     copy.blobs = dictionary(Object.entries(copy.blobs));
     if (copy.operation?.kind === "publish") copy.operation.target = toManifest(copy.operation.target);
-    else if (copy.operation) copy.operation.target.files = toManifest(copy.operation.target.files);
+    else if (copy.operation?.kind === "apply") copy.operation.target.files = toManifest(copy.operation.target.files);
     for (const record of copy.recovery) record.files = toManifest(record.files);
     await this.#store.save(copy);
   }

@@ -158,7 +158,18 @@ export interface ApplyOperation {
   replan: boolean;
 }
 
-export type Operation = PublishOperation | ApplyOperation;
+/** A reviewed historical version being installed as a local draft, not a checkpoint. */
+export interface RestoreOperation {
+  kind: "restore";
+  id: string;
+  sourceCommit: string;
+  baseCommit: string;
+  step: StoredStep;
+  recoveryId: string | null;
+  incomingRecoveryId: string;
+}
+
+export type Operation = PublishOperation | ApplyOperation | RestoreOperation;
 
 export type PauseReason = "repository-changed" | "history-rewritten" | "base-mismatch" | "ledger-diverged" | "duplicate-installation";
 
@@ -367,8 +378,9 @@ function publication(value: unknown, at: string): Publication {
 
 function operation(value: unknown, at: string, version: Version): Operation {
   if (typeof value !== "object" || value === null) fail(at, "expected an object");
-  const kind = literal(field(value, "kind"), `${at}.kind`, ["publish", "apply"] as const);
+  const kind = literal(field(value, "kind"), `${at}.kind`, ["publish", "apply", "restore"] as const);
   if (version !== "3") {
+    if (kind === "restore") fail(at, "legacy state cannot contain a restore operation");
     // /1 and /2 operations carried approval and consent metadata that v3
     // retires. Their steps are re-planned from a fresh capture; publication
     // uncertainty stays a conservative legacy hold that no seal can fence.
@@ -393,6 +405,20 @@ function operation(value: unknown, at: string, version: Version): Operation {
       kind, id,
       target: { ...commitRef(target, `${at}.target`), files: manifest(field(target, "files"), `${at}.target.files`) },
       steps: [], recoveryId, incomingRecoveryId: null, replan: true,
+    };
+  }
+  if (kind === "restore") {
+    const raw = object(value, at, ["kind", "id", "sourceCommit", "baseCommit", "step", "recoveryId", "incomingRecoveryId"]);
+    const parsedStep = step(field(raw, "step"), `${at}.step`);
+    if (parsedStep.next === null || parsedStep.decision !== null || !["pending", "blocked"].includes(parsedStep.status)) fail(`${at}.step`, "restore needs an unfinished historical write");
+    return {
+      kind,
+      id: text(field(raw, "id"), `${at}.id`),
+      sourceCommit: oid(field(raw, "sourceCommit"), `${at}.sourceCommit`),
+      baseCommit: oid(field(raw, "baseCommit"), `${at}.baseCommit`),
+      step: parsedStep,
+      recoveryId: nullable(field(raw, "recoveryId"), `${at}.recoveryId`, text),
+      incomingRecoveryId: text(field(raw, "incomingRecoveryId"), `${at}.incomingRecoveryId`),
     };
   }
   if (kind === "publish") {
@@ -676,7 +702,9 @@ export async function parseState(value: unknown): Promise<StoredState> {
     // Every byte an operation may overwrite must be in its recovery record.
     const record = records.find((item) => item.id === op.recoveryId);
     if (op.recoveryId && !record) fail(`${at}.operation.recoveryId`, "missing recovery record");
-    for (const item of op.steps) {
+    const operationSteps = op.kind === "restore" ? [op.step] : op.steps;
+    if (op.kind === "restore" && op.baseCommit !== oid(field(base, "commit"), `${at}.base.commit`)) fail(`${at}.operation.baseCommit`, "restore checkpoint changed");
+    for (const item of operationSteps) {
       const saved = record?.files[item.path];
       if (item.expected && !(saved && saved.oid === item.expected.oid && saved.mode === item.expected.mode)) {
         fail(`${at}.operation.steps`, `no preimage recorded for ${item.path}`);
@@ -684,10 +712,10 @@ export async function parseState(value: unknown): Promise<StoredState> {
     }
     const incomingRecord = records.find((item) => item.id === op.incomingRecoveryId);
     if (op.incomingRecoveryId && !incomingRecord) fail(`${at}.operation.incomingRecoveryId`, "missing incoming recovery record");
-    const target = op.kind === "publish" ? op.target : op.target.files;
-    for (const item of op.steps) {
+    const target = op.kind === "publish" ? op.target : op.kind === "apply" ? op.target.files : null;
+    for (const item of operationSteps) {
       const saved = incomingRecord?.files[item.path];
-      const intended = target[item.path];
+      const intended = target?.[item.path] ?? (op.kind === "restore" ? item.next : undefined);
       if (item.next && !(saved && intended && saved.oid === item.next.oid && saved.mode === item.next.mode && intended.oid === saved.oid && intended.mode === saved.mode)) {
         fail(`${at}.operation.incomingRecoveryId`, `no incoming bytes recorded for ${item.path}`);
       }
