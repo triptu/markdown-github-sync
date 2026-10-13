@@ -77,7 +77,7 @@ function harness() {
   let tearNextWrite = false;
   let beforeProcess: (() => Promise<void>) | null = null;
   const events = new Map<string, (file: { path: string }, oldPath?: string) => void>();
-  const put = (path: string, text: string) => { const data = new TextEncoder().encode(text); docs.set(path, { file: new loaded.TFile(path, { size: data.length, mtime: 1 }), data }); };
+  const put = (path: string, text: string) => { const parts = path.split("/"); for (let i = 1; i < parts.length; i++) files.folders.add(parts.slice(0, i).join("/")); const data = new TextEncoder().encode(text); docs.set(path, { file: new loaded.TFile(path, { size: data.length, mtime: 1 }), data }); };
   const exists = files.exists.bind(files), rename = files.rename.bind(files);
   files.exists = async path => docs.has(path) || exists(path);
   files.rename = async (from, to) => {
@@ -125,7 +125,7 @@ function harness() {
     vault: {
       on: (name: string, callback: (file: { path: string }, oldPath?: string) => void) => { events.set(name, callback); return {}; },
       adapter, configDir: ".obsidian",
-      getFiles: () => [...docs.values()].map(d => d.file),
+      getFiles: () => [...docs.values()].map(d => d.file).filter(file => !file.path.split("/").some(part => part.startsWith("."))),
       getAbstractFileByPath: (path: string) => docs.get(path)?.file ?? null,
       readBinary: async (file: { path: string }) => docs.get(file.path)!.data.slice().buffer,
       createFolder: async () => {},
@@ -511,4 +511,43 @@ test("a configuration migration preview cannot authorize a replacement plugin in
   assert.equal(listing.kind, "configuration");
   if (listing.kind !== "configuration") throw Error("missing listing");
   assert.equal(listing.rules, "visible-only");
+});
+
+test("configuration inventory failures leave legacy enrollment usable without a durable migration pause", async () => {
+  const { repo, host, plugin } = await setup();
+  await host.files.write(".obsidian/plugins/example/.gitignore", "cache/\n");
+  repo.scopeRules = "config/1";
+  await assert.rejects(plugin.previewConfigurationUpgrade(), /Nested .gitignore/);
+  assert.equal((await plugin.session!.sync()).kind, "up-to-date");
+  plugin.onunload();
+  const next = host.create(true);
+  await next.initialize();
+  assert.equal(reloaded.options().scopeRules, "visible-only");
+  assert.equal((await next.session!.sync()).kind, "up-to-date");
+  assert.equal(await host.files.read(".obsidian/plugins/example/.gitignore"), "cache/\n");
+});
+
+test("a fresh configured vault enrolls directly with hidden local files and committed ignores", async () => {
+  const repo = await MemoryRepository.create({
+    "a.md": await entryFromText("base\n"),
+    ".gitignore": await entryFromText("private.md\n"),
+    "private.md": await entryFromText("excluded remote file\n"),
+  });
+  repo.scopeRules = "config/1";
+  loaded.useRepository(repo);
+  const host = harness();
+  host.put(".obsidian/app.json", "{\"local\":true}");
+  const plugin = host.create();
+  plugin.settings = { ...settings, configuration: true };
+  await plugin.initialize();
+  assert.equal(loaded.options().scopeRules, "config/1");
+  await enroll(plugin);
+  assert.equal((await plugin.session!.status()).kind, "enrolled");
+  assert.equal(host.docs.has("private.md"), false);
+  assert.equal(new TextDecoder().decode(host.docs.get(".obsidian/app.json")!.data), "{\"local\":true}");
+  const listing = await plugin.session!.listConfiguration();
+  assert.equal(listing.kind, "configuration");
+  if (listing.kind !== "configuration") throw Error("missing listing");
+  assert.equal(listing.rules, "config/1");
+  assert.ok(listing.unpublished.some(file => file.path === ".obsidian/app.json"));
 });

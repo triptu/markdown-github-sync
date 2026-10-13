@@ -6,6 +6,7 @@ export interface Settings {
   secretId: string;
   deviceName: string;
   automatic: boolean;
+  configuration?: boolean;
 }
 export const defaultSettings = (): Settings => ({
   format: 2,
@@ -15,6 +16,7 @@ export const defaultSettings = (): Settings => ({
   secretId: "",
   deviceName: "Obsidian",
   automatic: true,
+  configuration: true,
 });
 export function parseSettings(value: unknown): Settings {
   if (value === null || value === undefined) return defaultSettings();
@@ -39,5 +41,9 @@ export function parseSettings(value: unknown): Settings {
   if (typeof automatic !== "boolean")
     throw new Error("Invalid automatic sync setting");
   defaults.automatic = automatic;
+  const configuration: unknown = Reflect.get(value, "configuration");
+  if (configuration !== undefined && typeof configuration !== "boolean")
+    throw new Error("Invalid initial configuration scope setting");
+  defaults.configuration = configuration === true;
   return defaults;
 }

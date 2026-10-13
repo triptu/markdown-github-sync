@@ -215,7 +215,7 @@ export default class GitVaultSync extends Plugin {
     const state = raw === null ? null : await parseState(raw);
     const scopeRules = state?.pause?.reason === "scope-enrollment"
       ? "config/1"
-      : state?.scope.rules ?? "visible-only";
+      : state?.scope.rules ?? (this.settings.configuration ? "config/1" : "visible-only");
     const nativePolicy = scopeRules === "config/1"
       ? await NativePathPolicy.forConfig(this.app.vault.configDir)
       : NativePathPolicy.legacy;
@@ -321,7 +321,8 @@ export default class GitVaultSync extends Plugin {
       const current = this.rawSession;
       const vault = this.nativeVault;
       const store = this.journals[0];
-      if (!current || !vault || !store) throw new Error("Save settings and enroll this device first.");
+      const journal = this.nativeJournal;
+      if (!current || !vault || !store || !journal) throw new Error("Save settings and enroll this device first.");
       await this.assertSingleWriter();
       const installation: unknown = this.app.loadLocalStorage(installationKey);
       if (typeof installation !== "string") throw new Error("Missing device identity.");
@@ -330,6 +331,8 @@ export default class GitVaultSync extends Plugin {
         vault: owner.fence(vault), store: owner.fence(store),
         deviceName: this.settings.deviceName, scopeRules: "config/1",
       });
+      const policy = await NativePathPolicy.forConfig(this.app.vault.configDir);
+      await journal.previewPolicyUpgrade(policy);
       const preview = await migration.previewConfigurationScope();
       if (preview.kind !== "preview") throw new Error(`Configuration review unavailable: ${preview.kind}`);
       return {
@@ -337,6 +340,7 @@ export default class GitVaultSync extends Plugin {
         confirm: () => owner.run(async () => {
           if (this.rawSession !== current) throw new Error("Sync configuration changed. Reopen the review.");
           await this.assertSingleWriter();
+          await journal.previewPolicyUpgrade(policy);
           const result = await migration.enableConfigurationScope({ token: preview.token });
           if (result.kind !== "reenroll") throw new Error(`Reopen the configuration review: ${result.kind}`);
           await this.initializeOwned();
@@ -466,6 +470,8 @@ export default class GitVaultSync extends Plugin {
     const saved = parseSettings(next);
     return this.owner().run(async () => {
       const binding = await this.repositoryBinding();
+      if (!binding && this.nativeJournal && Boolean(saved.configuration) !== Boolean(this.settings.configuration))
+        throw new Error("Initial scope is already bound to this vault. Finish enrollment, then use the configuration migration review.");
       if (binding &&
           (saved.owner.toLowerCase() !== binding.owner.toLowerCase() ||
            saved.repository.toLowerCase() !== binding.name.toLowerCase() ||
@@ -613,6 +619,11 @@ class GitSettings extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(draft.automatic).onChange((v) => (draft.automatic = v)),
       );
+    new Setting(el).setName("Include configuration in first enrollment")
+      .setDesc("Choose before connecting this new vault. Existing enrolled vaults use the separate migration review below.")
+      .addToggle(toggle => toggle.setValue(draft.configuration ?? false)
+        .setDisabled(this.plugin.session !== null)
+        .onChange(value => { draft.configuration = value; }));
     new Setting(el).addButton((b) =>
       b
         .setButtonText("Save settings")
@@ -632,6 +643,14 @@ class GitSettings extends PluginSettingTab {
     new Setting(el).setName("Configuration changes")
       .setDesc("Preview incoming settings and choose which new local configuration files may be published.")
       .addButton(button => button.setButtonText("Review changes").onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
+    new Setting(el).setName("Reconnect after a startup error")
+      .setDesc(this.plugin.statusText)
+      .addButton(button => button.setButtonText("Retry connection").onClick(async () => {
+        button.setDisabled(true);
+        try { await this.plugin.initialize(); this.display(); }
+        catch (error) { this.plugin.setStatus(failure(error)); new Notice(failure(error), 12000); }
+        finally { button.setDisabled(false); }
+      }));
     el.createEl("h3", { text: "Enroll this device" });
     el.createEl("p", {
       text: "Start with a fresh vault and keep your existing vault as a backup. Disable Obsidian Sync, Git, cloud-folder sync, and other sync tools for this vault. Enrollment previews all differences before making changes.",
@@ -652,7 +671,7 @@ class GitSettings extends PluginSettingTab {
         try {
           await this.plugin.assertSingleWriter();
           if (!this.plugin.session)
-            throw new Error("Save repository and token settings first.");
+            throw new Error(`Sync is unavailable: ${this.plugin.statusText}. Use Retry connection after resolving the reported error.`);
           const preview = await this.plugin.session.previewEnrollment();
           if (preview.kind !== "preview") {
             new Notice(
@@ -966,7 +985,7 @@ class ChangesModal extends Modal {
       if (!pending.length)
         list.createEl("p", { text: "No saved local changes." });
       el.createEl("p", {
-        text: "Content sync excludes .obsidian settings, plugins, hidden files, and Git metadata. Unsaved editor text is not yet a captured draft.",
+        text: "Configuration sync requires separate review for .obsidian settings, plugins, hidden files, and Git metadata. Unsaved editor text is not yet a captured draft.",
         cls: "git-sync-muted",
       });
     } catch (error) {

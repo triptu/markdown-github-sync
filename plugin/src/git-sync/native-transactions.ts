@@ -215,18 +215,12 @@ export class NativeTransactionJournal {
     if (this.uncertain) throw new Error("Native transaction persistence is uncertain. Reload before syncing.");
   }
   matchesPolicy(policy: NativePathPolicy): boolean { return samePolicy(this.state.policy, policy.binding); }
-  /** Explicit, review-gated upgrade of an existing journal in its original namespace. */
-  async upgradePolicy(next: NativePathPolicy, assertDurableReviewedPause: () => Promise<void>): Promise<void> {
+  /** Read-only admission check; upgrade repeats it under the durable review gate. */
+  async previewPolicyUpgrade(next: NativePathPolicy): Promise<void> {
     this.trusted();
     if (this.policy.binding.rules !== "visible-only" || next.binding.rules !== "config/1")
       throw new Error("Native policy upgrade requires a legacy journal and a config policy.");
-    await assertDurableReviewedPause();
-    this.trusted();
-    const assertQuiescent = () => {
-      if (Object.keys(this.state.intents).length || this.state.recoveries.length)
-        throw new Error("Resolve native intents and recovery issues before configuration enrollment.");
-    };
-    assertQuiescent();
+    this.assertUpgradeQuiescent();
     for (const tracked of Object.values(this.state.tracked)) if (!next.allows(tracked.path))
       throw new Error(`Retained native path is outside configuration policy: ${tracked.path}`);
     for (const acknowledged of this.state.acknowledgedOversize)
@@ -240,11 +234,20 @@ export class NativeTransactionJournal {
         [...inventory.files].some(path => path.startsWith(`${directory}/`) && !this.state.tracked[path]))
         throw new Error(`Untracked native ${kind} files block configuration enrollment.`);
     }
+    this.trusted();
+    this.assertUpgradeQuiescent();
+  }
+  private assertUpgradeQuiescent(): void {
+    if (Object.keys(this.state.intents).length || this.state.recoveries.length)
+      throw new Error("Resolve native intents and recovery issues before configuration enrollment.");
+  }
+  /** Explicit, review-gated upgrade of an existing journal in its original namespace. */
+  async upgradePolicy(next: NativePathPolicy, assertDurableReviewedPause: () => Promise<void>): Promise<void> {
+    await assertDurableReviewedPause();
+    await this.previewPolicyUpgrade(next);
     await assertDurableReviewedPause();
     this.trusted();
-    assertQuiescent();
-    // The record is the commit point. A failed save leaves this instance
-    // uncertain; reopen under whichever policy the durable record contains.
+    this.assertUpgradeQuiescent();
     await this.save({ ...this.state, policy: next.binding });
     this.policy = next;
   }
