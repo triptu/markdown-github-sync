@@ -1,7 +1,7 @@
 {
   "id": "github-vault-sync",
   "name": "GitHub Vault Sync",
-  "version": "0.3.0-beta.7",
+  "version": "0.3.0-beta.8",
   "minAppVersion": "1.11.4",
   "description": "Sync your notes with a private GitHub repository on desktop and mobile.",
   "author": "Cloud Vault Sync contributors",

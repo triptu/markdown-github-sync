@@ -24,7 +24,7 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
 3. Run `npm run check`.
 4. Commit and push.
 5. Run `npm run publish-update`. This builds the plugin and force-pushes a single commit to the `updates` branch, containing `latest.json` (the version plus a SHA-256 for each file) and `latest/*`.
-6. Run `gh release create <version> dist/github-vault-sync.zip --prerelease -F docs/releases/<version>.md`. This step is only for the record; devices don't read releases.
+6. Run `gh release create <version> dist/github-vault-sync.zip dist/github-vault-sync-updater.zip --prerelease -F docs/releases/<version>.md`. New devices install from these zips; existing ones update from the `updates` branch.
 
 Every device with the updater installs the new version within about 6 hours. You can also run the command "Check for GitHub Vault Sync update" from the command palette. If the new version fails to load, the updater restores the old files and never retries that version. To ship a fix, publish a higher version number.
 

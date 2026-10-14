@@ -12,9 +12,33 @@ Edits to different files, or to different parts of the same note, merge automati
 
 **File history** lets you preview a note's past versions and restore one as a local edit that syncs normally.
 
-## Install
+## Add a device
 
-Requires Node 22+, npm and zip to build, and Obsidian 1.11.4+.
+With `gh` logged in, download the newest release into the vault (change the path to yours):
+
+```sh
+vault=~/path/to/vault
+tag=$(gh release list -R triptu/cloud-vault-sync -L 1 --json tagName --jq '.[0].tagName')
+mkdir -p "$vault/.obsidian/plugins" && cd "$vault/.obsidian/plugins" \
+  && gh release download "$tag" -R triptu/cloud-vault-sync -p '*.zip' --clobber \
+  && unzip -oq github-vault-sync.zip && unzip -oq github-vault-sync-updater.zip && rm github-vault-sync*.zip
+```
+
+Or download both zips from the [latest release](https://github.com/triptu/cloud-vault-sync/releases) and unzip them into `.obsidian/plugins/`. On a phone, copy the two folders over USB. From then on the updater keeps the device current.
+
+## Connect
+
+Requires Obsidian 1.11.4+.
+
+1. Enable **GitHub Vault Sync** and **GitHub Vault Sync Updater** in Settings → Community plugins. Turn off any other sync plugin first.
+2. In GitHub Vault Sync's settings, enter the repository and branch, and paste a fine-grained GitHub token with Contents read/write and Metadata read on the vault's repository, plus Contents read on this one (for updates). A `.git` folder in the vault is left alone and never synced.
+3. Click **Connect**, review the first sync, then **Start syncing**.
+
+Set up each device separately; never copy `.git-vault-sync/` between devices.
+
+## Build from source
+
+Requires Node 22+, npm and zip.
 
 ```sh
 npm run setup
@@ -22,13 +46,7 @@ npm run check
 npm run package
 ```
 
-1. Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/github-vault-sync/` and enable **GitHub Vault Sync**. Turn off any other sync plugin first.
-2. In its settings, enter the vault's private repository and branch, and paste a fine-grained GitHub token with Contents read/write and Metadata read on it. A `.git` folder in the vault is left alone and never synced.
-3. Click **Connect**, review the first sync, then **Start syncing**.
-
-Set up each device separately; copy only the plugin files, never `.git-vault-sync/`.
-
-For automatic updates, also copy `dist/github-vault-sync-updater/` to `.obsidian/plugins/github-vault-sync-updater/` and enable **GitHub Vault Sync Updater**. It installs new versions from this repository's `updates` branch with the same token, so the token also needs Contents read on this repository.
+The plugins are in `dist/github-vault-sync/` and `dist/github-vault-sync-updater/`; copy each folder into `<vault>/.obsidian/plugins/`.
 
 ## Limits
 
