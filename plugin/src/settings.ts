@@ -28,7 +28,7 @@ export function parseSettings(value: unknown): Settings {
   if (value === null || value === undefined) return defaultSettings();
   if (typeof value !== "object" || Array.isArray(value) || Reflect.get(value, "format") !== 2)
     throw new Error(
-      "Unrecognized settings. This plugin cannot migrate Cloudflare credentials or checkpoints.",
+      "Unrecognized settings.",
     );
   const defaults = defaultSettings();
   for (const key of [

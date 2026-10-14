@@ -1,6 +1,6 @@
 # Maintainer guide
 
-GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. Its one real user syncs the vault `notes` (repository `your-name/notes`) between a Mac and an Android phone. This repository, `triptu/cloud-vault-sync`, is the plugin's source. `server/` and `research/` belong to an earlier Cloudflare prototype and aren't used.
+GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. Its one real user syncs the vault `notes` (repository `your-name/notes`) between a Mac and an Android phone. This repository, `triptu/cloud-vault-sync`, is the plugin's source.
 
 ## Layout
 
@@ -15,7 +15,7 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
   - `scheduler.ts` decides when syncs run.
 - `plugin/src/ui/`: modals and settings. All user-facing wording lives in `ui/copy.ts`.
 - `plugin/updater/`: the companion **GitHub Vault Sync Updater** plugin. `core.ts` holds the logic and has no Obsidian imports.
-- `plugin/test/`: run with `npm test` from `plugin/`. Some tests use relative paths, so run them from that directory.
+- `plugin/test/`: run with `npm test` from `plugin/` (some tests use relative paths).
 
 ## Releasing
 

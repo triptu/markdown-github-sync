@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.3.0-beta.7",
   "scripts": {
-    "setup": "npm ci --prefix plugin && npm ci --prefix server",
+    "setup": "npm ci --prefix plugin",
     "build": "npm run build --prefix plugin",
-    "typecheck": "npm run typecheck --prefix plugin && npm run typecheck --prefix server",
-    "test": "npm test --prefix plugin && npm test --prefix server",
+    "typecheck": "npm run typecheck --prefix plugin",
+    "test": "npm test --prefix plugin",
     "check": "npm run typecheck && npm test && npm run build",
     "package": "npm run build && node scripts/package.mjs",
     "publish-update": "npm run package && node scripts/publish-update.mjs"

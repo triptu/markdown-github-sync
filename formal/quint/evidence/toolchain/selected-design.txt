@@ -1,4 +1,0 @@
-Selected source: /tmp/github-v2-design-opus-r1.md
-SHA-256: 36ae0127b2ad5c1018437cc37074d4b6a96be95cbb3e0e42623bd6087a03d96d
-Read in full; formal contract follows sections 2-6.
-Parent override: retain one confirmation for genuine branch rewrite.

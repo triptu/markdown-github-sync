@@ -1,7 +1,0 @@
-{
-  "name": "vault-sync-quint-checks",
-  "private": true,
-  "version": "1.0.0",
-  "description": "Pinned local formal tooling; no vault or GitHub credentials",
-  "devDependencies": { "@informalsystems/quint": "0.33.0" }
-}

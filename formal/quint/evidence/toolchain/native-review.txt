@@ -1,3 +1,0 @@
-Read full independent native review. Implementation verdict FAIL / not ready.
-SHA-256 2ef0a81253f31f42addf35144d0a295d1d5d70e8a7aa0fdb6c0144612c9eaf99  /tmp/github-v2-native-review-r1.md
-Formal handoff model specifies the proposed repair; it does not validate an implementation fix.

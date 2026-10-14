@@ -268,7 +268,7 @@ async function pool<T>(items: T[], width: number, work: (item: T) => Promise<voi
   if (failure !== undefined) throw failure.error;
 }
 
-/** GitHub.com repository adapter. See docs/github-client.md for transport and failure semantics. */
+/** GitHub.com repository adapter. */
 export class GitHubRepository implements Repository {
   private readonly base: string;
   private readonly now: () => number;

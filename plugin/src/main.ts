@@ -6,7 +6,6 @@ import { GitHubRepository } from "./git-sync/github";
 import { SyncSession, type SyncOutcome } from "./git-sync/session";
 import { parseState } from "./git-sync/state";
 import type { FileMode, RepositoryIdentity } from "./git-sync/contracts";
-import { decodeBase64 } from "./git-sync/codec";
 import { GitObsidianVault } from "./git-sync/obsidian-vault";
 import { FileJournalStore } from "./git-sync/store";
 import { ForegroundScheduler } from "./git-sync/scheduler";
@@ -636,26 +635,6 @@ export default class GitVaultSync extends Plugin {
       else this.scheduler?.schedule();
     });
   }
-  exportRecoveryCopy(id: string): Promise<string> {
-    return this.owner().run(async () => {
-      const snapshot = await this.rawSession?.exportRecovery({ id });
-      if (!snapshot || ("kind" in snapshot && typeof snapshot.kind === "string"))
-        throw new Error("Recovery record is unavailable.");
-      const files = this.owner().fence(this.app.vault.adapter);
-      const directory = `.git-vault-sync-export-${crypto.randomUUID()}`;
-      await files.mkdir(directory);
-      for (const [path, value] of Object.entries(snapshot)) {
-        const segments = path.split("/");
-        segments.pop();
-        let parent = directory;
-        for (const segment of segments) {
-          parent += `/${segment}`;
-          if (!(await files.exists(parent))) await files.mkdir(parent);
-        }
-        await files.writeBinary(`${directory}/${path}`, decodeBase64(value.data).buffer);
-      }
-      return directory;
-    });
-  }
+
 
 }
