@@ -3,7 +3,7 @@ export class Plugin {
   app: { savedSettings?: unknown } = {};
   async saveData(value: unknown): Promise<void> { this.app.savedSettings = structuredClone(value); }
   async loadData(): Promise<unknown> { return this.app.savedSettings; }
-  addStatusBarItem() { return { addClass() {}, toggleClass() {}, setText() {}, onclick: null }; }
+  addStatusBarItem() { return { addClass() {}, toggleClass() {}, setText() {}, setAttr() {}, onclick: null, onkeydown: null }; }
   addSettingTab(_value: unknown) {}
   addRibbonIcon(..._args: unknown[]) {}
   addCommand(_value: unknown) {}
@@ -11,7 +11,7 @@ export class Plugin {
   registerDomEvent(..._args: unknown[]) {}
 }
 export class Modal { constructor(public app: unknown) {} open() {} close() {} }
-export class Notice { constructor(..._args: unknown[]) {} }
+export class Notice { constructor(..._args: unknown[]) {} hide() {} }
 export class PluginSettingTab { constructor(..._args: unknown[]) {} }
 export class SecretComponent {}
 export class Setting {}

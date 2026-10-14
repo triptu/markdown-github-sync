@@ -72,6 +72,7 @@ export default class GitVaultSync extends Plugin {
   statusProblem = false;
   syncing = false;
   private alerted: string | null = null;
+  private alertNotice: Notice | null = null;
   private scheduler: ForegroundScheduler | null = null;
   private statusElement: HTMLElement | null = null;
   private ready = false;
@@ -106,9 +107,14 @@ export default class GitVaultSync extends Plugin {
       new Notice(failure(error), 12000);
       return;
     }
+    configDirName = this.app.vault.configDir;
     this.statusElement = this.addStatusBarItem();
     this.statusElement.addClass("git-sync-status");
+    this.statusElement.setAttr("role", "button");
+    this.statusElement.setAttr("tabindex", "0");
+    this.statusElement.setAttr("aria-label", "Open sync status");
     this.statusElement.onclick = () => new ChangesModal(this.app, this).open();
+    this.statusElement.onkeydown = event => { if (event.key === "Enter" || event.key === " ") new ChangesModal(this.app, this).open(); };
     this.setStatus("Set up GitHub sync");
     this.addSettingTab(new GitSettings(this.app, this));
     this.addRibbonIcon("git-branch", "Sync status", () =>
@@ -163,6 +169,7 @@ export default class GitVaultSync extends Plugin {
     });
   }
   onunload(): void {
+    this.alertNotice?.hide();
     this.unloaded = true;
     this.ready = false;
     this.scheduler?.stop();
@@ -184,18 +191,33 @@ export default class GitVaultSync extends Plugin {
    * Success stays quiet in the status line. A problem also raises one notice
    * that stays until tapped, and only again once the problem changes.
    */
-  private alert(key: string, text: string): void {
+  private alert(key: string, text: string, fix: "status" | "settings" = "status"): void {
     if (this.alerted === key) return;
     this.alerted = key;
-    const notice = new Notice(`${text} Tap for details.`, 0);
-    notice.noticeEl?.addEventListener("click", () => new ChangesModal(this.app, this).open());
+    this.alertNotice?.hide();
+    const notice = this.alertNotice = new Notice(`${text} ${fix === "settings" ? "Tap to open settings." : "Tap for details."}`, 0);
+    notice.noticeEl?.addEventListener("click", () => fix === "settings" ? this.openSettings() : new ChangesModal(this.app, this).open());
+  }
+  /** A sync that finished cleanly takes down any problem notice still on screen. */
+  private settled(): void {
+    this.alerted = null;
+    this.alertNotice?.hide();
+    this.alertNotice = null;
+  }
+  /** Opens this plugin's settings page; uses Obsidian's unofficial settings API when present. */
+  openSettings(): void {
+    const setting: unknown = Reflect.get(this.app, "setting");
+    const open: unknown = setting && Reflect.get(setting, "open");
+    const tab: unknown = setting && Reflect.get(setting, "openTabById");
+    if (typeof open === "function" && typeof tab === "function") { open.call(setting); tab.call(setting, this.manifest.id); }
+    else new Notice("Open Settings → GitHub Vault Sync.");
   }
   /** Background failures: offline is retried quietly; anything else is shown until it's fixed. */
   fail(error: unknown): void {
     if (rejectedAccess(error)) {
       const problem = accessProblem(error, this.settings);
-      this.setStatus("GitHub rejected the access token", true);
-      this.alert(`access:${problem}`, `Sync stopped: ${problem}`);
+      this.setStatus(problem, true);
+      this.alert(`access:${problem}`, `Sync stopped: ${problem}`, "settings");
       return;
     }
     if (offline(error)) {
@@ -240,7 +262,7 @@ export default class GitVaultSync extends Plugin {
       !/^[a-f0-9-]{36}$/.test(installation)
     )
       throw new Error(
-        "Invalid device identity. Preserve the local journal before recovery.",
+        "This device's sync identity is damaged. Reinstall the plugin's data or contact support before syncing again.",
       );
     if (!this.app.secretStorage)
       throw new Error(
@@ -309,13 +331,10 @@ export default class GitVaultSync extends Plugin {
       if (result.kind === "invalidated" || result.kind === "unenrolled") owner.acknowledgeLocalChange(pendingChange);
     }
     const status = await rawSession.status();
-    this.setStatus(
-      status.kind === "unenrolled"
-        ? "Not syncing yet · finish setup in settings"
-        : status.kind === "corrupt"
-          ? status.detail
-          : "Ready to sync",
-    );
+    if (status.kind === "corrupt") {
+      this.setStatus(status.detail, true);
+      this.alert(`corrupt:${status.detail}`, `Sync needs repair: ${status.detail}`, "settings");
+    } else this.setStatus(status.kind === "unenrolled" ? "Not syncing yet · finish setup in settings" : "Ready to sync");
     if (status.kind === "enrolled") this.scheduler?.schedule(1000);
   }
   /** `target` checks a draft repository or unsaved token without touching saved settings or status. */
@@ -470,7 +489,7 @@ export default class GitVaultSync extends Plugin {
       const policy = await NativePathPolicy.forConfig(this.app.vault.configDir);
       await journal.previewPolicyUpgrade(policy);
       const preview = await migration.previewConfigurationScope();
-      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Sync is paused: ${preview.pause.detail}` : preview.kind === "busy" ? "Finish the open items in Sync status first." : `Settings sync can't start yet (${preview.kind}).`);
+      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Sync is paused: ${preview.pause.detail}` : preview.kind === "busy" ? "Finish the open items in Sync status first." : "Settings sync can't start yet. Try again after the next sync.");
       return {
         note: preview.note,
         confirm: () => owner.run(async () => {
@@ -604,8 +623,8 @@ export default class GitVaultSync extends Plugin {
       if (outcome.kind === "synced" || outcome.kind === "up-to-date") this.noteAccess(null, true);
       const attention = outcomeAttention(outcome);
       this.setStatus(describeOutcome(outcome), attention !== null);
-      if (attention) this.alert(attention.key, attention.text);
-      else this.alerted = null;
+      if (attention) this.alert(attention.key, attention.text, attention.fix);
+      else this.settled();
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
         // Internal safety copies are pruned quietly; a failed cleanup retries next time.
         try { await this.compactRecoveryOwned(); }
@@ -724,7 +743,7 @@ function describeOutcome(outcome: SyncOutcome): string {
   }
 }
 /** What a sync left for the person to do, or null when nothing needs them. */
-function outcomeAttention(outcome: SyncOutcome): { key: string; text: string } | null {
+function outcomeAttention(outcome: SyncOutcome): { key: string; text: string; fix?: "status" | "settings" } | null {
   switch (outcome.kind) {
     case "needs-decision":
       return { key: `decide:${outcome.conflicts.map(conflict => conflict.id).join()}`,
@@ -736,9 +755,9 @@ function outcomeAttention(outcome: SyncOutcome): { key: string; text: string } |
     case "native-error":
       return { key: "native", text: "A file couldn't be saved, so sync stopped." };
     case "corrupt":
-      return { key: `corrupt:${outcome.detail}`, text: `Sync needs repair: ${outcome.detail}` };
+      return { key: `corrupt:${outcome.detail}`, text: `Sync needs repair: ${outcome.detail}`, fix: "settings" };
     case "paused":
-      return { key: `paused:${outcome.pause.detail}`, text: `Sync is paused: ${outcome.pause.detail}` };
+      return { key: `paused:${outcome.pause.detail}`, text: `Sync is paused: ${outcome.pause.detail}`, fix: "settings" };
     case "synced":
     case "up-to-date": {
       const stuck = (outcome.attention?.unreadable.length ?? 0) + (outcome.attention?.held.length ?? 0);
@@ -907,6 +926,7 @@ function settingsView(status: Awaited<ReturnType<SyncSession["status"]>> | { kin
 }
 class GitSettings extends PluginSettingTab {
   private generation = 0;
+  private shown = false;
   private unsubscribe: (() => void) | null = null;
   private watching: (() => void) | null = null;
   constructor(
@@ -916,9 +936,15 @@ class GitSettings extends PluginSettingTab {
     super(app, plugin);
   }
   display(): void {
+    this.shown = true;
     void this.render();
   }
+  /** Redraw from callbacks that may finish after the settings window has closed. */
+  private refresh(): void {
+    if (this.shown) this.display();
+  }
   hide(): void {
+    this.shown = false;
     this.generation++;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -968,8 +994,8 @@ class GitSettings extends PluginSettingTab {
     new Setting(el).setName("Can't connect").setDesc(detail)
       .addButton(button => button.setButtonText("Try again").onClick(async () => {
         button.setDisabled(true);
-        try { await this.plugin.initialize(); this.display(); }
-        catch (error) { this.plugin.setStatus(failure(error)); new Notice(failure(error), 12000); button.setDisabled(false); }
+        try { await this.plugin.initialize(); this.refresh(); }
+        catch (error) { this.plugin.fail(error); new Notice(failure(error), 12000); button.setDisabled(false); }
       }));
   }
   private async renderSetup(el: HTMLElement, generation: number): Promise<void> {
@@ -1047,7 +1073,7 @@ class GitSettings extends PluginSettingTab {
         await this.plugin.saveConfiguration({ ...draft, ...parsed, secretId, branch: draft.branch || "main" });
         this.plugin.noteAccess(null);
         if (generation !== this.generation) return;
-        if (!this.plugin.session) { this.display(); throw new Error(this.plugin.statusText); }
+        if (!this.plugin.session) { this.refresh(); throw new Error(this.plugin.statusText); }
         await this.review(button);
       } catch (error) {
         new Notice(failure(error), 12000);
@@ -1067,8 +1093,8 @@ class GitSettings extends PluginSettingTab {
       if (!session) throw new Error(this.plugin.statusText);
       const preview = await session.previewEnrollment();
       if (preview.kind === "corrupt") throw new Error(preview.detail);
-      if (preview.kind === "preview") new EnrollmentModal(this.app, this.plugin, preview, keepsGit, () => this.display()).open();
-      else this.display();
+      if (preview.kind === "preview") new EnrollmentModal(this.app, this.plugin, preview, keepsGit, () => this.refresh()).open();
+      else this.refresh();
     } catch (error) {
       new Notice(failure(error), 12000);
     } finally {
@@ -1110,7 +1136,8 @@ class GitSettings extends PluginSettingTab {
       const problem = access.problem || plugin.statusProblem;
       summary.setDesc(access.problem ? access.text : plugin.statusText);
       summary.descEl.toggleClass("mod-warning", problem);
-      void refreshDecisions();
+      // Progress updates arrive per file during a sync; decisions only change once it ends.
+      if (!plugin.syncing) void refreshDecisions();
     };
     refresh();
     const unsubscribe = plugin.subscribe(refresh);
@@ -1173,7 +1200,7 @@ class GitSettings extends PluginSettingTab {
             async () => {
               const preview = await upgrade.confirm();
               if (preview?.kind !== "preview") throw new Error("Open the settings page to review changes.");
-              new EnrollmentModal(this.app, this.plugin, preview, false, () => this.display()).open();
+              new EnrollmentModal(this.app, this.plugin, preview, false, () => this.refresh()).open();
             }).open();
         } catch (error) { new Notice(failure(error), 12000); }
         finally { button.setDisabled(false); }
@@ -1182,10 +1209,12 @@ class GitSettings extends PluginSettingTab {
 }
 class ConfigurationModal extends Modal {
   private generation = 0;
+  private closed = false;
   constructor(app: App, private plugin: GitVaultSync) { super(app); }
   onOpen(): void { void this.render(); }
-  onClose(): void { this.generation++; }
+  onClose(): void { this.closed = true; this.generation++; }
   private async render(): Promise<void> {
+    if (this.closed) return;
     const generation = ++this.generation;
     const session = this.plugin.session;
     const current = () => generation === this.generation && session === this.plugin.session;
@@ -1198,7 +1227,7 @@ class ConfigurationModal extends Modal {
       const listing = await session.listConfiguration();
       if (!current()) return;
       if (listing.kind !== "configuration" || !listing.deferred.length) loading.remove();
-      if (listing.kind !== "configuration") throw new Error(`Settings sync isn't available right now (${listing.kind}).`);
+      if (listing.kind !== "configuration") throw new Error(listing.kind === "unenrolled" ? "Connect to GitHub first." : "Settings can't be checked right now. Try again after the next sync.");
       if (listing.rules !== "config/1") {
         el.createEl("p", { text: "Settings sync is off. Turn it on in GitHub Vault Sync settings." }); return;
       }
@@ -1275,7 +1304,7 @@ class ConfigurationModal extends Modal {
       const preview = await session.previewApplyConfiguration();
       if (!current()) return;
       loading.remove();
-      if (preview.kind !== "preview") throw new Error(`Can't apply updates right now (${preview.kind}).`);
+      if (preview.kind !== "preview") throw new Error("These updates can't be applied right now. Close this and try again after the next sync.");
       new Setting(incoming).setName(`From your other devices · ${preview.items.length}`).setHeading()
         .setDesc("Applying writes them into this device's Obsidian settings.");
       // One row per plugin or theme, with each file's before and after one tap away.
@@ -1301,7 +1330,8 @@ class ConfigurationModal extends Modal {
       // Only plugins actually running here can overwrite an update before the restart.
       // Loaded instances, not the enabled list: a desktop-only plugin is listed on a phone but never runs there.
       const loaded: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "plugins");
-      const running = [...new Set(preview.items.map(item => /^\.obsidian\/plugins\/([^/]+)\//.exec(item.path)?.[1]).filter((id): id is string =>
+      const pluginsDir = `${configDirName}/plugins/`;
+      const running = [...new Set(preview.items.map(item => item.path.startsWith(pluginsDir) ? item.path.slice(pluginsDir.length).split("/")[0] : undefined).filter((id): id is string =>
         id !== undefined && id !== this.plugin.manifest.id && typeof loaded === "object" && loaded !== null && id in loaded))];
       if (running.length)
         incoming.createEl("p", { text: `Turn off ${running.join(", ")} in Community plugins first, so ${running.length === 1 ? "it doesn't" : "they don't"} overwrite the update.`, cls: "mod-warning" });
@@ -1312,9 +1342,8 @@ class ConfigurationModal extends Modal {
           await this.plugin.assertSingleWriter();
           const result = await session.applyConfiguration({ token: preview.token });
           if (result.kind === "review-needed") {
-            new Notice(`${plural(result.applied.length, "update")} applied. ${plural(result.changed.length, "file")} changed meanwhile; check Sync status.`, 15000);
+            new Notice(`${plural(result.applied.length, "update")} applied. ${plural(result.changed.length, "file")} changed while applying; check Sync status.`, 15000);
             this.close();
-            new ChangesModal(this.app, this.plugin).open();
             return;
           }
           if (result.kind !== "applied") throw new Error("Something changed. Close this and try again.");
@@ -1417,6 +1446,8 @@ const conflictLabels: Record<string, string> = {
   "displaced-write": "Changed while sync was saving it",
   "oversize-write": "Too large to compare",
 };
+/** The vault's settings folder; Obsidian lets people rename it. Set at load. */
+let configDirName = ".obsidian";
 const settingsFiles: Record<string, string> = {
   "community-plugins.json": "Enabled community plugins",
   "core-plugins.json": "Enabled core plugins",
@@ -1430,7 +1461,7 @@ const settingsFiles: Record<string, string> = {
 function describePath(path: string): { name: string; place: string } {
   const parts = path.split("/");
   const name = parts.pop() ?? path;
-  if (parts[0] === ".obsidian") {
+  if (parts[0] === configDirName) {
     if (parts.length === 1 && settingsFiles[name]) return { name: settingsFiles[name], place: "Obsidian settings" };
     if (parts[1] === "plugins" && parts[2]) return { name, place: `${parts[2]} plugin` };
     if (parts[1] === "themes" && parts[2]) return { name, place: `${parts[2]} theme` };
@@ -1514,6 +1545,8 @@ class ChangesModal extends Modal {
   private unsubscribe: (() => void) | null = null;
   private summary: HTMLElement | null = null;
   private generation = 0;
+  private closed = false;
+  private redraw: ReturnType<typeof debounce> | null = null;
   constructor(
     app: App,
     private plugin: GitVaultSync,
@@ -1522,7 +1555,7 @@ class ChangesModal extends Modal {
   }
   onOpen(): void {
     // A finished background sync can add or clear decisions, so redraw once it settles.
-    const redraw = debounce(() => { void this.render(); }, 400, true);
+    const redraw = this.redraw = debounce(() => { void this.render(); }, 400, true);
     this.unsubscribe = this.plugin.subscribe(() => {
       this.showSummary();
       if (!this.plugin.syncing) redraw();
@@ -1530,10 +1563,13 @@ class ChangesModal extends Modal {
     void this.render();
   }
   onClose(): void {
+    this.closed = true;
     this.generation++;
+    this.redraw?.cancel();
     this.unsubscribe?.();
   }
   async render(): Promise<void> {
+    if (this.closed) return;
     const generation = ++this.generation;
     const current = () => generation === this.generation;
     const el = this.contentEl;
@@ -1543,7 +1579,11 @@ class ChangesModal extends Modal {
     const summary = this.summary = el.createEl("p", { cls: "git-sync-summary-line" });
     this.showSummary();
     const body = el.createDiv();
-    const actions = new Setting(el)
+    const actions = new Setting(el);
+    // A problem's fix usually lives in settings (token, repository, paused review).
+    if (this.plugin.statusProblem)
+      actions.addButton(b => b.setButtonText("Open settings").setCta().onClick(() => { this.close(); this.plugin.openSettings(); }));
+    actions
       .addButton(b => b.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, this.plugin).open()))
       .addButton(b => b.setButtonText("Sync now").onClick(async () => {
         b.setDisabled(true);
@@ -1580,7 +1620,7 @@ class ChangesModal extends Modal {
               const preview = await this.plugin.session?.previewPublicationRecovery();
               if (preview?.kind === "reachable") { await this.plugin.syncNow(); await this.render(); }
               else if (preview?.kind === "preview") new PublicationRecoveryModal(this.app, this.plugin, preview).open();
-              else throw new Error(`Can't review this right now (${preview?.kind ?? "not set up"}).`);
+              else throw new Error("This can't be reviewed right now. Try again after the next sync.");
             } catch (error) { new Notice(failure(error), 12000); }
             finally { b.setDisabled(false); }
           }));
@@ -1651,7 +1691,7 @@ class BulkDeletionModal extends Modal {
         try {
           const kind = (this.conflict.direction === "local") === deletion ? "mine" : "remote";
           const result = await this.plugin.session?.resolve({ conflictId: this.conflict.id, choice: { kind } });
-          if (result?.kind !== "recorded") throw new Error("The file list changed. Refresh Changes and review again.");
+          if (result?.kind !== "recorded") throw new Error("The file list changed. Close this and review again.");
           this.close(); await this.plugin.syncNow(); this.done();
         } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
       }));
@@ -1707,7 +1747,7 @@ class ConflictModal extends Modal {
       const secondary = kind === "both" || kind === "edit";
       const button = actions.createEl("button", { text: labels[kind] ?? kind, cls: secondary ? "git-sync-secondary" : "" });
       if (kind === "both" && "sibling" in conflict && conflict.sibling)
-        button.title = `Your version is saved as ${describePath(conflict.sibling).name}`;
+        button.setText(`Keep both · yours as ${describePath(conflict.sibling).name}`);
       button.onclick = () => {
         if (kind === "edit") this.edit(actions);
         else void this.resolve({ kind } as ChoiceInput, button);
@@ -1719,11 +1759,12 @@ class ConflictModal extends Modal {
     const legend = this.contentEl.querySelector(".git-sync-legend");
     legend?.remove();
     const editor = createEl("textarea", { cls: "git-sync-editor" });
-    editor.value = combinedDraft(this.conflict.local, this.conflict.remote) ?? entryText((this.conflict.local ?? this.conflict.remote)!) ?? "";
+    const draft = combinedDraft(this.conflict.local, this.conflict.remote);
+    editor.value = draft ?? entryText((this.conflict.local ?? this.conflict.remote)!) ?? "";
     editor.setAttribute("aria-label", "Combined note");
     if (diff) diff.replaceWith(editor); else actions.before(editor);
     actions.empty();
-    actions.createEl("p", { text: "Lines that differ appear twice, this device's first. Delete what you don't want.", cls: "git-sync-muted" });
+    actions.createEl("p", { text: draft !== null ? "Lines that differ appear twice, this device's first. Delete what you don't want." : "This is this device's version. Edit it into the note you want to keep.", cls: "git-sync-muted" });
     const cancel = actions.createEl("button", { text: "Cancel", cls: "git-sync-secondary" });
     cancel.onclick = () => { this.contentEl.empty(); this.onOpen(); };
     const save = actions.createEl("button", { text: "Save note", cls: "mod-cta" });
@@ -1752,23 +1793,24 @@ function renderBulkChoice(container: HTMLElement, app: App, plugin: GitVaultSync
   const setting = new Setting(container).setName(`All ${files.length} files`);
   setting.settingEl.addClass("git-sync-bulk");
   for (const kind of ["mine", "remote"] as const) {
+    const eligible = files.filter(file => file.choices.includes(kind));
+    if (eligible.length < 2) continue;
     const label = kind === "remote" ? "Keep GitHub's" : "Keep this device's";
     setting.addButton(button => button.setButtonText(label)
       .onClick(() => new ConfirmModal(app,
-        kind === "remote" ? `Keep GitHub's version of ${files.length} files?` : `Keep this device's version of ${files.length} files?`,
-        files.map(file => file.path).join("\n"),
+        kind === "remote" ? `Keep GitHub's version of ${eligible.length} files?` : `Keep this device's version of ${eligible.length} files?`,
+        eligible.map(file => file.path).join("\n"),
         async () => {
-          try {
-            for (const file of files) {
-              if (!file.choices.includes(kind)) continue;
-              const result = await plugin.session?.resolve({ conflictId: file.id, choice: { kind } });
-              if (result?.kind !== "recorded") throw new Error(`${file.path} changed again. Resolve it on its own.`);
-            }
-          } finally {
-            // Choices already recorded still apply, so sync and redraw either way.
-            await plugin.syncNow();
-            done();
+          let recorded = 0;
+          for (const file of eligible) {
+            const result = await plugin.session?.resolve({ conflictId: file.id, choice: { kind } }).catch(() => null);
+            if (result?.kind === "recorded") recorded++;
           }
+          // Recorded choices apply either way; whatever changed meanwhile stays in the list.
+          if (recorded < eligible.length)
+            new Notice(`${recorded} of ${eligible.length} done. The rest changed again; resolve them one by one.`, 10000);
+          await plugin.syncNow();
+          done();
         }, label).open()));
   }
 }
@@ -1793,7 +1835,11 @@ function renderComparison(container: HTMLElement, local: Entry | null, remote: E
   }
   for (const row of rows) {
     if (row.kind === "skip") box.createDiv({ text: `${plural(row.count, "unchanged line")}`, cls: "git-sync-row git-sync-skip" });
-    else box.createDiv({ text: row.text.replace(/\r?\n$/, "") || " ", cls: `git-sync-row git-sync-${row.kind}` });
+    else {
+      const line = box.createDiv({ text: row.text.replace(/\r?\n$/, "") || " ", cls: `git-sync-row git-sync-${row.kind}` });
+      // Screen readers hear which side a line belongs to; sighted readers get color and edge style.
+      if (row.kind !== "same") line.setAttr("aria-label", `${row.kind === "mine" ? "This device" : "GitHub"}: ${line.textContent ?? ""}`);
+    }
   }
 }
 /** Markdown with each differing block from both sides, labelled, for "Edit and combine". */
@@ -1825,7 +1871,7 @@ class PublicationRecoveryModal extends Modal {
     el.addClass("git-sync-panel");
     this.setTitle("Last upload wasn't confirmed");
     el.createEl("p", { text: "GitHub never confirmed the last upload, so sync is on hold. Continuing saves copies of both versions on this device, then shows a fresh review before syncing resumes. GitHub and your notes are not changed." });
-    el.createEl("p", { text: `Unconfirmed ${this.preview.candidate.slice(0, 7)} · GitHub now at ${this.preview.head.slice(0, 7)}`, cls: "git-sync-muted" });
+    el.createEl("p", { text: "Each file below shows your last upload next to what GitHub has now.", cls: "git-sync-muted" });
     const paths = new Set([...Object.keys(this.preview.candidateFiles), ...Object.keys(this.preview.headFiles), ...Object.keys(this.preview.localFiles)]);
     for (const path of [...paths].sort()) {
       const local = this.preview.localFiles[path] ?? null;
@@ -1907,7 +1953,7 @@ class RestoreModal extends Modal {
       try {
         const preview = await session.previewRestore({ path: filePath, commit });
         if (!current(revision) || selection !== this.previewRevision) return;
-        if (preview.kind !== "preview") throw new Error(`Cannot preview this version: ${preview.kind}`);
+        if (preview.kind !== "preview") throw new Error("This version can't be shown right now. Try another one or sync first.");
         output.empty();
         output.createEl("h3", { text: "Selected version" });
         output.createEl("pre", { text: entryPreview(preview.historical), cls: "git-sync-preview" });
@@ -1916,7 +1962,7 @@ class RestoreModal extends Modal {
           try {
             if (!current(revision) || selection !== this.previewRevision || this.plugin.session !== session) throw new Error("The vault or selection changed. Browse history again.");
             const outcome = await session.restore({ token: preview.token, path: filePath, commit });
-            if (outcome.kind !== "restored" && outcome.kind !== "unchanged") throw new Error(`Restore needs a fresh preview: ${outcome.kind}`);
+            if (outcome.kind !== "restored" && outcome.kind !== "unchanged") throw new Error("The note changed while you were looking. Pick the version again.");
             this.close();
             await this.plugin.syncNow();
           } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
