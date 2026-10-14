@@ -1543,16 +1543,19 @@ class ChangesModal extends Modal {
     const body = el.createDiv();
     const actions = new Setting(el)
       .addButton(b => b.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, this.plugin).open()))
-      .addButton(b => b.setButtonText("Sync now").setCta().onClick(async () => {
+      .addButton(b => b.setButtonText("Sync now").onClick(async () => {
         b.setDisabled(true);
         await this.plugin.syncNow();
         await this.render();
       }));
     actions.settingEl.addClass("git-sync-footer");
+    // Details wait for a running sync; say so instead of showing an empty panel.
+    if (this.plugin.syncing) body.createEl("p", { text: "Details appear when this sync finishes.", cls: "git-sync-muted" });
     try {
       // The cheap status lists decisions right away; the slower local scan fills in unsynced files below.
       const status = await this.plugin.session?.status();
       if (!current()) return;
+      body.empty();
       if (!status || status.kind === "unenrolled") {
         summary.setText("Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.");
         return;
@@ -1600,7 +1603,9 @@ class ChangesModal extends Modal {
         ? configuration.deferred.length + configuration.guarded.length + configuration.unpublished.length : 0;
       if (waiting)
         new Setting(body).setName("Obsidian settings").setDesc(`${plural(waiting, "change")} waiting for your review.`)
-          .addButton(b => b.setButtonText("Review").onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
+          .addButton(b => b.setButtonText("Review").setCta().onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
+      // Settings files waiting for review are listed there, not as uploads.
+      const reviewing = new Set(configuration?.kind === "configuration" ? configuration.deferred.map(item => item.path) : []);
       const scanned = body.createDiv();
       scanned.createEl("p", { text: "Checking this device for changes…", cls: "git-sync-muted" });
       void this.plugin.session?.inspect().then(inspected => {
@@ -1610,11 +1615,14 @@ class ChangesModal extends Modal {
         for (const file of inspected.unreadable ?? [])
           new Setting(scanned).setName(describePath(file.path).name)
             .setDesc(`Too large to sync (${formatBytes(file.size)}). It stays on this device; other files keep syncing.`);
-        const pending = inspected.pending ?? [];
+        const pending = (inspected.pending ?? []).filter(change => !reviewing.has(change.path));
         if (!pending.length) { scanned.createEl("p", { text: "Everything on this device is on GitHub.", cls: "git-sync-muted" }); return; }
         new Setting(scanned).setName(`Waiting to upload · ${pending.length}`).setHeading();
         const list = scanned.createDiv({ cls: "git-sync-list" });
-        for (const change of pending) list.createEl("p", { text: `${change.change} · ${change.path}` });
+        for (const change of pending) {
+          const { name, place } = describePath(change.path);
+          list.createEl("p", { text: `${name} · ${place} · ${change.change}` });
+        }
       }, error => scanned.setText(failure(error)));
     } catch (error) {
       if (!current()) return;
