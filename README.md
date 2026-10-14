@@ -14,10 +14,10 @@ Edits to different files, or to different parts of the same note, merge automati
 
 ## Add a device
 
-With `gh` logged in, download the newest release into the vault (change the path to yours):
+With `gh` logged in, download the newest release into the vault. On a Mac, Obsidian lists its vault paths in `~/Library/Application Support/obsidian/obsidian.json`.
 
 ```sh
-vault=~/path/to/vault
+vault=~/path/to/vault   # change to yours
 tag=$(gh release list -R triptu/cloud-vault-sync -L 1 --json tagName --jq '.[0].tagName')
 mkdir -p "$vault/.obsidian/plugins" && cd "$vault/.obsidian/plugins" \
   && gh release download "$tag" -R triptu/cloud-vault-sync -p '*.zip' --clobber \
@@ -28,10 +28,10 @@ Or download both zips from the [latest release](https://github.com/triptu/cloud-
 
 ## Connect
 
-Requires Obsidian 1.11.4+.
+Requires Obsidian 1.11.4+. These steps happen in Obsidian and need you: an agent can install the files but can't create the token or click Connect.
 
 1. Enable **GitHub Vault Sync** and **GitHub Vault Sync Updater** in Settings → Community plugins. Turn off any other sync plugin first.
-2. In GitHub Vault Sync's settings, enter the repository and branch, and paste a fine-grained GitHub token with Contents read/write and Metadata read on the vault's repository, plus Contents read on this one (for updates). A `.git` folder in the vault is left alone and never synced.
+2. In GitHub Vault Sync's settings, enter the repository and branch, and paste a [fine-grained GitHub token](https://github.com/settings/personal-access-tokens/new) with Contents read/write and Metadata read on the vault's repository, plus Contents read on this one (for updates). A `.git` folder in the vault is left alone and never synced; once connected, stop using Git there.
 3. Click **Connect**, review the first sync, then **Start syncing**.
 
 Set up each device separately; never copy `.git-vault-sync/` between devices.
