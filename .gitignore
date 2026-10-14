@@ -12,3 +12,4 @@ research/evidence-bundle.json
 _apalache-out/
 
 __pycache__/
+*.cpuprofile
