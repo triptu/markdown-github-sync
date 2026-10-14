@@ -65,6 +65,12 @@ export interface SessionPorts {
 
 /** Unpinned recovery records (bytes known to be in GitHub history) kept for convenience. */
 const RETAINED_RECOVERY = 20;
+/**
+ * Unpinned records older than this are dropped, and a pinned version of a
+ * path that has since settled on a published version (for example the losing
+ * side of a decision) is released after it.
+ */
+const RECOVERY_GRACE_MS = 30 * 24 * 60 * 60_000;
 
 type Unavailable = { kind: "unenrolled" } | { kind: "corrupt"; detail: string };
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
@@ -270,6 +276,21 @@ const STALE_REREADS = 3;
 const RECONCILE_ROUNDS = 3;
 const LEDGER_PAUSES: ReadonlySet<PauseReason> = new Set(["ledger-diverged", "duplicate-installation"]);
 
+/**
+ * How long one branch head may keep reading as strictly behind the
+ * checkpoint (a lagging replica after a publication) before it is treated as
+ * a real rewind that needs re-enrollment.
+ */
+const STALE_HEAD_MS = 15 * 60_000;
+
+/** The branch head read as an ancestor of the checkpoint; retried later, never a pause by itself. */
+export class StaleHeadError extends Error {
+  override name = "StaleHeadError";
+  constructor(readonly checkpoint: string, readonly head: string, readonly retryAt: number) {
+    super("GitHub returned an older branch head than this device already synced; retrying shortly");
+  }
+}
+
 /** The vault adapter returned a capture that cannot be a real vault state (for example unmounted storage). */
 export class VaultCaptureError extends Error {
   override name = "VaultCaptureError";
@@ -289,6 +310,8 @@ export class SyncSession {
   #queue: Promise<unknown> = Promise.resolve();
   readonly #previewSession = crypto.randomUUID();
   #holdPass = false;
+  /** First time the current head was observed strictly behind the checkpoint, while it stays so. */
+  #staleHead: { head: string; base: string; since: number } | null = null;
   /** Visible files the latest capture could not read; they are untouched until readable. */
   #unreadable: UnreadableFile[] = [];
   #guarded: string[] = [];
@@ -975,10 +998,31 @@ export class SyncSession {
       if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
       throw error;
     }
-    if (head.oid !== state.base.commit && !(await this.#repository.isAncestor(state.base.commit, head.oid))) {
-      // One confirmation (re-enrollment) for a genuine rewrite. Accepted work is never replayed.
-      return this.#pause(state, "history-rewritten", `Checkpoint ${state.base.commit} is not an ancestor of head ${head.oid}`);
+    for (let reread = 0; head.oid !== state.base.commit && !(await this.#repository.isAncestor(state.base.commit, head.oid)); reread++) {
+      // A head strictly behind the checkpoint is what a lagging replica
+      // returns right after a publication: read again, then retry later.
+      // Only a head that stays behind for STALE_HEAD_MS (a real rewind), or
+      // one that diverged, needs the one confirmation of re-enrollment.
+      if (!(await this.#repository.isAncestor(head.oid, state.base.commit))) {
+        this.#staleHead = null;
+        // One confirmation (re-enrollment) for a genuine rewrite. Accepted work is never replayed.
+        return this.#pause(state, "history-rewritten", `Checkpoint ${state.base.commit} is not an ancestor of head ${head.oid}`);
+      }
+      const now = this.#now().getTime();
+      if (this.#staleHead?.head !== head.oid || this.#staleHead.base !== state.base.commit) this.#staleHead = { head: head.oid, base: state.base.commit, since: now };
+      if (now - this.#staleHead.since >= STALE_HEAD_MS) {
+        this.#staleHead = null;
+        return this.#pause(state, "history-rewritten", `Branch head ${head.oid} moved back behind checkpoint ${state.base.commit}`);
+      }
+      if (reread >= STALE_REREADS) throw new StaleHeadError(state.base.commit, head.oid, now + 60_000);
+      await this.#delay(500 * 2 ** reread + Math.floor(this.#random() * 500));
+      try { head = await this.#readHead(state.scope.rules); }
+      catch (error) {
+        if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
+        throw error;
+      }
     }
+    this.#staleHead = null;
     const hadReview = state.review !== null || Object.keys(state.decisions).length > 0;
     const local = await this.#capture(state, "local capture");
     this.#guardCapture(state, local);
@@ -1081,7 +1125,10 @@ export class SyncSession {
       unconsented.push(path);
       if (state.hiddenConsent[path]) delete state.hiddenConsent[path];
     }
-    const guardScope = await digestText(JSON.stringify(["guard/1", head.oid, sortedManifest(local)]));
+    // A bulk-deletion id already binds its deleted paths and their versions;
+    // binding the head as well (not the whole local manifest) keeps a
+    // confirmation valid across unrelated local edits.
+    const guardScope = await digestText(JSON.stringify(["guard/2", head.oid]));
     const holds = nativeHolds(state);
     const untouched = [...new Set([...this.#untouched(state), ...excluded, ...Object.keys(state.deferred), ...unconsented, ...this.#guarded])];
     const unresolved = await reconcile({ base: planBase, local: planLocal, remote: planRemote, decisions: dictionary(), guardScope, holds, untouched });
@@ -1743,15 +1790,10 @@ export class SyncSession {
     // blobs, so both this completion and a restart retain the same evidence.
     this.#record(state, "carried", materialize(state, origins));
     if (Object.keys(newer).length > 0) await this.#save(state);
-    // Records whose bytes are all in GitHub history (old or new checkpoint)
-    // become prunable; anything else stays pinned until the user discards it.
-    const onGitHub = new Set([...Object.values(state.base.files), ...Object.values(operation.target.files)].map((entry) => entry.oid));
-    for (const record of state.recovery) {
-      if (record.pinned) record.pinned = Object.values(record.files).some((entry) => !onGitHub.has(entry.oid));
-    }
+    const appliedScope = await this.#scopeFor(operation.target.commit, state.scope.rules);
+    this.#releaseRecovery(state, operation, recaptured, carry, appliedScope);
 
     state.base = { commit: operation.target.commit, tree: operation.target.tree, files: operation.target.files };
-    const appliedScope = await this.#scopeFor(operation.target.commit, state.scope.rules);
     const scopeChanged = appliedScope.digest !== state.scope.digest;
     state.scope = { ...appliedScope.rules, digest: appliedScope.digest };
     state.carry = carry;
@@ -1905,7 +1947,10 @@ export class SyncSession {
       }
       if (changed) await this.#save(state);
     }
-    const issues = await this.#vault.recover({ replay, cancel });
+    // Bytes durable here (journal blobs) or in the published checkpoint: a
+    // finished native hold of exactly such bytes is redundant.
+    const released = [...new Set([...Object.keys(state.blobs), ...Object.values(state.base.files).map((entry) => entry.oid)])];
+    const issues = await this.#vault.recover({ replay, cancel, released });
     // Anything still pending was refused by the vault: hold its path untouched.
     const stuck = (await this.#pendingIntents()).map((intent): NativeError => ({ id: intent.id, path: intent.path, detail: "A native file transaction is still unfinished" }));
     await this.#ingest(state, issues, { replaceErrors: true, extraErrors: stuck });
@@ -2356,6 +2401,8 @@ export class SyncSession {
     const active = new Set([state.operation?.recoveryId, state.operation?.incomingRecoveryId]);
     const disposable = state.recovery.filter((record) => !record.pinned && !active.has(record.id));
     const drop = new Set(disposable.slice(0, Math.max(0, disposable.length - RETAINED_RECOVERY)).map((record) => record.id));
+    const expiry = this.#now().getTime() - RECOVERY_GRACE_MS;
+    for (const record of disposable) if (Date.parse(record.createdAt) <= expiry) drop.add(record.id);
     state.recovery = state.recovery.filter((record) => !drop.has(record.id));
     const live = referencedBlobs(state);
     for (const oid of Object.keys(state.blobs)) if (!live.has(oid)) delete state.blobs[oid];
@@ -2423,6 +2470,31 @@ export class SyncSession {
     if (!isOid(head.oid) || !isOid(head.treeOid)) throw new IntegrityError("Repository head has malformed object IDs");
     const scope = await this.#scopeFor(head.oid, rules);
     return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(filterSnapshot(head.files, scope), "remote head", scope) };
+  }
+
+  /**
+   * Unpins records at an apply completion. A version stays pinned unless it is
+   * in GitHub history (the old or new checkpoint), or its path is settled (the
+   * live file equals the new published version and nothing is carried, held,
+   * deferred, guarded or unknown there) and either this completion published
+   * a later version of the path that no decision chose, or the record is
+   * older than RECOVERY_GRACE_MS. The newest version of an unpublished local
+   * edit is never settled: its path differs from the checkpoint and is carried.
+   */
+  #releaseRecovery(state: StoredState, operation: ApplyOperation, live: Snapshot, carry: Record<string, Ref | null>, scope: Scope): void {
+    const target = operation.target.files;
+    const onGitHub = new Set([...Object.values(state.base.files), ...Object.values(target)].map((entry) => entry.oid));
+    const unknown = new Set(this.#untouched(state));
+    const decided = new Set(operation.steps.filter((step) => step.decision !== null).map((step) => step.path));
+    const settled = (path: string) => scope.includes(path) && !Object.hasOwn(carry, path) && !unknown.has(path) &&
+      !state.holds[path] && !Object.hasOwn(state.deferred, path) && !this.#guarded.includes(path) && sameEntry(live[path], target[path]);
+    const superseded = (path: string) => !decided.has(path) && !sameRef(state.base.files[path], target[path]);
+    const now = this.#now().getTime();
+    for (const record of state.recovery) {
+      if (!record.pinned) continue;
+      const old = now - Date.parse(record.createdAt) >= RECOVERY_GRACE_MS;
+      record.pinned = Object.entries(record.files).some(([path, entry]) => !onGitHub.has(entry.oid) && !(settled(path) && (old || superseded(path))));
+    }
   }
 
   /** Adds an immutable recovery record, reusing an identical pinned one. Returns its id. */

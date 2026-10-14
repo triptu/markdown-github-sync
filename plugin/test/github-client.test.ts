@@ -1327,3 +1327,55 @@ test("headOid reads the branch ref alone and agrees with head()", async () => {
   assert.equal(api.requests.length, 1);
   assert.equal(oid, (await repo.head()).oid);
 });
+
+// Regression (review): a prepare whose uploads evicted their own blobs from the
+// LRU re-read the candidate via an archive of commit "" and failed every retry.
+test("a 4200-file publication prepares without re-reading uploaded blobs or requesting an archive", async () => {
+  const api = new ArchiveGitHub({ "note.md": file("base\n") });
+  const repo = archiveClient(api);
+  const head = await repo.head();
+  const changes: Changes = {};
+  for (let i = 0; i < 4200; i++) changes[`n/${i}.md`] = file(`note ${i}\n`);
+  api.archives = [];
+  api.requests = [];
+  const candidate = await repo.prepare(head, changes, "msg", L);
+  assert.equal(api.archives.length, 0, "no archive of an uncommitted tree");
+  assert.equal(api.requests.filter(r => r.method === "GET" && r.url.includes("/git/blobs/")).length, 0);
+  assert.equal(Object.keys(candidate.files).length, 4201);
+  assert.deepEqual(candidate.files["n/4199.md"], changes["n/4199.md"]);
+});
+
+test("a retried publication skips blobs it already created or the parent already holds", async () => {
+  const api = new FakeGitHub({ "note.md": file("base\n") });
+  const repo = client(api);
+  const head = await repo.head();
+  const changes: Changes = {};
+  for (let i = 0; i < 40; i++) changes[`n/${i}.md`] = file(`note ${i}\n`);
+  changes["copy.md"] = file("base\n");
+  // GitHub's secondary limit stops the first attempt after some uploads.
+  let posts = 0;
+  api.intercept = request => request.method === "POST" && request.url.endsWith("/git/blobs") && ++posts > 25
+    ? response({ message: "secondary rate limit" }, 403, { "retry-after": "60" }) : undefined;
+  await assert.rejects(repo.prepare(head, changes, "msg", L), /rate limit/);
+  api.intercept = undefined;
+  api.requests = [];
+  const candidate = await repo.prepare(head, changes, "msg", L);
+  const uploaded = api.requests.filter(r => r.method === "POST" && r.url.endsWith("/git/blobs")).map(r => JSON.parse(r.body ?? "{}").content);
+  assert.equal(uploaded.length, 40 - 25, "only blobs the first attempt did not create");
+  assert.ok(!uploaded.includes(changes["copy.md"]!.data), "a blob of the parent tree is never re-uploaded");
+  assert.equal(Object.keys(candidate.files).length, 42);
+});
+
+test("a skipped blob that GitHub no longer has is uploaded again on the next attempt", async () => {
+  const api = new FakeGitHub({ "note.md": file("base\n") });
+  const repo = client(api);
+  const head = await repo.head();
+  const a = file("a\n");
+  await repo.prepare(head, { "a.md": a }, "msg", L);
+  api.blobs.delete(a.oid); // collected as unreferenced
+  await assert.rejects(repo.prepare(head, { "a.md": a }, "msg", L));
+  api.requests = [];
+  const again = await repo.prepare(head, { "a.md": a }, "msg", L);
+  assert.deepEqual(again.files["a.md"], a);
+  assert.equal(api.requests.filter(r => r.method === "POST" && r.url.endsWith("/git/blobs")).length, 1);
+});

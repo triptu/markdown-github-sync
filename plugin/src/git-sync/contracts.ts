@@ -125,6 +125,12 @@ export interface RecoveryAuthorization {
   replay: string[];
   /** Never install `next`: drop an unattempted intent, settle an attempted one backward or report an issue. */
   cancel: string[];
+  /**
+   * Blob ids whose bytes the engine holds durably (in its journal or in the
+   * published checkpoint). A finished native hold whose bytes are exactly one
+   * of these, and that nothing else refers to, may be reclaimed.
+   */
+  released?: string[];
 }
 export type ApplyResult =
   | { kind: "applied" }

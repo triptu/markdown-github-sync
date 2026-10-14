@@ -296,6 +296,14 @@ export class GitHubRepository implements Repository {
   /** Node id and time of the last successful identity check; reused by ref updates. */
   private checkedIdentity: { id: string; at: number } | null = null;
   private offered = new Map<string, { data: string; trusted: boolean }>();
+  /**
+   * Blob ids this process created (or saw created) in the repository. A retry
+   * of a large publication skips re-POSTing them, so GitHub's secondary
+   * content-creation limits are spent only on new blobs. Unreferenced blobs
+   * can be garbage-collected by GitHub, so a tree creation that fails after
+   * skipping uploads forgets the skipped ids and the next attempt re-uploads.
+   */
+  private readonly uploaded = new Set<string>();
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
@@ -559,7 +567,12 @@ export class GitHubRepository implements Repository {
     const rootIgnore = items.find(item => item.path === ".gitignore");
     return rootIgnore ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(await this.blob(rootIgnore.sha, size(rootIgnore.size)))) : null;
   }
-  private async snapshot(value: Commit, items: TreeItem[], requestedRules = this.ruleVersion): Promise<CommitSnapshot> {
+  /**
+   * `verified`: blob bodies (by oid) this process already decoded canonically
+   * and hashed, consulted before any download. `value.oid` may be empty only
+   * for an uncommitted tree; then no archive is requested.
+   */
+  private async snapshot(value: Commit, items: TreeItem[], requestedRules = this.ruleVersion, verified?: ReadonlyMap<string, string>): Promise<CommitSnapshot> {
     const scope = requestedRules === this.ruleVersion
       ? await this.scopeForItems(value.treeOid, items)
       : await compileScope({ rules: "visible-only", configDir: this.configDir, gitignore: null }, null);
@@ -581,7 +594,8 @@ export class GitHubRepository implements Repository {
     const blobs = new Map<string, string>();
     const missing: [string, number][] = [];
     for (const [hash, length] of sizes) {
-      const known = this.knownBlob(hash, length);
+      const known = verified?.get(hash) ?? this.knownBlob(hash, length);
+      if (known !== undefined && verified?.has(hash) && decodedSize(known) !== length) throw new GitHubError("Blob identity or size mismatch");
       if (known === undefined) missing.push([hash, length]); else blobs.set(hash, known);
     }
     const paths = new Map<string, string[]>();
@@ -695,7 +709,8 @@ export class GitHubRepository implements Repository {
     let done = 0;
     this.progress(0, missing.length);
     const treeBytes = items.reduce((sum, item) => sum + (item.size ?? 0), 0);
-    if (this.options.transport.requestArchive && missing.length >= ARCHIVE_THRESHOLD && treeBytes <= ARCHIVE_LIMIT) {
+    // An uncommitted tree (no commit id yet) has no archive; fetch per blob.
+    if (this.options.transport.requestArchive && /^[0-9a-f]{40}$/.test(commitOid) && missing.length >= ARCHIVE_THRESHOLD && treeBytes <= ARCHIVE_LIMIT) {
       const wanted = new Map<string, number>();
       for (const [hash, length] of missing) for (const path of paths.get(hash) ?? []) wanted.set(path, length);
       let files: Map<string, Uint8Array> | undefined;
@@ -804,10 +819,20 @@ export class GitHubRepository implements Repository {
     for (const file of Object.values(files)) { total += decodedSize(file.data); if (total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded"); }
     if (typeof message !== "string" || !message.trim()) throw new GitHubError("Commit message is required");
     const uploads = new Map<string, Entry>();
-    for (const next of checked.values()) if (next !== null) uploads.set(next.oid, next);
+    // Blobs already in the parent tree, or created by an earlier attempt of
+    // this process, exist in the repository; re-POSTing them only spends the
+    // secondary content-creation limit, so a retried large upload resumes.
+    const present = new Set(items.filter(item => item.type === "blob").map(item => item.sha));
+    const skipped: string[] = [];
+    for (const next of checked.values()) if (next !== null) {
+      if (present.has(next.oid)) continue;
+      if (this.uploaded.has(next.oid)) { skipped.push(next.oid); continue; }
+      uploads.set(next.oid, next);
+    }
     await pool(Array.from(uploads.values()), UPLOAD_CONCURRENCY, async next => {
       const blob = record(await this.rest("/git/blobs", "POST", { content: next.data, encoding: "base64" }));
       if (oid(blob.sha) !== next.oid) throw new GitHubError("Uploaded blob hash mismatch");
+      this.uploaded.add(next.oid);
       this.remember(next.oid, { kind: "blob", data: next.data, size: decodedSize(next.data) });
     });
     const edits: { path: string; mode: string; type: "blob"; sha: string | null }[] = [];
@@ -817,7 +842,14 @@ export class GitHubRepository implements Repository {
       } else edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
     }
     // GitHub rejects an empty tree edit list; an unchanged candidate (a fence) reuses the parent tree.
-    const treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
+    let treeOid: string;
+    try {
+      treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
+    } catch (error) {
+      // A skipped blob may have been collected since it was created: upload it again next time.
+      for (const hash of skipped) this.uploaded.delete(hash);
+      throw error;
+    }
     const candidateItems = await this.tree(treeOid);
     const sharedDirs = new Set<string>();
     const addAncestors = (path: string): void => {
@@ -831,7 +863,12 @@ export class GitHubRepository implements Repository {
       .map(item => [item.path, `${item.mode}:${item.type}:${item.sha}`]));
     if (!sameMap(excluded(items), excluded(candidateItems))) throw new GitHubError("Prepared tree changed excluded repository paths");
     if (!sameMap(expected, terminals(candidateItems))) throw new GitHubError("Prepared tree does not preserve requested and excluded paths");
-    const candidateFiles = (await this.snapshot({ oid: "", treeOid, parents: [] }, candidateItems)).files;
+    // The candidate tree's terminals were just verified against `expected`, so
+    // its in-scope bodies are the parent's verified files plus the verified
+    // changes; nothing is downloaded for them (the LRU may have evicted them).
+    const verified = new Map<string, string>();
+    for (const file of Object.values(files)) verified.set(file.oid, file.data);
+    const candidateFiles = (await this.snapshot({ oid: "", treeOid, parents: [] }, candidateItems, this.ruleVersion, verified)).files;
     const created = await this.createCommit(message, treeOid, [value.oid]);
     // The receipt keeps every candidate reachable from the ledger, even after a branch rewind.
     const receiptMessage = `vault-sync receipt/1\n\nop: ${operation}\ninstallation: ${this.options.installation}\nparent: ${value.oid}\ncandidate: ${created}\nstatus: accepted\n`;

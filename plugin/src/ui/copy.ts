@@ -53,8 +53,11 @@ export function outcomeAttention(outcome: SyncOutcome): { key: string; text: str
     case "needs-decision":
       return { key: `decide:${outcome.conflicts.map(conflict => conflict.id).join()}`,
         text: `${plural(outcome.conflicts.length, "file was", "files were")} changed both here and on GitHub. Choose which version to keep.` };
-    case "blocked":
-      return { key: `blocked:${outcome.steps.map(step => step.path).join()}`, text: `${plural(outcome.steps.length, "update")} from GitHub couldn't be saved here.` };
+    case "blocked": {
+      // Until it is saved (or this device's version is kept), sync waits: say why.
+      const reason = outcome.steps.length === 1 && outcome.steps[0]?.reason ? ` ${outcome.steps[0].reason}` : "";
+      return { key: `blocked:${outcome.steps.map(step => step.path).join()}`, text: `${plural(outcome.steps.length, "update")} from GitHub couldn't be saved here, so sync is waiting.${reason}` };
+    }
     case "publication-unknown":
       return { key: "publication", text: "GitHub didn't confirm the last upload, so uploads are on hold." };
     case "native-error":

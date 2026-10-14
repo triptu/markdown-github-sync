@@ -33,8 +33,10 @@ test("outcomeAttention: each kind that needs a person gets a stable key and plai
   assert.deepEqual(outcomeAttention(outcome({ kind: "needs-decision", conflicts: [{ id: "c1" }], merged: [], published: false, carried: [] }))?.text,
     "1 file was changed both here and on GitHub. Choose which version to keep.");
   assert.deepEqual(outcomeAttention(outcome({ kind: "blocked", commit: "abc", steps: [{ path: "a.md" }] })), {
-    key: "blocked:a.md", text: "1 update from GitHub couldn't be saved here.",
+    key: "blocked:a.md", text: "1 update from GitHub couldn't be saved here, so sync is waiting.",
   });
+  assert.deepEqual(outcomeAttention(outcome({ kind: "blocked", commit: "abc", steps: [{ path: "img.png", reason: "Close the open view before replacing or deleting img.png." }] }))?.text,
+    "1 update from GitHub couldn't be saved here, so sync is waiting. Close the open view before replacing or deleting img.png.");
   assert.deepEqual(outcomeAttention(outcome({ kind: "publication-unknown" })), {
     key: "publication", text: "GitHub didn't confirm the last upload, so uploads are on hold.",
   });

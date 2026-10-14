@@ -635,6 +635,43 @@ test("apply does not rescan old holds and recovery compacts native records", asy
   assert.equal([...h.files.keys()].filter(path => path.includes("/hold/")).length, 12);
 });
 
+test("finished holds are not rehashed while unchanged and are reclaimed once their bytes are held elsewhere", async () => {
+  const h = await harness();
+  h.vault.now = () => 1_000_000;
+  h.put("a.bin", new Uint8Array([0, 1]));
+  let expected = (await h.vault.capture())["a.bin"];
+  const preimages: string[] = [];
+  for (let value = 1; value <= 4; value++) {
+    const next = await entryFromBytes(new Uint8Array([value, value + 1]));
+    assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
+    preimages.push(expected.oid);
+    expected = next;
+  }
+  const holds = () => [...h.files.keys()].filter(path => path.includes("/hold/"));
+  assert.equal(holds().length, 4);
+  // The engine holds all but the first preimage.
+  const released = preimages.slice(1);
+  await h.vault.recover({ replay: [], cancel: [], released });
+  const reads = h.holdReads();
+  await h.vault.recover({ replay: [], cancel: [], released });
+  assert.equal(h.holdReads(), reads, "unchanged holds are not reread or rehashed");
+  assert.equal(holds().length, 4, "not reclaimed before the quiet period");
+  // A writer that still had a replaced file open changes one hold.
+  const changed = holds().find(path => h.files.get(path)!.data[0] === 2)!;
+  h.files.get(changed)!.data = new Uint8Array([7, 7]);
+  h.files.get(changed)!.file.stat.mtime += 1;
+  h.vault.now = () => 1_000_000 + 11 * 60_000;
+  const issues = await h.vault.recover({ replay: [], cancel: [], released });
+  assert.deepEqual(holds().sort(), [changed, ...holds().filter(path => h.files.get(path)!.data[0] === 0)].sort(),
+    "reclaims only unchanged holds whose bytes the engine holds");
+  assert.ok(issues.some(issue => issue.kind === "displaced" && "found" in issue && issue.found !== null && [...Buffer.from(issue.found.data, "base64")].join() === "7,7"));
+  // Without an engine authorization nothing is reclaimed, and a restart rehashes once.
+  const restarted = await h.open();
+  restarted.vault.now = () => 1_000_000 + 30 * 60_000;
+  await restarted.vault.recover({ replay: [], cancel: [] });
+  assert.equal(holds().length, 2);
+});
+
 test("caught failure before text bytes change clears attempted marker", async () => {
   const h = await harness();
   h.put("n.md", bytes("before"));
@@ -952,6 +989,14 @@ test("read-only scan reports a visible oversized file while capturing unrelated 
   assert.equal(h.strings.size, before);
   assert.deepEqual(h.files.get("huge.bin")!.data, large);
   await assert.rejects(h.vault.capture(), /File exceeds 8 MiB/);
+});
+
+test("case-only visible aliases are both captured so the engine can report a collision", async () => {
+  const h = await harness();
+  h.put("Note.md", bytes("upper"));
+  h.put("note.md", bytes("lower"));
+  const survey = await h.vault.scan();
+  assert.deepEqual(Object.keys(survey.files).sort(), ["Note.md", "note.md"]);
 });
 
 test("an oversized source changed before acknowledgement requires a fresh record", async () => {

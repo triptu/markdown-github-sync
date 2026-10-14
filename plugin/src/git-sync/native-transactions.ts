@@ -340,6 +340,27 @@ export class NativeTransactionJournal {
     if (!old || (old.observed === oid && !old.missing)) return;
     await this.save({ ...this.state, tracked: { ...this.state.tracked, [path]: { ...old, observed: oid, missing: false } } });
   }
+  /**
+   * True when a finished hold may be reclaimed: tracked, present, never seen
+   * with bytes other than its preimage, and no recovery record, oversize
+   * acknowledgement or pending intent refers to it.
+   */
+  reclaimable(path: string): boolean {
+    this.trusted();
+    const tracked = this.state.tracked[path];
+    if (!tracked?.expected || tracked.missing || !path.startsWith(`${this.root}/hold/`)) return false;
+    if (tracked.observed !== null && tracked.observed !== tracked.expected.oid) return false;
+    if (this.state.recoveries.some(item => item.sourcePath === path)) return false;
+    if (this.state.acknowledgedOversize.some(item => item.sourcePath === path)) return false;
+    return !Object.values(this.state.intents).some(intent => intent.hold === path || intent.stage === path);
+  }
+  /** Stops tracking a reclaimed hold whose file the caller already removed. */
+  async release(path: string): Promise<void> {
+    this.trusted();
+    if (!this.reclaimable(path)) throw new Error(`Native hold is not reclaimable: ${path}`);
+    const tracked = { ...this.state.tracked }; delete tracked[path];
+    await this.save({ ...this.state, tracked });
+  }
   async observeMissing(path: string): Promise<void> {
     this.trusted();
     const old = this.state.tracked[path];

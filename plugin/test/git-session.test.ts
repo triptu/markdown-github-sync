@@ -2223,7 +2223,8 @@ test("R2-A: an accepted operation's pending intent is replayed only when it matc
   const outcome = await a.session.sync();
   assert.ok(outcome.kind === "synced" || outcome.kind === "up-to-date", JSON.stringify(outcome));
   assert.equal(a.vault.text("n.md"), null);
-  assert.deepEqual(a.vault.authorizations.at(-1), { replay: [intent.id], cancel: [] });
+  const { replay, cancel } = a.vault.authorizations.at(-1)!;
+  assert.deepEqual({ replay, cancel }, { replay: [intent.id], cancel: [] });
   await b.session.sync();
   await assertConverged(repository, a, b);
 });

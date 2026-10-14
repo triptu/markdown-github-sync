@@ -5,9 +5,9 @@ import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
 import { HiddenConfigPort, racyWindowMs, sameScanKey, scanKey, type ScanCache } from "./hidden-config";
 import { assertLocalNamespace, inventoryLocal, NativePathPolicy } from "./native-path-policy";
-import { assertNoNestedGitignore, canonicalFilesystemPath, type Scope } from "./scope";
+import { assertNoNestedGitignore, type Scope } from "./scope";
 
-export interface RecoveryAuthorization { replay: string[]; cancel: string[] }
+export interface RecoveryAuthorization { replay: string[]; cancel: string[]; released?: string[] }
 export interface UnreadableNativeFile { path: string; size: number; mtime: number | null; reason: "oversize" }
 
 const maxFileBytes = 8 * 1024 * 1024;
@@ -27,6 +27,12 @@ async function mapConcurrent<T, R>(items: readonly T[], width: number, work: (it
   return results;
 }
 const maxVaultBytes = 128 * 1024 * 1024;
+/**
+ * A finished hold must read unchanged (same bytes, size and mtime) for this
+ * long in this process before it is reclaimed, so a writer that still had the
+ * replaced file open has time to show up as displaced evidence instead.
+ */
+const holdQuietMs = 10 * 60_000;
 const indexWaitIntervalMs = 50;
 const indexWaitTicks = 100;
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
@@ -64,6 +70,8 @@ export class GitObsidianVault implements LocalVault {
   private scanCache: ScanCache = new Map();
   /** The same cache for configuration files read by `HiddenConfigPort`. */
   private hiddenScanCache: ScanCache = new Map();
+  /** Finished holds last read with their expected bytes: stat at that read, and when first seen so. */
+  private cleanHolds = new Map<string, { size: number; mtime: number; since: number }>();
   /** Wall clock for the racy-mtime window; replaceable in tests. */
   now: () => number = () => Date.now();
   constructor(
@@ -413,6 +421,7 @@ export class GitObsidianVault implements LocalVault {
     // Replays write files: rescan whatever they may have touched.
     if (this.transactions.pending().length) { this.scanCache.clear(); this.hiddenScanCache.clear(); }
     const replay = new Set(authorization.replay), cancel = new Set(authorization.cancel);
+    const released = new Set(Array.isArray(authorization.released) ? authorization.released : []);
     for (const id of replay) if (cancel.has(id)) throw new Error(`Conflicting native recovery authorization: ${id}`);
     for (const intent of this.transactions.pending()) {
       try {
@@ -429,7 +438,10 @@ export class GitObsidianVault implements LocalVault {
       const paths = new Set([...listed, ...this.transactions.trackedPaths().filter(path => path.startsWith(`${directory}/`))]);
       for (const path of paths) {
         const tracked = this.transactions.tracked(path);
-        if (!tracked) continue;
+        if (!tracked) { this.cleanHolds.delete(path); continue; }
+        if (kind === "hold" && await this.reclaimHold(path, tracked.expected?.oid ?? null, released)) continue;
+        this.cleanHolds.delete(path);
+        const before = kind === "hold" ? await this.app.vault.adapter.stat(path) : null;
         const bytes = await this.hiddenBytes(path);
         if (bytes === null) {
           if (this.transactions.oversizeForSource(path)) await this.transactions.supersedeOversize(path, null);
@@ -459,9 +471,18 @@ export class GitObsidianVault implements LocalVault {
         }
         const oid = await hashBlob(bytes);
         if (changedFromMissingOrOversize) { await this.transactions.observe(path, oid); continue; }
-        // No atomic remove-if-hash exists. Keep even clean preimages because a
-        // writer can change a hold between inspection and adapter.remove().
+        // No atomic remove-if-hash exists, so a clean preimage is reclaimed
+        // (reclaimHold) only after it has read unchanged for holdQuietMs and
+        // only when the engine already holds the same bytes.
         const known = kind === "hold" ? tracked.expected : tracked.next;
+        if (kind === "hold" && oid === tracked.expected?.oid && this.transactions.reclaimable(path) && before?.type === "file") {
+          // Remember the stat only when it bracketed the read and is outside
+          // the racy window, so a same-size rewrite must change it.
+          const after = await this.app.vault.adapter.stat(path);
+          if (after?.type === "file" && after.size === bytes.length && before.size === after.size && before.mtime === after.mtime &&
+            Number.isFinite(after.mtime) && this.now() - after.mtime > racyWindowMs)
+            this.cleanHolds.set(path, { size: after.size, mtime: after.mtime, since: this.now() });
+        }
         if (oid === known?.oid || oid === tracked.observed) continue;
         await this.transactions.retainBytes(bytes, tracked.path, path, "displaced", tracked.expected, tracked.next);
         await this.transactions.observe(path, oid);
@@ -469,6 +490,29 @@ export class GitObsidianVault implements LocalVault {
     }
     await this.transactions.compact();
     return this.transactions.recoveries();
+  }
+  /**
+   * For a finished hold whose expected bytes were read before and whose stat
+   * is unchanged since: skips rereading and rehashing it, and removes it once
+   * it has stayed so for `holdQuietMs` and the engine holds those bytes
+   * (`released`). True when the hold needs no further inspection this pass.
+   */
+  private async reclaimHold(path: string, expected: string | null, released: ReadonlySet<string>): Promise<boolean> {
+    const clean = this.cleanHolds.get(path);
+    if (!clean || !this.transactions?.reclaimable(path)) return false;
+    const adapter = this.app.vault.adapter;
+    const unchanged = async () => {
+      const stat = await adapter.stat(path);
+      return stat?.type === "file" && stat.size === clean.size && stat.mtime === clean.mtime;
+    };
+    if (!(await unchanged())) return false;
+    if (expected === null || !released.has(expected) || this.now() - clean.since < holdQuietMs || !adapter.remove) return true;
+    this.assertActive();
+    if (!(await unchanged())) return false;
+    await adapter.remove(path);
+    this.cleanHolds.delete(path);
+    await this.transactions.release(path);
+    return true;
   }
   async recover(authorization?: RecoveryAuthorization): Promise<NativeIssue[]> {
     if (!authorization) throw new Error("Native recovery requires engine authorization.");
@@ -623,15 +667,15 @@ export class GitObsidianVault implements LocalVault {
       total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
         - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
     }
-    const paths = new Set<string>();
     const seen = new Set<string>();
     const targets: typeof visibleFiles = [];
     for (const file of visibleFiles) {
       if (scoped && !scoped.includes(file.path)) continue;
       safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
-      const folded = canonicalFilesystemPath(file.path);
-      if (paths.has(folded)) throw new Error(`Case or Unicode path collision: ${file.path}`);
-      paths.add(folded);
+      // Two included files that differ only by case or Unicode form (possible
+      // on case-sensitive storage) are both captured: the engine reports them
+      // as a collision for the person to rename, and never writes either.
+      // Aliases involving excluded or protected names are refused above.
       targets.push(file);
     }
     // Stats are independent reads; overlap them instead of one round trip per file.
