@@ -1545,3 +1545,76 @@ test("scoped inventory ignores an omitted host-index file excluded by committed 
   assert.deepEqual(Object.keys(scanned.files), [".gitignore"]);
   assert.equal(h.adapterReads.includes("ignored.md"), false);
 });
+
+test("scan reuses captured bytes while size and mtime match and rereads after any change", async () => {
+  const h = await harness();
+  h.put("a.md", bytes("alpha"));
+  h.put("b.md", bytes("bravo"));
+  const first = await h.vault.capture();
+  assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")).sort(), ["a.md", "b.md"]);
+  h.adapterReads.length = 0;
+  const second = await h.vault.capture();
+  assert.deepEqual(h.adapterReads, [], "unchanged files are neither read nor hashed again");
+  assert.deepEqual(second, first);
+  h.put("a.md", bytes("ALPHA")); // Same size; the fake bumps mtime like a real write.
+  const third = await h.vault.capture();
+  assert.deepEqual(h.adapterReads, ["a.md"]);
+  assert.equal(third["a.md"].oid, (await entryFromBytes(bytes("ALPHA"))).oid);
+  assert.equal(third["b.md"].oid, second["b.md"].oid);
+});
+
+test("scan does not cache racily recent or incomplete stats", async () => {
+  const h = await harness();
+  h.put("recent.md", bytes("recent"));
+  h.put("nomtime.md", bytes("no mtime"));
+  h.files.get("recent.md")!.file.stat.mtime = 1_000_000;
+  h.files.get("nomtime.md")!.file.stat.mtime = Number.NaN;
+  h.vault.now = () => 1_000_000 + 1_000;
+  await h.vault.scan();
+  h.adapterReads.length = 0;
+  // A same-size, same-mtime rewrite inside the racy window could otherwise be missed.
+  await h.vault.scan();
+  assert.deepEqual(h.adapterReads.sort(), ["nomtime.md", "recent.md"]);
+  h.vault.now = () => 1_000_000 + 60_000;
+  await h.vault.scan();
+  h.adapterReads.length = 0;
+  await h.vault.scan();
+  assert.deepEqual(h.adapterReads, ["nomtime.md"]);
+});
+
+test("a deleted path leaves the scan cache and apply invalidates its path", async () => {
+  const h = await harness();
+  h.put("a.md", bytes("one"));
+  const base = await h.vault.capture();
+  h.files.delete("a.md");
+  assert.deepEqual(Object.keys(await h.vault.capture()), []);
+  h.put("a.md", bytes("one"));
+  h.files.get("a.md")!.file.stat.mtime = 1; // Reappears with the exact earlier stat.
+  h.adapterReads.length = 0;
+  await h.vault.capture();
+  assert.deepEqual(h.adapterReads, ["a.md"]);
+  const next = await entryFromBytes(bytes("two"));
+  assert.equal((await h.vault.apply("a.md", base["a.md"], next)).kind, "applied");
+  h.adapterReads.length = 0;
+  assert.equal((await h.vault.capture())["a.md"].oid, next.oid);
+  assert.ok(h.adapterReads.includes("a.md"));
+});
+
+test("inventory lists but never walks .git, .trash or the plugin journal", async () => {
+  for (const policy of [NativePathPolicy.legacy, await NativePathPolicy.forConfig(".obsidian")]) {
+    const h = await harness(undefined, policy);
+    h.put("note.md", bytes("note"));
+    h.put(".obsidian/app.json", bytes("{}"));
+    h.put(".git/objects/ab/cdef", bytes("packed"));
+    h.put(".trash/old.md", bytes("old"));
+    h.put(".git-vault-sync/previous-git/x/dot-git/HEAD", bytes("ref"));
+    const listed: string[] = [];
+    h.setListHook(async path => { listed.push(path); });
+    const scanned = await h.vault.scan(policy.binding.rules === "config/1" ? await configScope() : undefined);
+    h.setListHook();
+    assert.ok(Object.hasOwn(scanned.files, "note.md"));
+    assert.equal(Object.hasOwn(scanned.files, ".obsidian/app.json"), policy.binding.rules === "config/1");
+    assert.ok(listed.includes("/"));
+    assert.deepEqual(listed.filter(path => /^(\.git|\.trash|\.git-vault-sync)(\/|$)/.test(path)), []);
+  }
+});

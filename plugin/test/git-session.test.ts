@@ -3251,3 +3251,64 @@ test("same-host deletion of applied configuration needs explicit exact-version c
   assert.equal((await a.session.sync()).kind, "up-to-date");
   assert.equal(repository.fullHeadFiles()[configurationPath], undefined);
 });
+
+/** Counts Git blob hashes (SHA-1 over `blob <n>\0...`) while `work` runs. */
+async function countBlobHashes<T>(work: () => Promise<T>): Promise<{ result: T; hashes: number }> {
+  const subtle = globalThis.crypto.subtle;
+  const original = subtle.digest;
+  let hashes = 0;
+  const prefix = new TextEncoder().encode("blob ");
+  Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    value: (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      const view = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+      if (prefix.every((byte, index) => view[index] === byte)) hashes++;
+      return original.call(subtle, algorithm, data);
+    },
+  });
+  try { return { result: await work(), hashes }; }
+  finally { delete (subtle as { digest?: unknown }).digest; }
+}
+
+test("parseState hashes a journal blob once until its stored bytes change", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base" }));
+  const a = await enrolled(repository);
+  await a.vault.write("n.md", "local");
+  await repository.push({ "n.md": await entryFromText("remote") });
+  conflictsOf(await a.session.sync());
+  const raw = await a.store.load() as { blobs: Record<string, string> };
+  const blobCount = Object.keys(raw.blobs).length;
+  assert.ok(blobCount >= 3);
+  // Earlier parses in this process may already have verified these exact bytes.
+  await parseState(raw);
+  const repeat = await countBlobHashes(() => parseState(structuredClone(raw)));
+  assert.equal(repeat.hashes, 0, "identical blob bytes are not decoded or hashed again");
+  const [oid] = Object.keys(raw.blobs);
+  const tampered = structuredClone(raw);
+  tampered.blobs[oid] = encodeBase64(new TextEncoder().encode("not the original bytes"));
+  await assert.rejects(parseState(tampered), /bytes do not match object ID/);
+});
+
+test("rereading an undecided conflict's checkpoint offers held blobs first, then withdraws them", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base", "other.md": "same" }));
+  const vault = new MemoryVault(await snapshot({}));
+  const store = new MemoryStore();
+  const port = repository.device("A");
+  const offers: string[][] = [];
+  port.offerKnownBlobs = (blobs) => { offers.push(Array.from(blobs, (blob) => blob.oid)); };
+  const session = new SyncSession({ repository: port, vault, store, deviceName: "A", scopeRules: repository.scopeRules, now: NOW, delay: async () => {} });
+  const preview = await session.previewEnrollment();
+  assert.ok(preview.kind === "preview");
+  assert.equal((await session.enroll({ token: preview.token })).kind, "enrolled");
+  await session.sync();
+  await vault.write("n.md", "local");
+  await repository.push({ "n.md": await entryFromText("remote") });
+  conflictsOf(await session.sync());
+  offers.length = 0;
+  conflictsOf(await session.sync());
+  const base = await entryFromText("base"), same = await entryFromText("same");
+  const offered = offers.filter((offer) => offer.length > 0);
+  assert.ok(offered.length > 0, "the old checkpoint read is preceded by an offer");
+  assert.ok(offered.every((offer) => offer.includes(base.oid) && offer.includes(same.oid)));
+  assert.deepEqual(offers.at(-1), [], "the offer is withdrawn after the read");
+});

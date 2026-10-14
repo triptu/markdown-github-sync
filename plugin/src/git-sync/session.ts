@@ -2003,7 +2003,7 @@ export class SyncSession {
     if (!Object.hasOwn(state.blobs, ref.oid)) {
       let data = snapshots.map((files) => files[path]).find((entry) => entry?.oid === ref.oid)?.data;
       if (data === undefined) {
-        const commit = await this.#repository.readCommit(state.base.commit);
+        const commit = await this.#readWithKnown(state.base.commit, state, ...snapshots);
         const entry = commit.oid === state.base.commit ? own(commit.files, path) : undefined;
         if (!entry || !sameEntry(entry, ref)) throw new IntegrityError(`Missing base bytes for ${path}`);
         data = (await verifyEntry(path, entry)).data;
@@ -2053,7 +2053,7 @@ export class SyncSession {
     local: Snapshot,
     head: CommitSnapshot,
   ): Promise<{ kind: "ready"; files: Snapshot } | { kind: "paused"; outcome: SyncOutcome }> {
-    const commit = state.base.commit === head.oid ? head : await this.#repository.readCommit(state.base.commit);
+    const commit = state.base.commit === head.oid ? head : await this.#readWithKnown(state.base.commit, state, local, head.files);
     const checkpointScope = await this.#scopeFor(commit.oid, state.scope.rules);
     if (checkpointScope.digest !== state.scope.digest) return { kind: "paused", outcome: await this.#pause(state, "base-mismatch", "Stored scope digest differs from the checkpoint policy") };
     const checkpoint = await verifySnapshot(filterSnapshot(commit.files, checkpointScope), "checkpoint commit", checkpointScope);
@@ -2111,7 +2111,7 @@ export class SyncSession {
         const readForScope = this.#repository.readCommitForScope;
         if (!readForScope) throw new IntegrityError("Repository cannot read the prior checkpoint under its original scope");
         checkpointCommit = await readForScope.call(this.#repository, prior.base.commit, prior.scope.rules);
-      } else checkpointCommit = prior.base.commit === head.oid ? head : await this.#repository.readCommit(prior.base.commit);
+      } else checkpointCommit = prior.base.commit === head.oid ? head : await this.#readWithKnown(prior.base.commit, prior, local, head.files);
       const priorScope = await this.#scopeFor(checkpointCommit.oid, prior.scope.rules);
       const checkpoint = await verifySnapshot(filterSnapshot(checkpointCommit.files, priorScope), "re-enrollment checkpoint", priorScope);
       if (!Object.hasOwn(prior.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) prior.base.files["__proto__"] = toRef(checkpoint["__proto__"]!);
@@ -2366,6 +2366,24 @@ export class SyncSession {
     const verified = await compileScope({ ...scope.rules }, ignoreText);
     if (verified.digest !== scope.digest) throw new ScopeError("Repository scope and root .gitignore disagree");
     return scope;
+  }
+
+  /**
+   * Reads a commit after offering the bodies already held in memory (journal
+   * blobs, the local scan, the head), so the repository downloads only blobs
+   * none of them has. The repository verifies every offered body it uses.
+   */
+  async #readWithKnown(oid: string, state: StoredState, ...snapshots: Snapshot[]): Promise<CommitSnapshot> {
+    const offer = this.#repository.offerKnownBlobs;
+    if (!offer) return this.#repository.readCommit(oid);
+    const known = new Map<string, string>(Object.entries(state.blobs));
+    for (const snapshot of snapshots) for (const entry of Object.values(snapshot)) known.set(entry.oid, entry.data);
+    offer.call(this.#repository, Array.from(known, ([oid, data]) => ({ oid, data })));
+    try {
+      return await this.#repository.readCommit(oid);
+    } finally {
+      offer.call(this.#repository, []);
+    }
   }
 
   async #readHead(rules: ScopeRules["rules"] = "visible-only"): Promise<CommitSnapshot> {

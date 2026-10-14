@@ -45,6 +45,19 @@ export class FileJournalStore implements DurableStore {
   private sequence = 0;
   private lastDigest: string | null = null;
   private loaded = false;
+  /**
+   * Parsed (still packed) JSON of the latest record this instance read or
+   * wrote, keyed by its file name, which embeds the sequence and SHA-256 of
+   * the exact text. A load whose listing names the same head reuses it.
+   */
+  private head: { path: string; record: unknown } | null = null;
+  /**
+   * Object bodies whose SHA-256 this instance verified (on read) or wrote and
+   * read back (on save). Content addressed, so each is verified once per
+   * instance; pruned to the objects the latest loaded record references.
+   * Saves still compare every existing object on disk before appending.
+   */
+  private verified = new Map<string, string>();
   readonly directory: string;
   constructor(
     private files: JournalFiles,
@@ -85,6 +98,7 @@ export class FileJournalStore implements DurableStore {
       object = (async () => {
         const hash = await digest(data);
         await this.put(`${this.directory}/objects/${hash}.json`, data);
+        this.verified.set(hash, data);
         return hash;
       })();
       pending.set(data, object);
@@ -119,10 +133,10 @@ export class FileJournalStore implements DurableStore {
     }
     return out;
   }
-  private async unpack(value: unknown, pending = new Map<string, Promise<string>>()): Promise<unknown> {
+  private async unpack(value: unknown, pending = new Map<string, Promise<string>>(), cached = true): Promise<unknown> {
     if (Array.isArray(value)) {
       const result: unknown[] = [];
-      for (const item of value) result.push(await this.unpack(item, pending));
+      for (const item of value) result.push(await this.unpack(item, pending, cached));
       return result;
     }
     if (!isObject(value)) return value;
@@ -132,15 +146,18 @@ export class FileJournalStore implements DurableStore {
     ) {
       if (!/^[a-f0-9]{64}$/.test(value.journalBlob))
         throw new Error("Invalid recovery object reference");
-      let object = pending.get(value.journalBlob);
+      const hash = value.journalBlob;
+      let object = pending.get(hash);
       if (!object) {
-        object = (async () => {
-          const bytes = await this.files.read(`${this.directory}/objects/${value.journalBlob}.json`);
-          if ((await digest(bytes)) !== value.journalBlob)
+        const known = cached ? this.verified.get(hash) : undefined;
+        object = known !== undefined ? Promise.resolve(known) : (async () => {
+          const bytes = await this.files.read(`${this.directory}/objects/${hash}.json`);
+          if ((await digest(bytes)) !== hash)
             throw new Error("Recovery object checksum failed");
+          if (cached) this.verified.set(hash, bytes);
           return bytes;
         })();
-        pending.set(value.journalBlob, object);
+        pending.set(hash, object);
       }
       return object;
     }
@@ -148,16 +165,28 @@ export class FileJournalStore implements DurableStore {
     for (const [key, item] of Object.entries(value)) {
       if (key === "blobs" && isObject(item)) {
         const unpacked = await mapObjects(Object.entries(item), async ([oid, reference]) =>
-          ({ oid, bytes: await this.unpack(reference, pending) }));
+          ({ oid, bytes: await this.unpack(reference, pending, cached) }));
         const blobs: Record<string, unknown> = Object.create(null);
         for (const { oid, bytes } of unpacked) blobs[oid] = bytes;
         result[key] = blobs;
-      } else result[key] = await this.unpack(item, pending);
+      } else result[key] = await this.unpack(item, pending, cached);
     }
     return result;
   }
   load(): Promise<unknown> {
-    return serialize(this.files, this.directory, () => this.loadRecord());
+    return serialize(this.files, this.directory, () => this.forgetOnFailure(() => this.loadRecord()));
+  }
+  /**
+   * Any failed load, save or cleanup drops the in-memory head and verified
+   * objects, so the next load rereads and reverifies everything from disk.
+   */
+  private async forgetOnFailure<T>(work: () => Promise<T>): Promise<T> {
+    try { return await work(); }
+    catch (error) {
+      this.head = null;
+      this.verified.clear();
+      throw error;
+    }
   }
   private async records() {
     await this.prepare();
@@ -183,26 +212,37 @@ export class FileJournalStore implements DurableStore {
       this.sequence = 0;
       this.lastDigest = null;
       this.loaded = true;
+      this.head = null;
+      this.verified.clear();
       return null;
     }
     const latest = records[0];
-    const text = await this.files.read(latest.path);
-    if ((await digest(text)) !== latest.hash)
-      throw new Error(
-        "Latest recovery record is corrupt. Preserve the journal before recovering.",
-      );
-    const state: unknown = JSON.parse(text);
-    const unpacked = await this.unpack(state);
+    let state: unknown;
+    if (this.head?.path === latest.path) state = this.head.record;
+    else {
+      const text = await this.files.read(latest.path);
+      if ((await digest(text)) !== latest.hash)
+        throw new Error(
+          "Latest recovery record is corrupt. Preserve the journal before recovering.",
+        );
+      state = JSON.parse(text);
+    }
+    // `unpack` builds a fresh tree and never mutates the cached record.
+    const referenced = new Map<string, Promise<string>>();
+    const unpacked = await this.unpack(state, referenced);
+    this.head = { path: latest.path, record: state };
+    for (const hash of [...this.verified.keys()]) if (!referenced.has(hash)) this.verified.delete(hash);
     this.sequence = latest.sequence;
     this.lastDigest = latest.hash;
     this.loaded = true;
     return unpacked;
   }
   save(state: unknown): Promise<void> {
-    return serialize(this.files, this.directory, () => this.append(state));
+    return serialize(this.files, this.directory, () => this.forgetOnFailure(() => this.append(state)));
   }
+  /** Rereads and reverifies every retained record and object from disk; never uses the load caches. */
   compact(): Promise<{ recordsRemoved: number; objectsRemoved: number; temporaryFilesRemoved: number }> {
-    return serialize(this.files, this.directory, async () => {
+    return serialize(this.files, this.directory, () => this.forgetOnFailure(async () => {
       if (!this.files.remove) throw new Error("This storage adapter does not support recovery cleanup.");
       if (!this.loaded) await this.loadRecord();
       await this.assertHead();
@@ -222,7 +262,7 @@ export class FileJournalStore implements DurableStore {
         const text = await this.files.read(record.path);
         if (await digest(text) !== record.hash) throw new Error("Recovery record checksum failed. Cleanup stopped.");
         const state: unknown = JSON.parse(text);
-        await this.unpack(state);
+        await this.unpack(state, new Map(), false);
         references(state);
       }
       await this.assertHead();
@@ -249,7 +289,7 @@ export class FileJournalStore implements DurableStore {
         }
       }
       return { recordsRemoved, objectsRemoved, temporaryFilesRemoved };
-    });
+    }));
   }
   private async assertHead(): Promise<void> {
     const latest = (await this.records())[0];
@@ -259,8 +299,11 @@ export class FileJournalStore implements DurableStore {
   private async append(state: unknown): Promise<void> {
     if (!this.loaded) await this.loadRecord();
     await this.assertHead();
-    const text = JSON.stringify(await this.pack(state));
+    const written = new Map<string, Promise<string>>();
+    const text = JSON.stringify(await this.pack(state, written));
     if (typeof text !== "string") throw new Error("Invalid journal state");
+    const referenced = new Set(await Promise.all(written.values()));
+    for (const known of [...this.verified.keys()]) if (!referenced.has(known)) this.verified.delete(known);
     const hash = await digest(text);
     await this.assertHead();
     if (hash === this.lastDigest) return;
@@ -269,5 +312,6 @@ export class FileJournalStore implements DurableStore {
     await this.put(path, text);
     this.sequence = next;
     this.lastDigest = hash;
+    this.head = { path, record: JSON.parse(text) };
   }
 }

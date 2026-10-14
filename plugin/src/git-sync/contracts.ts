@@ -34,6 +34,11 @@ export interface Repository {
   identity(): Promise<RepositoryIdentity>;
   head(): Promise<CommitSnapshot>;
   readCommit(oid: string): Promise<CommitSnapshot>;
+  /**
+   * Optional hint: blob bodies the engine already holds. A repository may use
+   * one in place of a download only after verifying it hashes to the blob ID.
+   */
+  offerKnownBlobs?(blobs: Iterable<{ oid: string; data: string }>): void;
   /** Read a historical checkpoint under its original policy during reviewed scope migration. */
   readCommitForScope?(oid: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot>;
   /** Immutable policy for the complete tree at this commit; needed only in config/1 mode. */

@@ -1205,3 +1205,34 @@ test("the root .gitignore establishing scope is read on its own before the archi
   assert.equal(objectGets(api).blobs, 1);
   assert.equal(api.archives.length, 1);
 });
+test("offered blob bodies replace downloads only when they hash to the tree's blob", async () => {
+  const initial = { "big.bin": file(Buffer.alloc(1024 * 1024, 7)), "a.md": file("a"), "b.md": file("b") };
+  const api = new FakeGitHub(initial), checkpoint = api.head;
+  api.head = api.addCommit({ ...initial, "a.md": file("remote") }, checkpoint);
+  const repo = client(api);
+  repo.offerKnownBlobs([
+    { oid: initial["big.bin"].oid, data: initial["big.bin"].data },
+    { oid: initial["a.md"].oid, data: file("forged").data },
+    { oid: initial["b.md"].oid, data: "not base64!" },
+  ]);
+  api.requests = [];
+  const read = await repo.readCommit(checkpoint);
+  assert.deepEqual(read.files, Object.assign(Object.create(null), initial));
+  assert.equal(objectGets(api).blobs, 2, "only the forged and malformed offers fall back to downloads");
+  assert.ok(!api.requests.some(r => r.url.endsWith(`/git/blobs/${initial["big.bin"].oid}`)));
+});
+test("alternating head and checkpoint reads over the LRU budget keep both snapshots retained", async () => {
+  // 9 x 6 MiB per snapshot exceeds the 128 MiB LRU accounting on its own.
+  const initial = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`large/${i}.bin`, file(Buffer.alloc(6 * 1024 * 1024, i))]));
+  const api = new FakeGitHub(initial), checkpoint = api.head;
+  api.head = api.addCommit(Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`large/${i}.bin`, file(Buffer.alloc(6 * 1024 * 1024, i + 100))])), checkpoint);
+  const repo = client(api);
+  await repo.head();
+  await repo.readCommit(checkpoint);
+  api.requests = [];
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await repo.head()).files["large/0.bin"].data, file(Buffer.alloc(6 * 1024 * 1024, 100)).data);
+    assert.equal((await repo.readCommit(checkpoint)).files["large/0.bin"].data, initial["large/0.bin"].data);
+  }
+  assert.equal(objectGets(api).blobs, 0);
+});

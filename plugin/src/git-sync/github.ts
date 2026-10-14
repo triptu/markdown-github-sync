@@ -2,6 +2,7 @@ import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, R
 import { ArchiveError, selectArchiveFiles } from "./archive";
 import { assertNoNestedGitignore, canonicalFilesystemPath, compileScope, scopeForTree } from "./scope";
 import type { Scope, ScopeRules } from "./scope";
+import { trustVerifiedEntry } from "./codec";
 
 export interface GitHubRequest {
   url: string;
@@ -255,13 +256,21 @@ export class GitHubRepository implements Repository {
   private readonly scopeCache = new Map<string, Scope>();
   private cacheCost = 0;
   /**
-   * Verified blobs of the most recent complete snapshot, outside the LRU so a
-   * snapshot larger than CACHE_LIMIT does not thrash on every poll. Bounded by
-   * SNAPSHOT_LIMIT decoded bytes (one snapshot); it shares string instances
-   * with the LRU and with the snapshot the caller already holds. Strings are
-   * immutable and every returned Entry is a fresh object.
+   * Verified blobs of the two most recent distinct complete snapshots (by
+   * tree), outside the LRU so a snapshot larger than CACHE_LIMIT does not
+   * thrash on every poll, and so alternating head and checkpoint reads (an
+   * undecided conflict) reuse both. Bounded by 2 x SNAPSHOT_LIMIT decoded
+   * bytes; it shares string instances with the LRU and with the snapshots
+   * the caller already holds. Strings are immutable and every returned Entry
+   * is a fresh object.
    */
-  private retained = new Map<string, { data: string; size: number }>();
+  private retained: { tree: string; blobs: Map<string, { data: string; size: number }> }[] = [];
+  /**
+   * Unverified candidate blob bodies offered by the engine (base64, keyed by
+   * claimed oid). Used only for blobs a snapshot is missing, and only after
+   * their bytes hash to the tree's oid. Replaced by each offer.
+   */
+  private offered = new Map<string, string>();
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
@@ -459,7 +468,8 @@ export class GitHubRepository implements Repository {
   }
   private knownBlob(hash: string, length: number): string | undefined {
     const cached = this.cached("blob", hash);
-    const known = cached?.kind === "blob" ? cached : this.retained.get(hash);
+    let known: { data: string; size: number } | undefined = cached?.kind === "blob" ? cached : undefined;
+    for (const snapshot of this.retained) known ??= snapshot.blobs.get(hash);
     if (known === undefined) return undefined;
     if (known.size !== length) throw new GitHubError("Blob identity or size mismatch");
     return known.data;
@@ -537,17 +547,45 @@ export class GitHubRepository implements Repository {
     }
     const paths = new Map<string, string[]>();
     for (const item of included) paths.set(item.sha, [...paths.get(item.sha) ?? [], item.path]);
-    const remote = await this.reuseLocal(missing, paths, blobs);
+    const unknown = await this.reuseOffered(missing, blobs);
+    const remote = await this.reuseLocal(unknown, paths, blobs);
     await this.download(value.oid, items, remote, paths, blobs);
     const files: Snapshot = Object.create(null);
     for (const item of included) {
       if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
       const data = blobs.get(item.sha);
       if (data === undefined) throw new GitHubError("Blob read incomplete");
-      files[item.path] = { oid: item.sha, mode: item.mode, data };
+      // Every value in `blobs` was decoded canonically and hashed to `item.sha`.
+      files[item.path] = trustVerifiedEntry({ oid: item.sha, mode: item.mode, data });
     }
-    this.retained = new Map(Array.from(sizes, ([hash, length]) => [hash, { data: blobs.get(hash) ?? "", size: length }]));
+    const retained = new Map(Array.from(sizes, ([hash, length]) => [hash, { data: blobs.get(hash) ?? "", size: length }]));
+    this.retained = [{ tree: value.treeOid, blobs: retained }, ...this.retained.filter(item => item.tree !== value.treeOid)].slice(0, 2);
     return { oid: value.oid, treeOid: value.treeOid, files };
+  }
+  /**
+   * Offers blob bodies the caller already holds (local files, journal blobs),
+   * so a snapshot read can skip downloading them. Nothing is trusted: an
+   * offered body is used only for a blob a snapshot is missing, and only once
+   * its decoded bytes match the tree's size and Git blob hash.
+   */
+  offerKnownBlobs(blobs: Iterable<{ oid: string; data: string }>): void {
+    const offered = new Map<string, string>();
+    for (const blob of blobs) if (typeof blob?.oid === "string" && typeof blob.data === "string") offered.set(blob.oid, blob.data);
+    this.offered = offered;
+  }
+  /** Accepts offered bodies that hash to missing blobs; returns the blobs still missing. */
+  private async reuseOffered(missing: [string, number][], into: Map<string, string>): Promise<[string, number][]> {
+    if (missing.length === 0 || this.offered.size === 0) return missing;
+    const remaining: [string, number][] = [];
+    for (const [hash, length] of missing) {
+      const data = this.offered.get(hash);
+      let bytes: Uint8Array | null = null;
+      if (data !== undefined) {
+        try { bytes = decode(data); } catch { bytes = null; }
+      }
+      if (bytes === null || !(await this.accept(hash, length, bytes, into))) remaining.push([hash, length]);
+    }
+    return remaining;
   }
   /** Reuses local files whose bytes hash to a missing blob; returns the blobs still missing. */
   private async reuseLocal(missing: [string, number][], paths: Map<string, string[]>, into: Map<string, string>): Promise<[string, number][]> {
@@ -565,9 +603,11 @@ export class GitHubRepository implements Repository {
   }
   /** Records `bytes` when they are exactly the blob; false for any mismatch. */
   private async accept(hash: string, length: number, bytes: Uint8Array, into: Map<string, string>): Promise<boolean> {
-    if (bytes.length !== length || await gitBlobOid(bytes) !== hash) return false;
-    checkLfs(bytes);
+    if (bytes.length !== length) return false;
+    // Encode before awaiting the hash (which copies synchronously): both see the same bytes.
     const data = encodeGitData(bytes);
+    if (await gitBlobOid(bytes) !== hash) return false;
+    checkLfs(bytes);
     this.remember(hash, { kind: "blob", size: length, data });
     into.set(hash, data);
     return true;

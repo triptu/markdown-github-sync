@@ -1,5 +1,5 @@
 import { App, FileView, TFile } from "obsidian";
-import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry } from "./codec";
+import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry, withMode } from "./codec";
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
@@ -14,6 +14,21 @@ const maxFileBytes = 8 * 1024 * 1024;
 const maxVaultBytes = 128 * 1024 * 1024;
 const indexWaitIntervalMs = 50;
 const indexWaitTicks = 100;
+/**
+ * A file whose mtime is this recent may still be rewritten within the same
+ * timestamp granule (FAT/exFAT storage has 2 s), so its stat proves nothing.
+ */
+const racyWindowMs = 5_000;
+interface ScanKey { size: number; mtime: number; ctime: number | null }
+/** A cache key only for a complete stat; anything missing disables caching. */
+function scanKey(stat: { size: unknown; mtime: unknown; ctime?: unknown }): ScanKey | null {
+  const valid = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  if (!valid(stat.size) || !valid(stat.mtime) || stat.mtime === 0) return null;
+  return { size: stat.size, mtime: stat.mtime, ctime: valid(stat.ctime) ? stat.ctime : null };
+}
+function sameScanKey(a: ScanKey, b: ScanKey): boolean {
+  return a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime;
+}
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 class OversizeReadError extends Error {
   constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
@@ -40,6 +55,15 @@ function exactText(bytes: Uint8Array): string | null {
 }
 export class GitObsidianVault implements LocalVault {
   private oversized = new Map<string, number>();
+  /**
+   * Visible files captured by `scan`, reused while the adapter reports the
+   * same size, mtime and ctime. Entries are stored only for complete stats
+   * outside the racy window, dropped on any mismatch, on `apply` to the path
+   * and when the path leaves a scan.
+   */
+  private scanCache = new Map<string, ScanKey & { entry: Entry }>();
+  /** Wall clock for the racy-mtime window; replaceable in tests. */
+  now: () => number = () => Date.now();
   constructor(
     private app: App,
     private modes: NativeModes = { get: () => "100644", set: () => {} },
@@ -538,7 +562,7 @@ export class GitObsidianVault implements LocalVault {
         throw new Error("Configuration scope does not match the native vault policy.");
     }
     const scoped = scope?.rules.rules === "config/1" ? scope : null;
-    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
+    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive, { pruneOpaque: true });
     if (scoped) {
       assertLocalNamespace(inventory, scoped);
     }
@@ -567,6 +591,7 @@ export class GitObsidianVault implements LocalVault {
         - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
     }
     const paths = new Set<string>();
+    const seen = new Set<string>();
     for (const file of visibleFiles) {
       if (scoped && !scoped.includes(file.path)) continue;
       safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
@@ -580,6 +605,16 @@ export class GitObsidianVault implements LocalVault {
         unreadable.push({ path: file.path, size, mtime, reason: "oversize" });
         continue;
       }
+      seen.add(file.path);
+      const key = stat?.type === "file" ? scanKey(stat) : null;
+      const cached = key ? this.scanCache.get(file.path) : undefined;
+      if (key && cached && sameScanKey(cached, key)) {
+        total += key.size;
+        if (total > maxVaultBytes) throw new Error("Vault content exceeds the 128 MiB safety limit.");
+        snapshot[file.path] = withMode(cached.entry, this.modes.get(file.path));
+        continue;
+      }
+      this.scanCache.delete(file.path);
       if (!(await this.app.vault.adapter.exists(file.path)))
         throw new Error("The vault changed during capture. Sync will retry.");
       const bytes = new Uint8Array(await this.app.vault.adapter.readBinary(file.path));
@@ -591,8 +626,14 @@ export class GitObsidianVault implements LocalVault {
       }
       total += bytes.length;
       if (total > maxVaultBytes) throw new Error("Vault content exceeds the 128 MiB safety limit.");
-      snapshot[file.path] = await entryFromBytes(bytes, this.modes.get(file.path));
+      const entry = await entryFromBytes(bytes, this.modes.get(file.path));
+      snapshot[file.path] = entry;
+      // Cache only bytes read under a complete stat that matches their length
+      // and is old enough that a same-size rewrite must change the mtime.
+      if (key && bytes.length === key.size && this.now() - key.mtime > racyWindowMs)
+        this.scanCache.set(file.path, { ...key, entry: withMode(entry, entry.mode) }); // Private copy.
     }
+    for (const path of [...this.scanCache.keys()]) if (!seen.has(path)) this.scanCache.delete(path);
     return { files: snapshot, unreadable };
   }
   private async folders(path: string): Promise<void> {
@@ -615,10 +656,11 @@ export class GitObsidianVault implements LocalVault {
   private async assertWritableNamespace(path: string): Promise<void> {
     this.assertConfigDir();
     if (this.nativePolicy.binding.rules !== "config/1") return;
-    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive);
+    const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive, { pruneOpaque: true });
     assertLocalNamespace(inventory, this.nativePolicy, path);
   }
   async apply(path: string, expected: Entry | null, next: Entry | null): Promise<ApplyResult> {
+    this.scanCache.delete(path);
     safePath(path, this.nativePolicy);
     await this.assertWritableNamespace(path);
     if (this.transactions?.recoveries().some(item => item.kind === "oversize" && item.path === path))

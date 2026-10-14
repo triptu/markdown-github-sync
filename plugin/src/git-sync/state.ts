@@ -661,6 +661,13 @@ export function referencedBlobs(state: Omit<StoredState, "blobs">): Set<string> 
   return oids;
 }
 
+/**
+ * Blob bodies the previous parse verified, keyed by object ID. A blob is
+ * skipped only when its base64 text is identical to a verified one, so the
+ * check is a pure function of (id, data) and stays correct across states.
+ */
+let verifiedBlobs = new Map<string, string>();
+
 /** Parses untrusted stored data, migrating /1 and /2. `undefined`/`null` mean "never enrolled". */
 export async function parseState(value: unknown): Promise<StoredState> {
   const at = "state";
@@ -769,9 +776,16 @@ export async function parseState(value: unknown): Promise<StoredState> {
   }
 
   const blobs: Record<string, string> = safeDictionary();
+  const checked = new Map<string, string>();
   for (const [key, data] of dictionary(field(raw, "blobs"), `${at}.blobs`)) {
     const id = oid(key, `${at}.blobs`);
     if (typeof data !== "string") fail(`${at}.blobs[${key}]`, "expected base64 data");
+    // Exactly these bytes already decoded canonically and hashed to this id.
+    if (verifiedBlobs.get(id) === data) {
+      checked.set(id, data);
+      blobs[id] = data;
+      continue;
+    }
     let bytes: Uint8Array;
     try {
       bytes = decodeBase64(data);
@@ -779,8 +793,11 @@ export async function parseState(value: unknown): Promise<StoredState> {
       fail(`${at}.blobs[${key}]`, "invalid base64");
     }
     if ((await hashBlob(bytes)) !== id) fail(`${at}.blobs[${key}]`, "bytes do not match object ID");
+    checked.set(id, data);
     blobs[id] = data;
   }
+  // Bounded by one state's blob table; strings are shared with the parsed state.
+  verifiedBlobs = checked;
 
   const retireReview = version === "1" || version === "2";
   if (retireReview) {

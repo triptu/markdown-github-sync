@@ -28,8 +28,24 @@ export class NativePathPolicy {
 
 export interface LocalInventory { files: Set<string>; folders: Set<string> }
 
-/** Adapter names, including ignored and denied entries; never reads file bytes. */
-export async function inventoryLocal(files: Pick<DataAdapter, "list">, assertActive: () => void): Promise<LocalInventory> {
+/**
+ * Folders whose every descendant is denied by every scope (`.git`,
+ * `.git-vault-sync`, export directories, `.trash`, at any depth). Their own
+ * names still enter an inventory, so aliases of them are still detected; a
+ * descendant could only alias another descendant of a denied folder.
+ */
+export function isOpaqueFolder(path: string): boolean {
+  const name = canonicalFilesystemPath(path.slice(path.lastIndexOf("/") + 1));
+  return name === ".git" || name === ".git-vault-sync" || name.startsWith(".git-vault-sync-export-") || name === ".trash";
+}
+
+/**
+ * Adapter names, including ignored and denied entries; never reads file bytes.
+ * With `pruneOpaque`, folders matching `isOpaqueFolder` are listed by name
+ * but not walked (the plugin journal, previous `.git` directories and trash).
+ */
+export async function inventoryLocal(files: Pick<DataAdapter, "list">, assertActive: () => void,
+  options: { pruneOpaque?: boolean } = {}): Promise<LocalInventory> {
   const inventory: LocalInventory = { files: new Set(), folders: new Set() };
   const pending = [""];
   const visited = new Set<string>();
@@ -46,7 +62,10 @@ export async function inventoryLocal(files: Pick<DataAdapter, "list">, assertAct
       if (!isValidPath(path) || parent !== directory || inventory.files.has(path) || inventory.folders.has(path))
         throw new Error(`Invalid local listing beneath ${directory || "vault root"}: ${path}`);
       if (kind === "file") inventory.files.add(path);
-      else { inventory.folders.add(path); pending.push(path); }
+      else {
+        inventory.folders.add(path);
+        if (!(options.pruneOpaque && isOpaqueFolder(path))) pending.push(path);
+      }
       if (inventory.files.size + inventory.folders.size > 100_000)
         throw new Error("Local path inventory exceeds 100,000 entries");
     };

@@ -73,8 +73,38 @@ export async function digestText(text: string): Promise<string> {
   return sha1Hex(new TextEncoder().encode(text));
 }
 
+/**
+ * Entry objects whose `data` is known to be canonical base64 of bytes hashing
+ * to `oid`, with the exact (oid, data) pair that was checked. Only code that
+ * just hashed the very bytes it encoded may add to it. Lookups compare the
+ * current fields, so mutating a trusted entry voids its trust.
+ */
+const trustedEntries = new WeakMap<object, { oid: string; data: string }>();
+
+/** Marks an entry whose bytes the caller has just hashed to `entry.oid`. */
+export function trustVerifiedEntry<T extends Entry>(entry: T): T {
+  trustedEntries.set(entry, { oid: entry.oid, data: entry.data });
+  return entry;
+}
+
+function isTrustedEntry(entry: Entry): boolean {
+  const known = trustedEntries.get(entry);
+  return known !== undefined && known.oid === entry.oid && known.data === entry.data;
+}
+
+/** A copy with another mode; keeps trust because the mode is not part of the blob identity. */
+export function withMode(entry: Entry, mode: FileMode): Entry {
+  const copy: Entry = { oid: entry.oid, mode, data: entry.data };
+  return isTrustedEntry(entry) ? trustVerifiedEntry(copy) : copy;
+}
+
 export async function entryFromBytes(bytes: Uint8Array, mode: FileMode = "100644"): Promise<Entry> {
-  return { oid: await hashBlob(bytes), mode, data: encodeBase64(bytes) };
+  // Encode and start hashing (which copies the bytes synchronously) with no
+  // await in between, so both describe the same bytes even if the caller
+  // later reuses its buffer.
+  const data = encodeBase64(bytes);
+  const oid = hashBlob(bytes);
+  return trustVerifiedEntry({ oid: await oid, mode, data });
 }
 
 export async function entryFromText(text: string, mode: FileMode = "100644"): Promise<Entry> {
@@ -150,10 +180,11 @@ export function hasEntryShape(value: unknown): value is Entry {
 /** Throws unless the entry's bytes hash to its oid. */
 export async function verifyEntry(path: string, entry: unknown): Promise<Entry> {
   if (!hasEntryShape(entry)) throw new IntegrityError(`Malformed entry for ${path}`);
+  if (isTrustedEntry(entry)) return entry;
   if ((await hashBlob(decodeBase64(entry.data))) !== entry.oid) {
     throw new IntegrityError(`Content of ${path} does not match its object ID`);
   }
-  return entry;
+  return trustVerifiedEntry(entry);
 }
 
 /** Validates structure and bytes, then membership in an explicit policy (legacy by default). */

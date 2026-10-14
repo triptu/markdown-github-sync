@@ -15,15 +15,20 @@ test("parallel object verification remains bounded and detects later corruption"
     try { await new Promise(resolve => setTimeout(resolve, 2)); return await read(path); }
     finally { active--; }
   };
+  // The writer already verified these objects by reading them back.
   assert.deepEqual(JSON.parse(JSON.stringify(await store.load())), state);
+  assert.equal(reads, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(await new FileJournalStore(files, identity).load())), state);
   assert.equal(reads, 12); assert.equal(peak, 4);
   reads = 0;
   await store.save({ ...state, revision: 1 });
   assert.equal(reads, 12); assert.equal(active, 0);
   const path = [...files.values.keys()].find(path => path.includes("/objects/"));
   assert.ok(path); files.values.set(path, "corrupt");
-  await assert.rejects(store.load(), /checksum/);
+  await assert.rejects(new FileJournalStore(files, identity).load(), /checksum/);
+  // Every save still compares existing objects on disk, and a failure drops the caches.
   await assert.rejects(store.save(state), /corrupt/);
+  await assert.rejects(store.load(), /checksum/);
   assert.equal(active, 0);
 });
 
@@ -144,9 +149,8 @@ test("native Entry.data verifies 64 unique objects across 160 retained reference
   objectReads = 0;
   const latest = nativeRecord(21, 9, 7);
   assert.deepEqual(plain(await store.load()), plain(latest));
-  assert.equal(objectReads, 9);
-  objectReads = 0;
-  assert.deepEqual(plain(await store.load()), plain(latest));
+  assert.equal(objectReads, 0, "objects written and read back by this store are verified once");
+  assert.deepEqual(plain(await new FileJournalStore(files, identity, "native").load()), plain(latest));
   assert.equal(objectReads, 9);
   objectReads = 0; objectExists = 0;
   await store.save({ ...latest, supersededRecoveryIds: [...latest.supersededRecoveryIds, crypto.randomUUID()] });
@@ -157,7 +161,7 @@ test("native Entry.data verifies 64 unique objects across 160 retained reference
   const object = [...files.values.keys()].find(path => path.includes("/native/objects/"));
   assert.ok(object);
   files.values.set(object, "corrupt");
-  await assert.rejects(store.load(), /checksum/);
+  await assert.rejects(new FileJournalStore(files, identity, "native").load(), /checksum/);
   const recordCount = [...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length;
   await assert.rejects(store.save(latest), /corrupt/);
   assert.equal([...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length, recordCount);
@@ -486,4 +490,37 @@ test("cleanup after every failed append keeps the last committed state and remov
     assert.deepEqual(plain(await new FileJournalStore(files, identity).load()), committed);
     assert.equal([...files.values.keys()].some(path => path.endsWith(".tmp")), false, `boundary ${at}`);
   }
+});
+
+test("an unchanged journal head loads from memory; a new head rereads only its record and new objects", async () => {
+  const files = new Files(), writer = new FileJournalStore(files, identity);
+  const blobs = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`oid-${i}`, btoa(`body-${i}`)]));
+  await writer.save({ phase: "one", blobs });
+  const reader = new FileJournalStore(files, identity);
+  const read = files.read.bind(files);
+  let recordReads = 0, objectReads = 0;
+  files.read = async path => {
+    if (path.includes("/records/")) recordReads++;
+    if (path.includes("/objects/")) objectReads++;
+    return read(path);
+  };
+  assert.deepEqual(plain(await reader.load()), { phase: "one", blobs });
+  assert.deepEqual([recordReads, objectReads], [1, 6]);
+  recordReads = objectReads = 0;
+  const again = await reader.load() as { blobs: Record<string, string> };
+  assert.deepEqual(plain(again), { phase: "one", blobs });
+  assert.deepEqual([recordReads, objectReads], [0, 0], "cache hit reads nothing beyond the listing");
+  again.blobs["oid-0"] = "mutated by caller";
+  assert.deepEqual(plain(await reader.load()), { phase: "one", blobs }, "each load returns a fresh tree");
+  // Another writer appends: the listing names a new head, so the reader rereads it.
+  const next = { ...blobs, "oid-6": btoa("body-6") };
+  await writer.save({ phase: "two", blobs: next });
+  recordReads = objectReads = 0;
+  assert.deepEqual(plain(await reader.load()), { phase: "two", blobs: next });
+  assert.deepEqual([recordReads, objectReads], [1, 1], "only the new record and new object are read");
+  // A corrupt new head is never masked by the cached older one.
+  await writer.save({ phase: "three", blobs });
+  const latest = [...files.values.keys()].filter(path => path.includes("/records/")).sort().at(-1);
+  assert.ok(latest); files.values.set(latest, "{}");
+  await assert.rejects(reader.load(), /corrupt/);
 });

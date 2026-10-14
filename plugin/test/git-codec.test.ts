@@ -17,6 +17,7 @@ import {
   toManifest,
   own,
   verifySnapshot,
+  withMode,
 } from "../src/git-sync/codec";
 import { compileScope } from "../src/git-sync/scope";
 
@@ -100,4 +101,34 @@ test("prototype-key files survive verification and manifests; absent access is o
   assert.ok(!sameManifest(Object.fromEntries([["constructor", entry]]), {}));
   const inherited = Object.create({ oid: entry.oid, mode: entry.mode, data: entry.data });
   await assert.rejects(verifySnapshot({ x: inherited }, "inherited entry fields"), IntegrityError);
+});
+
+test("entries hashed by their producer skip re-verification until their fields change", async () => {
+  const subtle = globalThis.crypto.subtle;
+  const original = subtle.digest;
+  let digests = 0;
+  Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    value: (algorithm: AlgorithmIdentifier, data: BufferSource) => { digests++; return original.call(subtle, algorithm, data); },
+  });
+  try {
+    const produced = await entryFromText("produced");
+    digests = 0;
+    const verified = await verifySnapshot({ "a.md": produced, "b.md": withMode(produced, "100755") }, "trusted");
+    assert.equal(digests, 0, "producer-hashed entries and their mode copies are not hashed again");
+    assert.equal(verified["b.md"].mode, "100755");
+    // A structurally identical copy from untrusted input is hashed once, then trusted.
+    const copy = JSON.parse(JSON.stringify(produced)) as typeof produced;
+    await verifySnapshot({ "a.md": copy }, "copy");
+    assert.equal(digests, 1);
+    await verifySnapshot({ "a.md": copy }, "copy again");
+    assert.equal(digests, 1);
+    // Mutation voids trust: forged bytes under the trusted oid are rejected.
+    copy.data = encodeBase64(new TextEncoder().encode("forged"));
+    await assert.rejects(verifySnapshot({ "a.md": copy }, "mutated"), IntegrityError);
+    produced.oid = (await entryFromText("other")).oid;
+    await assert.rejects(verifySnapshot({ "a.md": produced }, "mutated oid"), IntegrityError);
+  } finally {
+    delete (subtle as { digest?: unknown }).digest;
+  }
 });
