@@ -306,9 +306,12 @@ export default class GitVaultSync extends Plugin {
       ...(target ? {} : {
         readLocal: async (path: string, expectedSize: number) => {
           owner.assertActive();
-          const bytes = await readLocalCandidate(this.app.vault.adapter, path, expectedSize);
+          // The vault's scan cache answers for unchanged files, so a cold launch reads each file once.
+          const local = this.nativeVault
+            ? await this.nativeVault.readCandidate(path, expectedSize)
+            : await readLocalCandidate(this.app.vault.adapter, path, expectedSize);
           owner.assertActive();
-          return bytes;
+          return local;
         },
         onReadProgress: (done: number, total: number) => {
           owner.assertActive();
