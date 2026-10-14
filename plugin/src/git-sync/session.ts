@@ -67,6 +67,11 @@ export interface SessionPorts {
 const RETAINED_RECOVERY = 20;
 
 type Unavailable = { kind: "unenrolled" } | { kind: "corrupt"; detail: string };
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+/** Observes a rejection immediately, so an unused speculative request is never an unhandled rejection. */
+function settled<T>(promise: Promise<T>): Promise<Settled<T>> {
+  return promise.then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
+}
 
 /** A scanner omission is not evidence that a file is absent. */
 type LocalObservation = { kind: "unknown" } | { kind: "known"; entry: Entry | null };
@@ -287,6 +292,8 @@ export class SyncSession {
   /** Visible files the latest capture could not read; they are untouched until readable. */
   #unreadable: UnreadableFile[] = [];
   #guarded: string[] = [];
+  /** Set once a journal load or save has shown this session enrolled; enrollment is never undone in place. */
+  #knownEnrolled = false;
 
   constructor(ports: SessionPorts) {
     this.#repository = ports.repository;
@@ -543,6 +550,8 @@ export class SyncSession {
    */
   notifyLocalChange(): Promise<Unavailable | { kind: "invalidated" }> {
     return this.#exclusive(async () => {
+      // Events are frequent and change nothing: once enrollment is known, skip the journal read.
+      if (this.#knownEnrolled) return { kind: "invalidated" };
       const loaded = await this.#load();
       return loaded.kind === "enrolled" ? { kind: "invalidated" } : loaded;
     });
@@ -615,6 +624,12 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const { state } = loaded;
+      // The ordinary path also needs the branch head: request it alongside the
+      // identity. It is only a read; it is used solely by a first transaction
+      // that no resumed operation precedes, and its errors surface there.
+      let prefetchedHead = !state.pause && !state.operation && this.#repository.headOid
+        ? settled(this.#repository.headOid())
+        : null;
       // Every fence precedes native recovery: nothing native is replayed,
       // cancelled or persisted for a vault that is paused, bound to another
       // repository or sharing its installation.
@@ -656,6 +671,7 @@ export class SyncSession {
       for (;;) {
         let cancelled = false;
         if (state.operation) {
+          prefetchedHead = null;
           const resumed = await this.#resume(state);
           if (resumed.kind === "held") return resumed.outcome;
           if (resumed.kind === "cancelled") cancelled = true;
@@ -664,7 +680,9 @@ export class SyncSession {
             resumed.carried.forEach((path) => carried.add(path));
           }
         }
-        const outcome: SyncOutcome | Cancelled = cancelled ? { kind: "cancelled" } : await this.#transact(state);
+        const headOid = prefetchedHead;
+        prefetchedHead = null;
+        const outcome: SyncOutcome | Cancelled = cancelled ? { kind: "cancelled" } : await this.#transact(state, headOid);
         if (outcome.kind === "cancelled") {
           // Another publication won the branch. Our seal is final, so reconcile
           // against the winner, with a short jittered pause between rounds.
@@ -947,10 +965,12 @@ export class SyncSession {
 
   // ---- Synchronization ---------------------------------------------------
 
-  async #transact(state: StoredState): Promise<SyncOutcome | Cancelled> {
+  async #transact(state: StoredState, prefetchedHead: Promise<Settled<string>> | null = null): Promise<SyncOutcome | Cancelled> {
     this.#guarded = [];
+    // The head is read before the local capture: a vault event (such as a
+    // rename) during the read must still be able to refuse a stale capture.
     let head: CommitSnapshot;
-    try { head = await this.#readHead(state.scope.rules); }
+    try { head = await this.#readHead(state.scope.rules, prefetchedHead); }
     catch (error) {
       if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
       throw error;
@@ -2323,7 +2343,9 @@ export class SyncSession {
     const raw = await this.#store.load();
     if (raw === undefined || raw === null) return { kind: "unenrolled" };
     try {
-      return { kind: "enrolled", state: await parseState(raw) };
+      const state = await parseState(raw);
+      this.#knownEnrolled = true;
+      return { kind: "enrolled", state };
     } catch (error) {
       if (error instanceof CorruptStateError) return { kind: "corrupt", detail: error.message };
       throw error;
@@ -2349,6 +2371,7 @@ export class SyncSession {
     else if (copy.operation?.kind === "apply") copy.operation.target.files = toManifest(copy.operation.target.files);
     for (const record of copy.recovery) record.files = toManifest(record.files);
     await this.#store.save(copy);
+    this.#knownEnrolled = true;
   }
 
   async #pause(state: StoredState, reason: PauseReason, detail: string): Promise<SyncOutcome> {
@@ -2376,9 +2399,11 @@ export class SyncSession {
   async #readWithKnown(oid: string, state: StoredState, ...snapshots: Snapshot[]): Promise<CommitSnapshot> {
     const offer = this.#repository.offerKnownBlobs;
     if (!offer) return this.#repository.readCommit(oid);
-    const known = new Map<string, string>(Object.entries(state.blobs));
-    for (const snapshot of snapshots) for (const entry of Object.values(snapshot)) known.set(entry.oid, entry.data);
-    offer.call(this.#repository, Array.from(known, ([oid, data]) => ({ oid, data })));
+    // Entries are offered as the objects themselves, so the repository can recognize verified ones.
+    const known = new Map<string, { oid: string; data: string }>();
+    for (const [oid, data] of Object.entries(state.blobs)) known.set(oid, { oid, data });
+    for (const snapshot of snapshots) for (const entry of Object.values(snapshot)) known.set(entry.oid, entry);
+    offer.call(this.#repository, Array.from(known.values()));
     try {
       return await this.#repository.readCommit(oid);
     } finally {
@@ -2386,8 +2411,15 @@ export class SyncSession {
     }
   }
 
-  async #readHead(rules: ScopeRules["rules"] = "visible-only"): Promise<CommitSnapshot> {
-    const head = await this.#repository.head();
+  /** `prefetchedOid`: a branch head id requested earlier in this sync, standing in for `head()`'s own ref read. */
+  async #readHead(rules: ScopeRules["rules"] = "visible-only", prefetchedOid: Promise<Settled<string>> | null = null): Promise<CommitSnapshot> {
+    let head: CommitSnapshot;
+    if (!prefetchedOid) head = await this.#repository.head();
+    else {
+      const oid = await prefetchedOid;
+      if (!oid.ok) throw oid.error;
+      head = await this.#repository.readCommit(oid.value);
+    }
     if (!isOid(head.oid) || !isOid(head.treeOid)) throw new IntegrityError("Repository head has malformed object IDs");
     const scope = await this.#scopeFor(head.oid, rules);
     return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(filterSnapshot(head.files, scope), "remote head", scope) };

@@ -26,24 +26,69 @@ export function own<T>(values: Readonly<Record<string, T>>, key: string): T | un
 
 const OID = /^[0-9a-f]{40}$/;
 const CHUNK = 0x8000;
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_SHAPE = /^[A-Za-z0-9+/]*={0,2}$/;
 
-export function encodeBase64(bytes: Uint8Array): string {
+// Native one-call conversions (recent Chromium/Android WebView); feature-detected.
+const nativeToBase64: ((this: Uint8Array) => string) | undefined =
+  typeof Reflect.get(Uint8Array.prototype, "toBase64") === "function" ? Reflect.get(Uint8Array.prototype, "toBase64") : undefined;
+const nativeFromBase64: ((text: string) => Uint8Array<ArrayBuffer>) | undefined =
+  typeof Reflect.get(Uint8Array, "fromBase64") === "function" ? Reflect.get(Uint8Array, "fromBase64") : undefined;
+
+/** Portable encoder: bounded `apply` chunks avoid both argument-spread overhead and stack limits. */
+export function encodeBase64Portable(bytes: Uint8Array): string {
   let binary = "";
   for (let at = 0; at < bytes.length; at += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
+    binary += String.fromCharCode.apply(null, bytes.subarray(at, at + CHUNK) as unknown as number[]);
   }
   return btoa(binary);
 }
 
-/** Strict decoding: rejects whitespace, URL-safe alphabets and bad padding. */
-export function decodeBase64(text: string): Uint8Array<ArrayBuffer> {
-  if (text.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(text)) throw new IntegrityError("Invalid base64 data");
-  let binary: string;
-  try { binary = atob(text); } catch { throw new IntegrityError("Invalid base64 data"); }
-  if (btoa(binary) !== text) throw new IntegrityError("Noncanonical base64 data");
+export function encodeBase64(bytes: Uint8Array): string {
+  return nativeToBase64 ? nativeToBase64.call(bytes) : encodeBase64Portable(bytes);
+}
+
+/**
+ * Decoded byte length of canonical padded base64 without decoding it, or a
+ * reason it is not canonical. Canonical means: standard alphabet, length a
+ * multiple of 4, at most two trailing `=`, and zero padding bits, which is
+ * exactly the set of strings for which `btoa(atob(text)) === text`.
+ */
+export function base64Length(text: string): number | "invalid" | "noncanonical" {
+  if (text.length % 4 !== 0 || !BASE64_SHAPE.test(text)) return "invalid";
+  const pad = text.endsWith("==") ? 2 : text.endsWith("=") ? 1 : 0;
+  if (pad > 0 && (ALPHABET.indexOf(text[text.length - pad - 1]) & (pad === 2 ? 0b1111 : 0b11)) !== 0) return "noncanonical";
+  return (text.length / 4) * 3 - pad;
+}
+
+/** Decodes base64 already checked by `base64Length`. */
+export function decodeCheckedBase64(text: string): Uint8Array<ArrayBuffer> {
+  if (nativeFromBase64) return nativeFromBase64(text);
+  return decodeBase64Portable(text);
+}
+
+/** Portable decoder for base64 already checked by `base64Length`. */
+export function decodeBase64Portable(text: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(text);
   const bytes = new Uint8Array(binary.length);
   for (let at = 0; at < binary.length; at++) bytes[at] = binary.charCodeAt(at);
   return bytes;
+}
+
+/** Strict decoding: rejects whitespace, URL-safe alphabets and bad padding. */
+export function decodeBase64(text: string): Uint8Array<ArrayBuffer> {
+  const length = base64Length(text);
+  if (length === "invalid") throw new IntegrityError("Invalid base64 data");
+  if (length === "noncanonical") throw new IntegrityError("Noncanonical base64 data");
+  let bytes: Uint8Array<ArrayBuffer>;
+  try { bytes = decodeCheckedBase64(text); } catch { throw new IntegrityError("Invalid base64 data"); }
+  if (bytes.length !== length) throw new IntegrityError("Invalid base64 data");
+  return bytes;
+}
+
+/** Lets the host render between batches of synchronous per-file work. */
+export function yieldToHost(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 export function isOid(value: unknown): value is string {
@@ -87,9 +132,15 @@ export function trustVerifiedEntry<T extends Entry>(entry: T): T {
   return entry;
 }
 
-function isTrustedEntry(entry: Entry): boolean {
-  const known = trustedEntries.get(entry);
-  return known !== undefined && known.oid === entry.oid && known.data === entry.data;
+/** True for an entry whose (oid, data) pair this process verified and has not changed since. */
+export function isTrustedEntry(entry: Entry): boolean {
+  return isTrustedPair(entry, entry.oid, entry.data);
+}
+
+/** True when `holder` was trusted with exactly this (oid, data) pair, whatever its fields say now. */
+export function isTrustedPair(holder: unknown, oid: string, data: string): boolean {
+  const known = typeof holder === "object" && holder !== null ? trustedEntries.get(holder) : undefined;
+  return known !== undefined && known.oid === oid && known.data === data;
 }
 
 /** A copy with another mode; keeps trust because the mode is not part of the blob identity. */
@@ -193,7 +244,9 @@ export async function verifySnapshot(snapshot: unknown, label: string, scope?: P
     throw new IntegrityError(`${label}: snapshot is not an object`);
   }
   const verified: Snapshot = dictionary();
+  let count = 0;
   for (const [path, entry] of Object.entries(snapshot)) {
+    if (++count % 256 === 0) await yieldToHost();
     if (!isValidPath(path) || !(scope ? scope.includes(path) : isSyncablePath(path))) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
     verified[path] = await verifyEntry(`${label}: ${path}`, entry);
   }

@@ -130,3 +130,52 @@ test("retired owner and mismatched configuration directories cannot capture hidd
     assert.deepEqual(reads, []);
   });
 });
+
+test("configuration scan cache: hits skip reads, misses on size or mtime, never caches racy or incomplete stats", async () => {
+  await fixture(async ({ root, files, reads, put }) => {
+    await put(".obsidian/app.json", "{}");
+    await put(".obsidian/plugins/p/main.js", "x".repeat(2048));
+    const scope = await policy();
+    const cache: NonNullable<ConstructorParameters<typeof HiddenConfigPort>[3]> = new Map();
+    let now = Date.now() + 60_000;
+    const port = new HiddenConfigPort(files, ".obsidian", () => {}, cache, () => now);
+    const executable = (path: string) => path.endsWith(".js") ? "100755" as const : "100644" as const;
+    const first = await port.scan(scope, executable);
+    assert.deepEqual(reads.sort(), [".obsidian/app.json", ".obsidian/plugins/p/main.js"]);
+    reads.length = 0;
+    const second = await port.scan(scope, executable);
+    assert.deepEqual(reads, []);
+    assert.deepEqual(second, first);
+    assert.equal(second.files[".obsidian/plugins/p/main.js"].mode, "100755");
+    // A cached entry takes the current mode.
+    assert.equal((await port.scan(scope)).files[".obsidian/plugins/p/main.js"].mode, "100644");
+    await put(".obsidian/app.json", "{ }");
+    const third = await port.scan(scope);
+    assert.deepEqual(reads, [".obsidian/app.json"]);
+    assert.equal(entryText(third.files[".obsidian/app.json"]), "{ }");
+    // Same size, different mtime.
+    reads.length = 0;
+    await put(".obsidian/app.json", "[ ]");
+    await utimes(join(root, ".obsidian/app.json"), new Date(), new Date(Date.now() - 3_600_000));
+    assert.equal(entryText((await port.scan(scope)).files[".obsidian/app.json"]), "[ ]");
+    assert.deepEqual(reads, [".obsidian/app.json"]);
+    // Inside the racy window nothing new is cached.
+    now = Date.now();
+    await put(".obsidian/app.json", "{}");
+    reads.length = 0;
+    await port.scan(scope); await port.scan(scope);
+    assert.deepEqual(reads, [".obsidian/app.json", ".obsidian/app.json"]);
+    // An incomplete stat disables the cache.
+    now = Date.now() + 60_000;
+    const incomplete = new HiddenConfigPort({ ...files, stat: async path => ({ ...(await files.stat(path))!, mtime: Number.NaN }) }, ".obsidian", () => {}, new Map(), () => now);
+    reads.length = 0;
+    await assert.rejects(incomplete.scan(scope), /cannot be inspected/);
+    const zeroMtime = new HiddenConfigPort({ ...files, stat: async path => ({ ...(await files.stat(path))!, mtime: 0 }) }, ".obsidian", () => {}, new Map(), () => now);
+    await zeroMtime.scan(scope); await zeroMtime.scan(scope);
+    assert.equal(reads.length, 4, "a zero mtime is never a cache key");
+    // Removed paths leave the cache.
+    await rm(join(root, ".obsidian/plugins"), { recursive: true });
+    await port.scan(scope);
+    assert.deepEqual([...cache.keys()], [".obsidian/app.json"]);
+  });
+});

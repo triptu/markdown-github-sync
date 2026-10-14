@@ -1,9 +1,9 @@
 import { App, FileView, TFile } from "obsidian";
-import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry, withMode } from "./codec";
+import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry, withMode, yieldToHost } from "./codec";
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
-import { HiddenConfigPort } from "./hidden-config";
+import { HiddenConfigPort, racyWindowMs, sameScanKey, scanKey, type ScanCache } from "./hidden-config";
 import { assertLocalNamespace, inventoryLocal, NativePathPolicy } from "./native-path-policy";
 import { assertNoNestedGitignore, canonicalFilesystemPath, type Scope } from "./scope";
 
@@ -11,24 +11,24 @@ export interface RecoveryAuthorization { replay: string[]; cancel: string[] }
 export interface UnreadableNativeFile { path: string; size: number; mtime: number | null; reason: "oversize" }
 
 const maxFileBytes = 8 * 1024 * 1024;
+const statConcurrency = 8;
+/** Runs `work` at most `width` at a time, keeping input order; rejects after in-flight work settles. */
+async function mapConcurrent<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0, failure: { error: unknown } | undefined;
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => {
+    while (failure === undefined && next < items.length) {
+      const index = next++;
+      try { results[index] = await work(items[index]); }
+      catch (error) { failure ??= { error }; }
+    }
+  }));
+  if (failure !== undefined) throw failure.error;
+  return results;
+}
 const maxVaultBytes = 128 * 1024 * 1024;
 const indexWaitIntervalMs = 50;
 const indexWaitTicks = 100;
-/**
- * A file whose mtime is this recent may still be rewritten within the same
- * timestamp granule (FAT/exFAT storage has 2 s), so its stat proves nothing.
- */
-const racyWindowMs = 5_000;
-interface ScanKey { size: number; mtime: number; ctime: number | null }
-/** A cache key only for a complete stat; anything missing disables caching. */
-function scanKey(stat: { size: unknown; mtime: unknown; ctime?: unknown }): ScanKey | null {
-  const valid = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
-  if (!valid(stat.size) || !valid(stat.mtime) || stat.mtime === 0) return null;
-  return { size: stat.size, mtime: stat.mtime, ctime: valid(stat.ctime) ? stat.ctime : null };
-}
-function sameScanKey(a: ScanKey, b: ScanKey): boolean {
-  return a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime;
-}
 const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 class OversizeReadError extends Error {
   constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
@@ -61,7 +61,9 @@ export class GitObsidianVault implements LocalVault {
    * outside the racy window, dropped on any mismatch, on `apply` to the path
    * and when the path leaves a scan.
    */
-  private scanCache = new Map<string, ScanKey & { entry: Entry }>();
+  private scanCache: ScanCache = new Map();
+  /** The same cache for configuration files read by `HiddenConfigPort`. */
+  private hiddenScanCache: ScanCache = new Map();
   /** Wall clock for the racy-mtime window; replaceable in tests. */
   now: () => number = () => Date.now();
   constructor(
@@ -408,6 +410,8 @@ export class GitObsidianVault implements LocalVault {
     this.assertActive();
     this.assertConfigDir();
     if (!this.transactions) return [];
+    // Replays write files: rescan whatever they may have touched.
+    if (this.transactions.pending().length) { this.scanCache.clear(); this.hiddenScanCache.clear(); }
     const replay = new Set(authorization.replay), cancel = new Set(authorization.cancel);
     for (const id of replay) if (cancel.has(id)) throw new Error(`Conflicting native recovery authorization: ${id}`);
     for (const intent of this.transactions.pending()) {
@@ -551,6 +555,35 @@ export class GitObsidianVault implements LocalVault {
     if (unreadable.length) throw new Error(`File exceeds 8 MiB: ${unreadable[0].path}`);
     return files;
   }
+  /**
+   * Read-only download hint for the repository's `readLocal`: the current
+   * entry at `path` when its size is `expectedSize`, else null; never throws.
+   * Served from the scan caches when the stat still matches, and fills them
+   * under the same rules as `scan`, so a launch whose head read already
+   * hashed a file does not read and hash it again in the capture that
+   * follows. The repository still checks the entry against the tree's oid.
+   */
+  async readCandidate(path: string, expectedSize: number): Promise<Entry | null> {
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || expectedSize > maxFileBytes || !isValidPath(path)) return null;
+    try {
+      const adapter = this.app.vault.adapter;
+      const cache = visible(path) ? this.scanCache : this.hiddenScanCache;
+      const stat = await adapter.stat(path);
+      if (!stat || stat.type !== "file" || stat.size !== expectedSize) return null;
+      const key = scanKey(stat);
+      const cached = key ? cache.get(path) : undefined;
+      if (key && cached && sameScanKey(cached, key)) return withMode(cached.entry, cached.entry.mode);
+      const bytes = new Uint8Array(await adapter.readBinary(path));
+      if (bytes.length !== expectedSize) return null;
+      const entry = await entryFromBytes(bytes);
+      if (key && bytes.length === key.size && this.now() - key.mtime > racyWindowMs)
+        cache.set(path, { ...key, entry: withMode(entry, entry.mode) }); // Private copy.
+      return entry;
+    } catch {
+      // A missing, unreadable, or concurrently replaced local file is simply not a download source.
+      return null;
+    }
+  }
   /** Read-only survey; oversized visible files are reported without reading their bytes. */
   async scan(scope?: Scope): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
     this.assertActive();
@@ -584,7 +617,7 @@ export class GitObsidianVault implements LocalVault {
     let total = 0;
     if (scoped) {
       const hidden = await new HiddenConfigPort(this.app.vault.adapter, scoped.rules.configDir,
-        this.assertActive).scan(scoped, path => this.modes.get(path));
+        this.assertActive, this.hiddenScanCache, () => this.now()).scan(scoped, path => this.modes.get(path));
       snapshot = hidden.files;
       unreadable = hidden.unreadable;
       total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
@@ -592,13 +625,20 @@ export class GitObsidianVault implements LocalVault {
     }
     const paths = new Set<string>();
     const seen = new Set<string>();
+    const targets: typeof visibleFiles = [];
     for (const file of visibleFiles) {
       if (scoped && !scoped.includes(file.path)) continue;
       safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
       const folded = canonicalFilesystemPath(file.path);
       if (paths.has(folded)) throw new Error(`Case or Unicode path collision: ${file.path}`);
       paths.add(folded);
-      const stat = await this.app.vault.adapter.stat(file.path);
+      targets.push(file);
+    }
+    // Stats are independent reads; overlap them instead of one round trip per file.
+    const stats = await mapConcurrent(targets, statConcurrency, file => this.app.vault.adapter.stat(file.path));
+    for (const [index, file] of targets.entries()) {
+      if (index % 256 === 255) await yieldToHost();
+      const stat = stats[index];
       const size = stat?.type === "file" ? stat.size : file.size;
       const mtime = stat?.type === "file" ? stat.mtime : file.mtime;
       if (size > maxFileBytes) {
@@ -661,6 +701,7 @@ export class GitObsidianVault implements LocalVault {
   }
   async apply(path: string, expected: Entry | null, next: Entry | null): Promise<ApplyResult> {
     this.scanCache.delete(path);
+    this.hiddenScanCache.delete(path);
     safePath(path, this.nativePolicy);
     await this.assertWritableNamespace(path);
     if (this.transactions?.recoveries().some(item => item.kind === "oversize" && item.path === path))

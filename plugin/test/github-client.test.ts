@@ -485,10 +485,12 @@ test("preflights decoded per-file and total snapshot limits before blob transfer
     assert.equal(api.requests.filter(r => r.url.includes("/git/blobs/")).length, 0);
   }
 });
-test("uploads sequentially and refuses an uploaded blob hash mismatch", async () => {
+test("refuses an uploaded blob hash mismatch before creating any tree or commit", async () => {
   const api = new FakeGitHub(); api.intercept = r => r.method === "POST" && r.url.endsWith("/git/blobs") ? response({ sha: "b".repeat(40) }, 201) : undefined;
   const repo = client(api); await assert.rejects(repo.prepare(await repo.head(), { "a": file("a"), "b": file("b") }, "bad", L), /Uploaded blob hash/);
-  assert.equal(api.requests.filter(r => r.method === "POST").length, 1);
+  const posts = api.requests.filter(r => r.method === "POST");
+  assert.ok(posts.length >= 1 && posts.length <= 2);
+  assert.ok(posts.every(r => r.url.endsWith("/git/blobs")), "no tree, commit or ref request follows a failed upload");
 });
 test("prepare creates a receipt with parents [anchor?, candidate] and the candidate tree, never moving refs", async () => {
   const api = new FakeGitHub(), repo = client(api), parent = await repo.head();
@@ -632,17 +634,23 @@ test("rejects oversized outgoing entries, incorrect parent tree and invalid repo
   assert.throws(() => new GitHubRepository({ owner: "..", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION }), /coordinates/);
 });
 
-test("blob transfer concurrency never exceeds one within preparation", async () => {
+test("blob uploads within preparation run at most four at a time, once per distinct blob, before the tree", async () => {
   const api = new FakeGitHub(); const original = api.request.bind(api);
-  let active = 0, maximum = 0;
+  let active = 0, maximum = 0, treeAfterUploads = true;
   api.request = async request => {
     const transfer = request.url.includes("/git/blobs");
+    if (request.url.endsWith("/git/trees") && active > 0) treeAfterUploads = false;
     if (transfer) { active++; maximum = Math.max(maximum, active); await new Promise<void>(resolve => setImmediate(resolve)); }
     try { return await original(request); } finally { if (transfer) active--; }
   };
   const repo = client(api);
-  await repo.prepare(await repo.head(), { "a.bin": file("a"), "b.bin": file("b") }, "sequential uploads", L);
-  assert.equal(maximum, 1);
+  const changes: Changes = { "copy.bin": file("same"), "same.bin": file("same") };
+  for (let index = 0; index < 9; index++) changes[`f${index}.bin`] = file(`body ${index}`);
+  const prepared = await repo.prepare(await repo.head(), changes, "parallel uploads", L);
+  assert.equal(maximum, 4);
+  assert.equal(api.requests.filter(r => r.method === "POST" && r.url.endsWith("/git/blobs")).length, 10);
+  assert.ok(treeAfterUploads);
+  for (const [path, entry] of Object.entries(changes)) assert.equal(prepared.files[path]?.oid, entry!.oid);
 });
 
 for (const visibility of [false, undefined, "true", null]) {
@@ -1235,4 +1243,87 @@ test("alternating head and checkpoint reads over the LRU budget keep both snapsh
     assert.equal((await repo.readCommit(checkpoint)).files["large/0.bin"].data, initial["large/0.bin"].data);
   }
   assert.equal(objectGets(api).blobs, 0);
+});
+
+test("verified engine entries skip rehashing as offers, local candidates and changes, but never skip identity, size or LFS checks", async () => {
+  const { entryFromBytes, entryFromText } = await import("../src/git-sync/codec");
+  const initial: Snapshot = { "a.md": await entryFromText("alpha"), "b.md": await entryFromText("bravo"), "c.md": await entryFromText("charlie") };
+  const subtle = globalThis.crypto.subtle, digest = subtle.digest.bind(subtle);
+  let blobHashes = 0;
+  Object.defineProperty(subtle, "digest", { configurable: true, value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    const view = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+    if (new TextDecoder().decode(view.subarray(0, 5)) === "blob ") blobHashes++;
+    return digest(algorithm, data);
+  } });
+  try {
+    // Offers: trusted entries are taken as is; plain copies are hashed.
+    for (const trusted of [true, false]) {
+      const api = new FakeGitHub(initial), repo = client(api);
+      repo.offerKnownBlobs(Object.values(initial).map(entry => trusted ? entry : { oid: entry.oid, data: entry.data }));
+      api.requests = []; blobHashes = 0;
+      const head = await repo.head();
+      assert.equal(objectGets(api).blobs, 0);
+      assert.equal(blobHashes, trusted ? 0 : 3);
+      assert.deepEqual(Object.keys(head.files).sort(), ["a.md", "b.md", "c.md"]);
+    }
+    // A trusted entry for another blob or size is never substituted.
+    {
+      const api = new FakeGitHub(initial), repo = client(api);
+      repo.offerKnownBlobs([{ ...(await entryFromText("other")), oid: initial["a.md"].oid }]);
+      api.requests = [];
+      assert.equal((await repo.head()).files["a.md"].data, initial["a.md"].data);
+      assert.ok(objectGets(api).blobs >= 1);
+    }
+    // Local candidates returned as entries.
+    const local = new Map<string, Entry>([["a.md", initial["a.md"]], ["b.md", await entryFromText("edited")], ["c.md", { oid: initial["c.md"].oid, mode: "100644", data: Buffer.from("forged!").toString("base64") }]]);
+    const api = new FakeGitHub(initial);
+    const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION,
+      readLocal: async path => local.get(path) ?? null });
+    api.requests = []; blobHashes = 0;
+    const head = await repo.head();
+    assert.deepEqual(head.files, Object.assign(Object.create(null), initial));
+    assert.deepEqual(api.requests.filter(r => r.url.includes("/git/blobs/")).map(r => r.url.split("/").pop()).sort(), [initial["b.md"].oid, initial["c.md"].oid].sort(),
+      "the edited and forged local entries fall back to downloads");
+    // Changes: a trusted LFS pointer is still refused.
+    const pointer = await entryFromBytes(new TextEncoder().encode("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1\n"));
+    await assert.rejects(repo.prepare(head, { "lfs.md": pointer }, "lfs", L), /Git LFS/);
+    const change = await entryFromText("delta");
+    blobHashes = 0;
+    const prepared = await repo.prepare(head, { "d.md": change }, "trusted change", L);
+    assert.equal(prepared.files["d.md"].data, Buffer.from("delta").toString("base64"));
+    assert.equal(blobHashes, 0, "a verified change and the parent snapshot are not rehashed");
+  } finally {
+    Reflect.deleteProperty(subtle, "digest");
+  }
+});
+
+test("ref updates reuse a recent successful identity check and recheck after expiry or failure", async () => {
+  const api = new FakeGitHub();
+  let now = 1_000_000;
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, now: () => now });
+  const identityGets = () => api.requests.filter(r => r.method === "GET" && new URL(r.url).pathname === "/repos/owner/repo").length;
+  const publishOnce = async () => {
+    const parent = await repo.head();
+    const prepared = await repo.prepare(parent, { "note.md": file(`v${now}`) }, "m", { anchor: api.refs.get(repo.ledgerRef()) ?? null, operation: "publish-1" });
+    return repo.publish({ parent: parent.oid, candidate: prepared.oid, anchor: api.refs.get(repo.ledgerRef()) ?? null, receipt: prepared.receipt });
+  };
+  assert.equal(await publishOnce(), "acknowledged");
+  assert.equal(identityGets(), 1, "no prior check: the update checks identity itself");
+  await repo.identity();
+  assert.equal(await publishOnce(), "acknowledged");
+  assert.equal(identityGets(), 2, "the sync's own identity check is reused");
+  now += 11 * 60_000;
+  assert.equal(await publishOnce(), "acknowledged");
+  assert.equal(identityGets(), 3, "an old check is not reused");
+  api.intercept = r => r.method === "GET" && new URL(r.url).pathname === "/repos/owner/repo" ? response({ private: false, node_id: "R_stable", owner: { login: "owner" }, name: "repo" }) : undefined;
+  await assert.rejects(repo.identity(), /private/);
+  await assert.rejects(publishOnce(), /private/, "a failed check voids the reusable identity");
+});
+
+test("headOid reads the branch ref alone and agrees with head()", async () => {
+  const api = new FakeGitHub(), repo = client(api);
+  api.requests = [];
+  const oid = await repo.headOid();
+  assert.equal(api.requests.length, 1);
+  assert.equal(oid, (await repo.head()).oid);
 });

@@ -21,14 +21,25 @@ test("parallel object verification remains bounded and detects later corruption"
   assert.deepEqual(JSON.parse(JSON.stringify(await new FileJournalStore(files, identity).load())), state);
   assert.equal(reads, 12); assert.equal(peak, 4);
   reads = 0;
+  // Objects this instance verified are only checked for existence on save.
   await store.save({ ...state, revision: 1 });
-  assert.equal(reads, 12); assert.equal(active, 0);
+  assert.equal(reads, 0); assert.equal(active, 0);
+  // A new object is still written and read back in full.
+  await store.save({ ...state, blobs: { ...state.blobs, extra: btoa("extra") }, revision: 2 });
+  assert.equal(reads, 2, "temporary and committed copies of the new object are read back");
   const path = [...files.values.keys()].find(path => path.includes("/objects/"));
   assert.ok(path); files.values.set(path, "corrupt");
   await assert.rejects(new FileJournalStore(files, identity).load(), /checksum/);
-  // Every save still compares existing objects on disk, and a failure drops the caches.
-  await assert.rejects(store.save(state), /corrupt/);
-  await assert.rejects(store.load(), /checksum/);
+  // A fresh writer (every launch) reverifies everything before appending, and a failure drops its caches.
+  const fresh = new FileJournalStore(files, identity);
+  await assert.rejects(fresh.save(state), /checksum/);
+  await assert.rejects(fresh.load(), /checksum/);
+  // A missing verified object is rewritten and read back rather than trusted.
+  files.values.delete(path);
+  reads = 0;
+  await store.save({ ...state, revision: 3 });
+  assert.ok(reads >= 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(await new FileJournalStore(files, identity).load())), { ...state, revision: 3 });
   assert.equal(active, 0);
 });
 
@@ -155,7 +166,7 @@ test("native Entry.data verifies 64 unique objects across 160 retained reference
   objectReads = 0; objectExists = 0;
   await store.save({ ...latest, supersededRecoveryIds: [...latest.supersededRecoveryIds, crypto.randomUUID()] });
   assert.equal(objectExists, 9);
-  assert.equal(objectReads, 9);
+  assert.equal(objectReads, 0, "verified objects are not read back on save");
   assert.equal(peak, 1);
   assert.equal(active, 0);
   const object = [...files.values.keys()].find(path => path.includes("/native/objects/"));
@@ -163,7 +174,7 @@ test("native Entry.data verifies 64 unique objects across 160 retained reference
   files.values.set(object, "corrupt");
   await assert.rejects(new FileJournalStore(files, identity, "native").load(), /checksum/);
   const recordCount = [...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length;
-  await assert.rejects(store.save(latest), /corrupt/);
+  await assert.rejects(new FileJournalStore(files, identity, "native").save(latest), /checksum/);
   assert.equal([...files.values.keys()].filter(path => path.includes("/native/records/") && path.endsWith(".json")).length, recordCount);
 });
 
@@ -354,7 +365,7 @@ test("corrupt recovery bytes block load and cannot be overwritten by a fresh sav
     new FileJournalStore(files, identity).load(),
     /checksum/,
   );
-  await assert.rejects(store.save(original), /corrupt/);
+  await assert.rejects(new FileJournalStore(files, identity).save(original), /checksum/);
 });
 test("an acknowledged empty record-temp write fails closed before rename", async () => {
   const files = new Files(), store = new FileJournalStore(files, identity);

@@ -1600,6 +1600,50 @@ test("a deleted path leaves the scan cache and apply invalidates its path", asyn
   assert.ok(h.adapterReads.includes("a.md"));
 });
 
+test("configuration files are cached like visible files and invalidated by size, mtime or apply", async () => {
+  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  h.put(".obsidian/app.json", bytes("{}"));
+  h.put(".obsidian/plugins/big/main.js", bytes("x".repeat(4096)));
+  const scope = await configScope();
+  const first = await h.vault.scan(scope);
+  assert.ok(h.adapterReads.includes(".obsidian/plugins/big/main.js"));
+  h.adapterReads.length = 0;
+  const second = await h.vault.scan(scope);
+  assert.deepEqual(h.adapterReads.filter(path => path.startsWith(".obsidian/")), [], "unchanged configuration is not reread");
+  assert.deepEqual(second.files, first.files);
+  h.put(".obsidian/app.json", bytes("{ }")); // Size and mtime change.
+  const third = await h.vault.scan(scope);
+  assert.deepEqual(h.adapterReads.filter(path => path.startsWith(".obsidian/")), [".obsidian/app.json"]);
+  assert.equal(third.files[".obsidian/app.json"].oid, (await entryFromBytes(bytes("{ }"))).oid);
+  const next = await entryFromBytes(bytes("[]"));
+  assert.equal((await h.vault.apply(".obsidian/app.json", third.files[".obsidian/app.json"], next)).kind, "applied");
+  h.adapterReads.length = 0;
+  assert.equal((await h.vault.scan(scope)).files[".obsidian/app.json"].oid, next.oid);
+  assert.ok(h.adapterReads.includes(".obsidian/app.json"));
+});
+
+test("readCandidate serves and fills the scan cache, so a following capture reads nothing twice", async () => {
+  const h = await harness();
+  h.put("a.md", bytes("alpha"));
+  h.put("b.md", bytes("bravo"));
+  const a = await h.vault.readCandidate("a.md", 5);
+  assert.equal(a?.oid, (await entryFromBytes(bytes("alpha"))).oid);
+  assert.equal(await h.vault.readCandidate("b.md", 4), null, "a size mismatch is not read");
+  assert.equal(await h.vault.readCandidate("missing.md", 4), null);
+  assert.equal(await h.vault.readCandidate("../escape.md", 4), null);
+  assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")), ["a.md"]);
+  h.adapterReads.length = 0;
+  const captured = await h.vault.capture();
+  assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")), ["b.md"]);
+  assert.equal(captured["a.md"].oid, a?.oid);
+  h.adapterReads.length = 0;
+  assert.equal((await h.vault.readCandidate("b.md", 5))?.oid, captured["b.md"].oid);
+  assert.deepEqual(h.adapterReads, [], "a cached entry is served without reading");
+  h.put("b.md", bytes("BRAVO"));
+  assert.equal((await h.vault.readCandidate("b.md", 5))?.oid, (await entryFromBytes(bytes("BRAVO"))).oid);
+  assert.deepEqual(h.adapterReads, ["b.md"]);
+});
+
 test("inventory lists but never walks .git, .trash or the plugin journal", async () => {
   for (const policy of [NativePathPolicy.legacy, await NativePathPolicy.forConfig(".obsidian")]) {
     const h = await harness(undefined, policy);

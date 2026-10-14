@@ -33,6 +33,11 @@ export interface PreparedPublication extends CommitSnapshot {
 export interface Repository {
   identity(): Promise<RepositoryIdentity>;
   head(): Promise<CommitSnapshot>;
+  /**
+   * Optional: the branch head commit id alone, read fresh. Lets the engine
+   * overlap it with other requests; `readCommit(await headOid())` must equal `head()`.
+   */
+  headOid?(): Promise<string>;
   readCommit(oid: string): Promise<CommitSnapshot>;
   /**
    * Optional hint: blob bodies the engine already holds. A repository may use

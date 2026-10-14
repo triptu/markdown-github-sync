@@ -1,11 +1,28 @@
 import type { DataAdapter } from "obsidian";
-import type { FileMode, Snapshot, UnreadableFile } from "./contracts";
-import { dictionary, entryFromBytes, isValidPath } from "./codec";
+import type { Entry, FileMode, Snapshot, UnreadableFile } from "./contracts";
+import { dictionary, entryFromBytes, isValidPath, withMode } from "./codec";
 import { assertNoNestedGitignore, assertValidConfigDir, canonicalFilesystemPath, type Scope } from "./scope";
 
 type ReadFiles = Pick<DataAdapter, "exists" | "list" | "stat" | "readBinary">;
 const FILE_LIMIT = 8 * 1024 * 1024;
 const SNAPSHOT_LIMIT = 128 * 1024 * 1024;
+/**
+ * A file whose mtime is this recent may still be rewritten within the same
+ * timestamp granule (FAT/exFAT storage has 2 s), so its stat proves nothing.
+ */
+export const racyWindowMs = 5_000;
+export interface ScanKey { size: number; mtime: number; ctime: number | null }
+/** Entries reused while a file keeps the same complete stat. Shared by visible and configuration scans. */
+export type ScanCache = Map<string, ScanKey & { entry: Entry }>;
+/** A cache key only for a complete stat; anything missing disables caching. */
+export function scanKey(stat: { size: unknown; mtime: unknown; ctime?: unknown }): ScanKey | null {
+  const valid = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  if (!valid(stat.size) || !valid(stat.mtime) || stat.mtime === 0) return null;
+  return { size: stat.size, mtime: stat.mtime, ctime: valid(stat.ctime) ? stat.ctime : null };
+}
+export function sameScanKey(a: ScanKey, b: ScanKey): boolean {
+  return a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime;
+}
 
 /** Reads configuration without relying on Obsidian's visible-file index. Never writes or reloads plugins. */
 export class HiddenConfigPort {
@@ -13,6 +30,14 @@ export class HiddenConfigPort {
     private files: ReadFiles,
     private configDir: string,
     private assertActive: () => void,
+    /**
+     * Optional entries from earlier scans, reused under the same rules as the
+     * visible scan: a complete stat equal in size, mtime and ctime, bytes
+     * whose length matched that stat, and an mtime outside the racy window
+     * when cached. The owner must drop paths it writes.
+     */
+    private cache?: ScanCache,
+    private now: () => number = () => Date.now(),
   ) {
     assertValidConfigDir(configDir);
   }
@@ -61,6 +86,7 @@ export class HiddenConfigPort {
     const paths = await this.inventory();
     assertNoNestedGitignore(paths);
     let total = 0;
+    const seen = new Set<string>();
     for (const path of paths) {
       if (!scope.includes(path)) continue;
       this.assertActive();
@@ -71,6 +97,16 @@ export class HiddenConfigPort {
         unreadable.push({ path, size: stat.size, mtime: stat.mtime, reason: "oversize" });
         continue;
       }
+      seen.add(path);
+      const key = this.cache ? scanKey(stat) : null;
+      const cached = key ? this.cache?.get(path) : undefined;
+      if (key && cached && sameScanKey(cached, key)) {
+        total += key.size;
+        if (total > SNAPSHOT_LIMIT) throw new Error("Configuration snapshot exceeds 128 MiB");
+        files[path] = withMode(cached.entry, mode(path));
+        continue;
+      }
+      this.cache?.delete(path);
       const bytes = new Uint8Array(await this.files.readBinary(path));
       this.assertActive();
       if (bytes.length > FILE_LIMIT) {
@@ -79,8 +115,12 @@ export class HiddenConfigPort {
       }
       total += bytes.length;
       if (total > SNAPSHOT_LIMIT) throw new Error("Configuration snapshot exceeds 128 MiB");
-      files[path] = await entryFromBytes(bytes, mode(path));
+      const entry = await entryFromBytes(bytes, mode(path));
+      files[path] = entry;
+      if (key && bytes.length === key.size && this.now() - key.mtime > racyWindowMs)
+        this.cache?.set(path, { ...key, entry: withMode(entry, entry.mode) }); // Private copy.
     }
+    if (this.cache) for (const path of [...this.cache.keys()]) if (!seen.has(path)) this.cache.delete(path);
     this.assertActive();
     return { files, unreadable };
   }

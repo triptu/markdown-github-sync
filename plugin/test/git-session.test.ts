@@ -32,7 +32,7 @@ import assert from "node:assert/strict";
 import { dictionary, own, encodeBase64, entryFromBytes, entryFromText, entryText, sameManifest, toManifest } from "../src/git-sync/codec";
 import type { StoredState } from "../src/git-sync/state";
 import { parseState, STATE_FORMAT } from "../src/git-sync/state";
-import type { Snapshot } from "../src/git-sync/contracts";
+import type { Repository, Snapshot } from "../src/git-sync/contracts";
 import { SyncSession, VaultCaptureError } from "../src/git-sync/session";
 
 import type { SyncOutcome } from "../src/git-sync/session";
@@ -3311,4 +3311,53 @@ test("rereading an undecided conflict's checkpoint offers held blobs first, then
   assert.ok(offered.length > 0, "the old checkpoint read is preceded by an offer");
   assert.ok(offered.every((offer) => offer.includes(base.oid) && offer.includes(same.oid)));
   assert.deepEqual(offers.at(-1), [], "the offer is withdrawn after the read");
+});
+
+test("notifyLocalChange reads the journal only until enrollment is known", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base" }));
+  const fresh = await device(repository);
+  const load = fresh.store.load.bind(fresh.store);
+  let loads = 0;
+  fresh.store.load = async () => { loads++; return load(); };
+  assert.equal((await fresh.session.notifyLocalChange()).kind, "unenrolled");
+  assert.equal((await fresh.session.notifyLocalChange()).kind, "unenrolled");
+  assert.equal(loads, 2, "an unenrolled session keeps checking");
+  const a = await enrolled(repository);
+  const restarted = a.restart();
+  const enrolledLoad = a.store.load.bind(a.store);
+  loads = 0;
+  a.store.load = async () => { loads++; return enrolledLoad(); };
+  for (let index = 0; index < 5; index++) assert.equal((await restarted.notifyLocalChange()).kind, "invalidated");
+  assert.equal(loads, 1, "one load establishes enrollment; later events do no I/O");
+  // Events still queue behind running work.
+  let finished = false;
+  const sync = restarted.sync().then(() => { finished = true; });
+  await restarted.notifyLocalChange();
+  assert.equal(finished, true);
+  await sync;
+});
+
+test("an ordinary sync requests the branch head alongside the identity and reads exactly that commit", async () => {
+  const repository = await MemoryRepository.create(await snapshot({ "n.md": "base" }));
+  const a = await enrolled(repository);
+  const port = repository.device("A");
+  const events: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const wrapped: Repository = {
+    ...port,
+    identity: async () => { events.push("identity"); await gate; events.push("identity done"); return port.identity(); },
+    headOid: async () => { events.push("headOid"); release(); return repository.branchHead; },
+    head: async () => { events.push("head"); return port.head(); },
+  };
+  const session = new SyncSession({ repository: wrapped, vault: a.vault, store: a.store, deviceName: "A", scopeRules: repository.scopeRules, now: NOW, delay: async () => {} });
+  await repository.push({ "n.md": await entryFromText("remote") });
+  assert.equal((await session.sync()).kind, "synced");
+  assert.ok(events.indexOf("headOid") >= 0 && events.indexOf("headOid") < events.indexOf("identity done"), events.join());
+  assert.ok(!events.includes("head"), "the prefetched id replaces head()'s own ref read");
+  assert.equal(a.vault.text("n.md"), "remote");
+  // A failed speculative read surfaces as the head read's failure, never as an unhandled rejection.
+  const failing: Repository = { ...port, headOid: async () => { throw new Crash("head unavailable"); } };
+  const failed = new SyncSession({ repository: failing, vault: a.vault, store: a.store, deviceName: "A", scopeRules: repository.scopeRules, now: NOW, delay: async () => {} });
+  await assert.rejects(failed.sync(), /head unavailable/);
 });

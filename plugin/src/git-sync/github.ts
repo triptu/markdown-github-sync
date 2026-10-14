@@ -2,7 +2,7 @@ import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, R
 import { ArchiveError, selectArchiveFiles } from "./archive";
 import { assertNoNestedGitignore, canonicalFilesystemPath, compileScope, scopeForTree } from "./scope";
 import type { Scope, ScopeRules } from "./scope";
-import { trustVerifiedEntry } from "./codec";
+import { base64Length, decodeCheckedBase64, encodeBase64, isTrustedPair, trustVerifiedEntry, yieldToHost } from "./codec";
 
 export interface GitHubRequest {
   url: string;
@@ -57,9 +57,11 @@ export interface GitHubRepositoryOptions {
    * from `expectedSize` (at most 8 MiB). Bytes are reused only after their Git
    * blob hash matches the tree; a mismatch is an ordinary local edit and the
    * remote version is downloaded. Nothing is ever written locally. A throw
-   * fails the read.
+   * fails the read. An `Entry` may be returned instead of bytes (e.g. from a
+   * vault scan cache); one this process already verified is reused without
+   * rehashing, any other is decoded and hashed like bytes.
    */
-  readLocal?: (path: string, expectedSize: number) => Promise<Uint8Array | null>;
+  readLocal?: (path: string, expectedSize: number) => Promise<Uint8Array | Entry | null>;
 }
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number, readonly retryAt?: number) { super(message); this.name = "GitHubError"; }
@@ -72,6 +74,9 @@ const CACHE_LIMIT = 128 * 1024 * 1024;
 const CACHE_OBJECT_LIMIT = 4096;
 const READ_CONCURRENCY = 4;
 const LOCAL_CONCURRENCY = 8;
+const UPLOAD_CONCURRENCY = 4;
+// How long a checked repository identity may stand in for a fresh one when updating refs.
+const IDENTITY_REUSE_MS = 10 * 60_000;
 // Below this many missing blobs, per-blob reads beat downloading the whole archive.
 const ARCHIVE_THRESHOLD = 32;
 // The zipball carries every blob, including excluded ones; skip it above this tree size.
@@ -145,18 +150,29 @@ function validatePaths(namespace: Iterable<string>, included: Iterable<string>):
   }
 }
 export function encodeGitData(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  return btoa(binary);
+  return encodeBase64(bytes);
+}
+/**
+ * Decoded size of canonical base64 (at most 8 MiB) from its length and
+ * padding alone; throws for anything `decode` would reject.
+ */
+function decodedSize(data: string): number {
+  const length = data.length > ENCODED_LIMIT ? "invalid" : base64Length(data);
+  if (typeof length !== "number" || length > FILE_LIMIT) throw new GitHubError("Invalid or oversized base64 blob");
+  return length;
 }
 function decode(data: string, wrapped = false): Uint8Array {
   if (data.length > ENCODED_LIMIT + Math.ceil(ENCODED_LIMIT / 60) * 2) throw new GitHubError("Invalid or oversized base64 blob");
   const clean = wrapped ? data.replace(/[\r\n]/g, "") : data;
-  if (clean.length > ENCODED_LIMIT || (clean.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(clean))) throw new GitHubError("Invalid or oversized base64 blob");
-  const binary = atob(clean);
-  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-  if (bytes.length > FILE_LIMIT || encodeGitData(bytes) !== clean) throw new GitHubError("Invalid or oversized base64 blob");
+  // Zero padding bits make the text the canonical encoding of its bytes, so no re-encode is needed.
+  const length = decodedSize(clean);
+  const bytes = decodeCheckedBase64(clean);
+  if (bytes.length !== length) throw new GitHubError("Invalid or oversized base64 blob");
   return bytes;
+}
+/** The first `count` decoded bytes (rounded up to a whole base64 quantum) of canonical base64. */
+function decodePrefix(data: string, count: number): Uint8Array {
+  return decodeCheckedBase64(data.slice(0, Math.ceil(count / 3) * 4));
 }
 async function objectOid(type: "blob" | "tree", bytes: Uint8Array): Promise<string> {
   const header = encoder.encode(`${type} ${bytes.length}\0`);
@@ -168,15 +184,22 @@ export function gitBlobOid(bytes: Uint8Array): Promise<string> { return objectOi
 function checkLfs(bytes: Uint8Array): void {
   if (new TextDecoder().decode(bytes.subarray(0, 256)).startsWith("version https://git-lfs.github.com/spec/v1")) throw new GitHubError("Git LFS pointers are unsupported in content scope");
 }
-async function entry(value: unknown): Promise<{ entry: Entry; bytes: Uint8Array }> {
+async function entry(value: unknown): Promise<Entry> {
   const item = record(value);
   const hash = oid(item.oid);
   if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
   const data = string(item.data);
-  const bytes = decode(data);
-  checkLfs(bytes);
-  if (await gitBlobOid(bytes) !== hash) throw new GitHubError("Blob hash mismatch");
-  return { entry: { oid: hash, mode: item.mode, data }, bytes };
+  if (isTrustedPair(value, hash, data)) {
+    // Already canonical base64 of bytes hashing to `hash`: check size and the LFS prefix only.
+    decodedSize(data);
+    checkLfs(decodePrefix(data, 256));
+  } else {
+    const bytes = decode(data);
+    checkLfs(bytes);
+    if (await gitBlobOid(bytes) !== hash) throw new GitHubError("Blob hash mismatch");
+  }
+  // Either already trusted, or `data` was just decoded canonically and hashed to `hash`.
+  return trustVerifiedEntry({ oid: hash, mode: item.mode, data });
 }
 interface TreeItem { path: string; mode: string; type: "tree" | "blob" | "commit"; sha: string; size?: number }
 interface Commit { oid: string; treeOid: string; parents: string[] }
@@ -270,7 +293,9 @@ export class GitHubRepository implements Repository {
    * claimed oid). Used only for blobs a snapshot is missing, and only after
    * their bytes hash to the tree's oid. Replaced by each offer.
    */
-  private offered = new Map<string, string>();
+  /** Node id and time of the last successful identity check; reused by ref updates. */
+  private checkedIdentity: { id: string; at: number } | null = null;
+  private offered = new Map<string, { data: string; trusted: boolean }>();
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
     if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
@@ -383,11 +408,21 @@ export class GitHubRepository implements Repository {
     return (await this.request(this.base + path, method, body)).json;
   }
   async identity(): Promise<RepositoryIdentity> {
+    // Any failed or mismatched check voids the identity a publication may reuse.
+    this.checkedIdentity = null;
     const repo = record(await this.rest(""));
     if (repo.private !== true) throw new GitHubError("Sync requires a private GitHub repository; public or unknown visibility is refused");
     const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
+    this.checkedIdentity = { id, at: this.now() };
     return { id, owner, name, branch: this.options.branch };
+  }
+  /** Node id from a recent successful `identity()` (the engine checks it at the start of every sync), else a fresh check. */
+  private async repositoryId(): Promise<string> {
+    const checked = this.checkedIdentity;
+    const age = checked ? this.now() - checked.at : Infinity;
+    if (checked && age >= 0 && age < IDENTITY_REUSE_MS) return checked.id;
+    return (await this.identity()).id;
   }
   /**
    * Read-only reachability check: the token can read the private repository
@@ -424,7 +459,8 @@ export class GitHubRepository implements Repository {
     });
     return { at, entries, nextPage: entries.length === 30 ? page + 1 : null };
   }
-  private async headOid(): Promise<string> {
+  /** The branch head commit id, read fresh (no snapshot). */
+  async headOid(): Promise<string> {
     let ref: Record<string, unknown>;
     const url = `${this.base}/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}?fresh=${globalThis.crypto.randomUUID()}`;
     try { ref = record((await this.request(url, "GET", undefined, { "Cache-Control": "no-cache", Pragma: "no-cache" })).json); }
@@ -572,19 +608,30 @@ export class GitHubRepository implements Repository {
    * its decoded bytes match the tree's size and Git blob hash.
    */
   offerKnownBlobs(blobs: Iterable<{ oid: string; data: string }>): void {
-    const offered = new Map<string, string>();
-    for (const blob of blobs) if (typeof blob?.oid === "string" && typeof blob.data === "string") offered.set(blob.oid, blob.data);
+    const offered = new Map<string, { data: string; trusted: boolean }>();
+    for (const blob of blobs) {
+      if (typeof blob?.oid !== "string" || typeof blob.data !== "string") continue;
+      // An engine entry this process already hashed needs no second hash.
+      const trusted = isTrustedPair(blob, blob.oid, blob.data);
+      if (trusted || !offered.get(blob.oid)?.trusted) offered.set(blob.oid, { data: blob.data, trusted });
+    }
     this.offered = offered;
   }
   /** Accepts offered bodies that hash to missing blobs; returns the blobs still missing. */
   private async reuseOffered(missing: [string, number][], into: Map<string, string>): Promise<[string, number][]> {
     if (missing.length === 0 || this.offered.size === 0) return missing;
     const remaining: [string, number][] = [];
+    let count = 0;
     for (const [hash, length] of missing) {
-      const data = this.offered.get(hash);
+      if (++count % 256 === 0) await yieldToHost();
+      const offer = this.offered.get(hash);
+      if (offer?.trusted && this.acceptTrusted(hash, length, { oid: hash, data: offer.data }, true)) {
+        into.set(hash, offer.data);
+        continue;
+      }
       let bytes: Uint8Array | null = null;
-      if (data !== undefined) {
-        try { bytes = decode(data); } catch { bytes = null; }
+      if (offer !== undefined) {
+        try { bytes = decode(offer.data); } catch { bytes = null; }
       }
       if (bytes === null || !(await this.accept(hash, length, bytes, into))) remaining.push([hash, length]);
     }
@@ -597,12 +644,34 @@ export class GitHubRepository implements Repository {
     const remaining: [string, number][] = [];
     await pool(missing, LOCAL_CONCURRENCY, async ([hash, length]) => {
       for (const path of paths.get(hash) ?? []) {
-        const bytes = await readLocal(path, length);
-        if (bytes instanceof Uint8Array && await this.accept(hash, length, bytes, into)) return;
+        const local = await readLocal(path, length);
+        if (local instanceof Uint8Array) {
+          if (await this.accept(hash, length, local, into)) return;
+        } else if (typeof local === "object" && local !== null && typeof local.oid === "string" && typeof local.data === "string") {
+          if (this.acceptTrusted(hash, length, local)) { into.set(hash, local.data); return; }
+          if (local.oid !== hash || isTrustedPair(local, local.oid, local.data)) continue; // A local edit.
+          let bytes: Uint8Array | null = null;
+          try { bytes = decode(local.data); } catch { bytes = null; }
+          if (bytes !== null && await this.accept(hash, length, bytes, into)) return;
+        }
       }
       remaining.push([hash, length]);
     });
     return remaining;
+  }
+  /**
+   * Records a body without hashing when this process already verified that it
+   * hashes to `hash` (`known` skips the trust lookup for such a caller); false
+   * when untrusted or a different blob or size.
+   */
+  private acceptTrusted(hash: string, length: number, body: { oid: string; data: string }, known = false): boolean {
+    if (body.oid !== hash || !(known || isTrustedPair(body, hash, body.data))) return false;
+    let size: number;
+    try { size = decodedSize(body.data); } catch { return false; }
+    if (size !== length) return false;
+    checkLfs(decodePrefix(body.data, 256));
+    this.remember(hash, { kind: "blob", size: length, data: body.data });
+    return true;
   }
   /** Records `bytes` when they are exactly the blob; false for any mismatch. */
   private async accept(hash: string, length: number, bytes: Uint8Array, into: Map<string, string>): Promise<boolean> {
@@ -700,7 +769,7 @@ export class GitHubRepository implements Repository {
       pathParts(path);
       if (!parentScope.includes(path)) throw new GitHubError("Change outside parent commit scope");
       if (next === null) { delete files[path]; checked.set(path, null); }
-      else { const verified = await entry(next); files[path] = verified.entry; checked.set(path, verified.entry); }
+      else { const verified = await entry(next); files[path] = verified; checked.set(path, verified); }
     }
     let candidateScope = parentScope;
     if (this.ruleVersion === "config/1") {
@@ -731,18 +800,21 @@ export class GitHubRepository implements Repository {
       if (expected.has(path.slice(0, slash))) throw new GitHubError("File/directory path collision");
     }
     let total = 0;
-    for (const file of Object.values(files)) { total += decode(file.data).length; if (total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded"); }
+    // Every file is canonical base64 (verified above or by the snapshot read), so its size is arithmetic.
+    for (const file of Object.values(files)) { total += decodedSize(file.data); if (total > SNAPSHOT_LIMIT) throw new GitHubError("Decoded snapshot size limit exceeded"); }
     if (typeof message !== "string" || !message.trim()) throw new GitHubError("Commit message is required");
+    const uploads = new Map<string, Entry>();
+    for (const next of checked.values()) if (next !== null) uploads.set(next.oid, next);
+    await pool(Array.from(uploads.values()), UPLOAD_CONCURRENCY, async next => {
+      const blob = record(await this.rest("/git/blobs", "POST", { content: next.data, encoding: "base64" }));
+      if (oid(blob.sha) !== next.oid) throw new GitHubError("Uploaded blob hash mismatch");
+      this.remember(next.oid, { kind: "blob", data: next.data, size: decodedSize(next.data) });
+    });
     const edits: { path: string; mode: string; type: "blob"; sha: string | null }[] = [];
     for (const [path, next] of checked) {
       if (next === null) {
         if (actual.files[path]) edits.push({ path, mode: actual.files[path].mode, type: "blob", sha: null });
-      } else {
-        const blob = record(await this.rest("/git/blobs", "POST", { content: next.data, encoding: "base64" }));
-        if (oid(blob.sha) !== next.oid) throw new GitHubError("Uploaded blob hash mismatch");
-        this.remember(next.oid, { kind: "blob", data: next.data, size: decode(next.data).length });
-        edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
-      }
+      } else edits.push({ path, mode: next.mode, type: "blob", sha: next.oid });
     }
     // GitHub rejects an empty tree edit list; an unchanged candidate (a fence) reuses the parent tree.
     const treeOid = edits.length === 0 ? value.treeOid : oid(record(await this.rest("/git/trees", "POST", { base_tree: value.treeOid, tree: edits })).sha);
@@ -782,10 +854,10 @@ export class GitHubRepository implements Repository {
     return created.oid;
   }
   private async updateRefs(updates: { name: string; beforeOid: string; afterOid: string }[], clientMutationId: string): Promise<"acknowledged" | "unconfirmed"> {
-    const identity = await this.identity();
+    const repositoryId = await this.repositoryId();
     const response = record((await this.request("https://api.github.com/graphql", "POST", {
       query: UPDATE_REFS,
-      variables: { input: { repositoryId: identity.id, clientMutationId, refUpdates: updates.map(update => ({ ...update, force: false })) } },
+      variables: { input: { repositoryId, clientMutationId, refUpdates: updates.map(update => ({ ...update, force: false })) } },
     })).json);
     // Errors carry no typed verdict (a stale CAS is a generic error), so they prove nothing.
     if (response.errors !== undefined) return "unconfirmed";

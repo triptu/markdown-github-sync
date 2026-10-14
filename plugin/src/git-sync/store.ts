@@ -55,7 +55,9 @@ export class FileJournalStore implements DurableStore {
    * Object bodies whose SHA-256 this instance verified (on read) or wrote and
    * read back (on save). Content addressed, so each is verified once per
    * instance; pruned to the objects the latest loaded record references.
-   * Saves still compare every existing object on disk before appending.
+   * A save only checks that such an object still exists; objects new to this
+   * instance are compared or written and read back in full. Fresh instances
+   * and `compact` reverify everything from disk.
    */
   private verified = new Map<string, string>();
   readonly directory: string;
@@ -97,7 +99,8 @@ export class FileJournalStore implements DurableStore {
     if (!object) {
       object = (async () => {
         const hash = await digest(data);
-        await this.put(`${this.directory}/objects/${hash}.json`, data);
+        const path = `${this.directory}/objects/${hash}.json`;
+        if (this.verified.get(hash) !== data || !(await this.files.exists(path))) await this.put(path, data);
         this.verified.set(hash, data);
         return hash;
       })();

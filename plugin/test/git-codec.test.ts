@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   IntegrityError,
+  base64Length,
   decodeBase64,
+  decodeBase64Portable,
+  encodeBase64Portable,
   encodeBase64,
   entryFromBytes,
   entryFromText,
@@ -130,5 +133,42 @@ test("entries hashed by their producer skip re-verification until their fields c
     await assert.rejects(verifySnapshot({ "a.md": produced }, "mutated oid"), IntegrityError);
   } finally {
     delete (subtle as { digest?: unknown }).digest;
+  }
+});
+
+test("base64 size arithmetic equals decoded length and rejects exactly what a round trip rejects", () => {
+  for (let length = 0; length <= 9; length++) {
+    const bytes = Uint8Array.from({ length }, (_, i) => (i * 97 + 13) & 255);
+    const text = Buffer.from(bytes).toString("base64");
+    assert.equal(base64Length(text), length);
+    assert.deepEqual(decodeBase64(text), bytes);
+  }
+  // Every possible final character before one or two padding characters.
+  for (const prefix of ["", "QUJD"]) for (const pad of ["=", "=="]) for (const char of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/") {
+    const text = `${prefix}${pad === "=" ? "QU" : "Q"}${char}${pad}`;
+    const canonical = btoa(atob(text)) === text;
+    assert.equal(typeof base64Length(text) === "number", canonical, text);
+    if (canonical) assert.equal(base64Length(text), atob(text).length);
+    else assert.throws(() => decodeBase64(text), /Noncanonical/);
+  }
+  for (const text of ["A", "AB=", "A===", "AA=A", "QQ==QQ==", "QU JD", "QUJD\n", "QUJ-", "QUJ_", "====", "QQ=="]) {
+    let expected: boolean;
+    try { expected = text.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(text) && btoa(atob(text)) === text; } catch { expected = false; }
+    assert.equal(typeof base64Length(text) === "number", expected, JSON.stringify(text));
+    if (!expected) assert.throws(() => decodeBase64(text), IntegrityError);
+  }
+  assert.deepEqual(decodeBase64Portable("QUJD"), new TextEncoder().encode("ABC"));
+  assert.equal(encodeBase64Portable(new Uint8Array()), "");
+});
+
+test("base64 encoding matches Buffer for random buffers across chunk boundaries", () => {
+  for (const length of [0, 1, 2, 3, 4, 1000, 0x8000 - 1, 0x8000, 0x8000 + 1, 0x8000 * 2 + 2, 200_003]) {
+    const bytes = new Uint8Array(length);
+    for (let at = 0; at < length; at += 65536) crypto.getRandomValues(bytes.subarray(at, Math.min(length, at + 65536)));
+    const expected = Buffer.from(bytes).toString("base64");
+    assert.equal(encodeBase64Portable(bytes), expected, `portable ${length}`);
+    assert.equal(encodeBase64(bytes), expected, `default ${length}`);
+    assert.deepEqual(decodeBase64Portable(expected), bytes);
+    assert.deepEqual(decodeBase64(expected), bytes);
   }
 });
