@@ -1,35 +1,59 @@
 .git-sync-panel { max-width: 900px; margin-inline: auto; }
 .git-sync-muted { color: var(--text-muted); font-size: var(--font-ui-small); }
 .git-sync-code { font-family: var(--font-monospace); color: var(--text-normal); overflow-wrap: anywhere; }
-.git-sync-list { max-height: 240px; overflow: auto; padding-block: 4px 8px; }
-.git-sync-list p { margin: 4px 0; overflow-wrap: anywhere; font-size: var(--font-ui-small); }
-.git-sync-group { border-top: 1px solid var(--background-modifier-border); padding-block: 8px; }
-.git-sync-group summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
-.git-sync-group summary span:first-child { font-weight: var(--font-semibold); }
-.git-sync-advanced { margin-top: 24px; }
-.git-sync-advanced > summary { cursor: pointer; padding-block: 8px; color: var(--text-muted); font-size: var(--font-ui-small); }
-.git-sync-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; padding: 16px; background: var(--background-secondary); border-radius: var(--radius-m); font: var(--font-ui-small) var(--font-monospace); }
-.git-sync-editor { width: 100%; min-height: 160px; margin-block: 12px; }
+.git-sync-selectable { user-select: text; -webkit-user-select: text; cursor: text; }
 .git-sync-status { cursor: pointer; }
-.git-sync-panel .setting-item-control { flex-wrap: wrap; }
-@media(max-width:600px) { .git-sync-panel .setting-item { flex-wrap: wrap; gap: 12px; } .git-sync-panel .setting-item-info { flex-basis: 100%; } .git-sync-panel .setting-item-control { justify-content: flex-start; } }
+.git-sync-status.mod-warning,
+.git-sync-panel .mod-warning { color: var(--text-error); }
 
-.git-sync-panel .git-sync-format-field { flex-direction: column; align-items: stretch; gap: 8px; }
+/* Rows keep Obsidian's label-left, control-right layout; only rows holding a text field wrap on narrow screens. */
+.git-sync-panel .setting-item-control { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .git-sync-panel .setting-item:has(input[type="text"], input[type="password"], textarea) { flex-wrap: wrap; gap: var(--size-4-2); }
+  .git-sync-panel .setting-item:has(input[type="text"], input[type="password"], textarea) .setting-item-info { flex-basis: 100%; }
+}
+.git-sync-panel .git-sync-format-field { flex-direction: column; align-items: stretch; gap: var(--size-4-2); }
 .git-sync-panel .git-sync-format-field .setting-item-control { width: 100%; }
 .git-sync-panel .git-sync-format-field input { width: 100%; font-family: var(--font-monospace); }
-.git-sync-selectable { user-select: text; -webkit-user-select: text; cursor: text; }
-.git-sync-panel .git-sync-line { margin-top: 4px; }
+.git-sync-panel .git-sync-line { margin-top: var(--size-4-1); }
 .git-sync-panel .git-sync-line:empty { display: none; }
 .git-sync-panel .git-sync-line.mod-success { color: var(--text-success); }
 .git-sync-panel .git-sync-line.mod-warning { color: var(--text-error); }
-.git-sync-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-.git-sync-actions button { width: 100%; height: auto; min-height: 40px; white-space: normal; padding-block: 8px; }
-.git-sync-legend { display: flex; gap: 8px; margin-bottom: 6px; font-size: var(--font-ui-smaller); }
-.git-sync-legend span { padding: 2px 8px; border-radius: var(--radius-s); }
-.git-sync-diff { max-height: 50vh; overflow: auto; border-radius: var(--radius-m); background: var(--background-secondary); padding-block: 6px; font: var(--font-ui-small) var(--font-monospace); }
-.git-sync-row { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px 10px; border-left: 3px solid transparent; }
-.git-sync-mine { background: rgba(var(--color-green-rgb), 0.15); border-left-color: rgb(var(--color-green-rgb)); }
-.git-sync-theirs { background: rgba(var(--color-blue-rgb), 0.15); border-left-color: rgb(var(--color-blue-rgb)); }
+
+/* Files waiting on a choice: the one block on the page that asks for something. */
+.git-sync-decisions { margin-block: var(--size-4-2) var(--size-4-4); padding-inline: var(--size-4-3); border: 1px solid var(--interactive-accent); border-radius: var(--radius-m); }
+.git-sync-decisions > .setting-item:first-child { border-top: none; }
+.git-sync-bulk .setting-item-name { color: var(--text-muted); }
+
+.git-sync-summary-line { margin-block: 0 var(--size-4-3); }
+.git-sync-footer { border-top: none; }
+.git-sync-list { max-height: 240px; overflow: auto; overscroll-behavior: contain; padding-block: var(--size-4-1) var(--size-4-2); }
+.git-sync-list p { margin: var(--size-4-1) 0; overflow-wrap: anywhere; font-size: var(--font-ui-small); }
+.git-sync-group { border-top: 1px solid var(--background-modifier-border); padding-block: var(--size-4-2); }
+.git-sync-group summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: var(--size-4-1) var(--size-4-3); align-items: baseline; }
+.git-sync-group summary span:first-child { font-weight: var(--font-semibold); }
+.git-sync-advanced { margin-top: var(--size-4-6); }
+.git-sync-advanced > summary { cursor: pointer; padding-block: var(--size-4-2); color: var(--text-muted); font-size: var(--font-ui-small); }
+.git-sync-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; overscroll-behavior: contain; padding: var(--size-4-4); background: var(--background-secondary); border-radius: var(--radius-m); font: var(--font-ui-small) var(--font-monospace); }
+.git-sync-detail { white-space: pre-line; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; overscroll-behavior: contain; }
+
+/* Conflict view: the diff takes every spare pixel; choices sit in a compact footer. */
+.modal.git-sync-conflict { width: min(960px, 100%); max-height: min(85vh, 900px); }
+.modal.git-sync-conflict .git-sync-panel { max-width: none; margin-inline: 0; width: 100%; }
+.modal.git-sync-conflict .modal-content { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.git-sync-conflict .modal-content > p { margin-block: 0 var(--size-4-2); }
+.git-sync-legend { display: flex; gap: var(--size-4-2); margin-bottom: var(--size-4-2); font-size: var(--font-ui-smaller); }
+.git-sync-legend span { padding: 2px var(--size-4-2); border-radius: var(--radius-s); }
+.git-sync-diff { flex: 1 1 auto; min-height: 6rem; overflow: auto; overscroll-behavior: contain; border-radius: var(--radius-m); background: var(--background-secondary); padding-block: var(--size-4-1); font: var(--font-ui-small) var(--font-monospace); }
+.git-sync-row { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px var(--size-4-3); border-inline-start: 3px solid transparent; }
+/* Solid vs dashed edge tells the sides apart without relying on color. */
+.git-sync-mine { background: rgba(var(--color-green-rgb), 0.15); border-inline-start: 3px solid rgb(var(--color-green-rgb)); }
+.git-sync-theirs { background: rgba(var(--color-blue-rgb), 0.15); border-inline-start: 3px dashed rgb(var(--color-blue-rgb)); }
 .git-sync-skip { color: var(--text-faint); font-style: italic; }
-.git-sync-attention { border: 1px solid var(--text-accent); border-radius: var(--radius-m); padding-inline: 12px !important; }
-.git-sync-detail { white-space: pre-line; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.git-sync-editor { flex: 1 1 auto; width: 100%; min-height: 10rem; resize: none; font: var(--font-ui-small) var(--font-monospace); }
+.git-sync-actions { flex: none; display: flex; flex-wrap: wrap; gap: var(--size-4-2); padding-top: var(--size-4-3); }
+.git-sync-actions > button { flex: 1 1 9rem; }
+.git-sync-actions > button.git-sync-secondary { flex: 0 1 auto; }
+.git-sync-actions > p { flex-basis: 100%; margin: 0; }
+.git-sync-panel button.git-sync-secondary,
+.git-sync-actions button.git-sync-secondary { background: transparent; box-shadow: none; color: var(--text-accent); }

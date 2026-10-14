@@ -19,6 +19,8 @@ export class ForegroundScheduler {
   private pending = false;
   private failures = 0;
   private retryAfter = 0;
+  private current: Promise<void> | null = null;
+  private followUp: Promise<void> | null = null;
   constructor(
     private run: () => Promise<void>,
     private enabled: () => boolean,
@@ -39,8 +41,17 @@ export class ForegroundScheduler {
       void this.execute(false);
     }, wait);
   }
-  async now(): Promise<void> {
-    await this.execute(true);
+  /**
+   * Runs a sync now. During a running sync it waits for that one and then
+   * runs once more, so a decision recorded mid-sync is applied right away.
+   */
+  now(): Promise<void> {
+    if (!this.current) return this.execute(true);
+    this.followUp ??= this.current.then(() => {
+      this.followUp = null;
+      return this.execute(true);
+    });
+    return this.followUp;
   }
   private async execute(manual: boolean): Promise<void> {
     if (
@@ -65,6 +76,8 @@ export class ForegroundScheduler {
     }
     this.running = true;
     this.pending = false;
+    let finished = () => {};
+    this.current = new Promise<void>(resolve => { finished = resolve; });
     try {
       await this.run();
       this.failures = 0;
@@ -85,6 +98,8 @@ export class ForegroundScheduler {
       this.onError(error);
     } finally {
       this.running = false;
+      this.current = null;
+      finished();
       this.schedule(this.pending ? 3000 : 300000);
     }
   }

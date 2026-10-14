@@ -3,7 +3,7 @@ export class Plugin {
   app: { savedSettings?: unknown } = {};
   async saveData(value: unknown): Promise<void> { this.app.savedSettings = structuredClone(value); }
   async loadData(): Promise<unknown> { return this.app.savedSettings; }
-  addStatusBarItem() { return { addClass() {}, setText() {}, onclick: null }; }
+  addStatusBarItem() { return { addClass() {}, toggleClass() {}, setText() {}, onclick: null }; }
   addSettingTab(_value: unknown) {}
   addRibbonIcon(..._args: unknown[]) {}
   addCommand(_value: unknown) {}

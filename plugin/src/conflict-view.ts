@@ -31,8 +31,9 @@ export function diffRows(mine: string, theirs: string): DiffRow[] | null {
   let position = 0;
   hunks.forEach((hunk, index) => {
     same(position, hunk.start, index === 0, false);
-    for (let at = hunk.start; at < hunk.end; at++) rows.push({ kind: "theirs", text: a[at]! });
+    // This device first, matching the legend and the order of the choices.
     for (const line of hunk.lines) rows.push({ kind: "mine", text: line });
+    for (let at = hunk.start; at < hunk.end; at++) rows.push({ kind: "theirs", text: a[at]! });
     position = hunk.end;
   });
   same(position, a.length, hunks.length === 0, true);

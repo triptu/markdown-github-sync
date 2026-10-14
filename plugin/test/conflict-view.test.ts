@@ -9,12 +9,12 @@ test("shows each side's lines and collapses long unchanged runs", () => {
     { kind: "skip", count: 8 },
     { kind: "same", text: "line 8\n" },
     { kind: "same", text: "line 9\n" },
-    { kind: "theirs", text: "theirs\n" },
     { kind: "mine", text: "mine\n" },
+    { kind: "theirs", text: "theirs\n" },
   ]);
 });
 
 test("keeps short unchanged runs between changes", () => {
   const rows = diffRows("a\nx\nb\nc\nd\n", "a\ny\nb\nc\nd\n")!;
-  assert.deepEqual(rows.map(row => row.kind), ["same", "theirs", "mine", "same", "same", "same"]);
+  assert.deepEqual(rows.map(row => row.kind), ["same", "mine", "theirs", "same", "same", "same"]);
 });

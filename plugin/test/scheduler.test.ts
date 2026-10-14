@@ -59,14 +59,18 @@ test("simultaneous manual and automatic requests never overlap", async () => {
     await new Promise<void>(resolve => { release = resolve; });
   }, () => true, () => true, error => { throw error; }, time.clock);
   const first = scheduler.now();
-  await scheduler.now();
+  const second = scheduler.now();
+  const third = scheduler.now();
   scheduler.schedule();
   assert.equal(runs, 1);
   release();
   await first;
-  await time.advance(3000);
+  await Promise.resolve();
+  // Manual requests made during a run coalesce into one follow-up run.
   assert.equal(runs, 2);
   release();
+  await Promise.all([second, third]);
+  assert.equal(runs, 2);
   scheduler.stop();
 });
 

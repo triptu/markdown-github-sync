@@ -23,7 +23,7 @@ import {
 } from "./git-sync/session";
 import { parseState } from "./git-sync/state";
 import type { Entry, FileMode, RepositoryIdentity } from "./git-sync/contracts";
-import type { VersionConflict, NativeConflict, BulkDeletionConflict } from "./git-sync/reconcile";
+import type { Conflict, VersionConflict, NativeConflict, BulkDeletionConflict } from "./git-sync/reconcile";
 import { decodeBase64, encodeBase64, entryText } from "./git-sync/codec";
 import { GitObsidianVault } from "./git-sync/obsidian-vault";
 import { FileJournalStore } from "./git-sync/store";
@@ -69,6 +69,9 @@ export default class GitVaultSync extends Plugin {
   settings: Settings = defaultSettings();
   session: SyncSession | null = null;
   statusText = "Set up GitHub sync";
+  statusProblem = false;
+  syncing = false;
+  private alerted: string | null = null;
   private scheduler: ForegroundScheduler | null = null;
   private statusElement: HTMLElement | null = null;
   private ready = false;
@@ -119,13 +122,13 @@ export default class GitVaultSync extends Plugin {
       () => this.syncOnce(),
       () => this.ready && this.settings.automatic && this.session !== null,
       () => !document.hidden,
-      (error) => this.setStatus(failure(error)),
+      (error) => this.fail(error),
     );
     const schedule = () => this.scheduler?.schedule();
     const changed = (path: string) => {
       if (this.unloaded) return;
       if (path.split("/").some(part => part.startsWith("."))) return;
-      void this.notifyLocalChange().then(schedule).catch(error => this.setStatus(failure(error)));
+      void this.notifyLocalChange().then(schedule).catch(error => this.fail(error));
     };
     this.registerEvent(
       this.app.vault.on("create", (file) => {
@@ -146,7 +149,7 @@ export default class GitVaultSync extends Plugin {
       if (this.unloaded) return;
       if ([oldPath, file.path].some(path => path === ".git-vault-sync" || path.startsWith(".git-vault-sync/"))) { schedule(); return; }
       if ([oldPath, file.path].every(path => path.split("/").some(part => part.startsWith(".")))) return;
-      void this.recordRename(oldPath, file.path).then(schedule).catch(error => this.setStatus(failure(error)));
+      void this.recordRename(oldPath, file.path).then(schedule).catch(error => this.fail(error));
     }));
     this.registerDomEvent(document, "visibilitychange", () => {
       if (!document.hidden) schedule();
@@ -154,7 +157,7 @@ export default class GitVaultSync extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.unloaded) return;
       this.ready = true;
-      void this.initialize().catch((error) => this.setStatus(failure(error)));
+      void this.initialize().catch((error) => this.fail(error));
     });
   }
   onunload(): void {
@@ -168,10 +171,41 @@ export default class GitVaultSync extends Plugin {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
-  setStatus(value: string): void {
+  setStatus(value: string, problem = false): void {
     this.statusText = value;
+    this.statusProblem = problem;
     this.statusElement?.setText(`GitHub: ${value}`);
+    this.statusElement?.toggleClass("mod-warning", problem);
     for (const fn of this.listeners) fn();
+  }
+  /**
+   * Success stays quiet in the status line. A problem also raises one notice
+   * that stays until tapped, and only again once the problem changes.
+   */
+  private alert(key: string, text: string): void {
+    if (this.alerted === key) return;
+    this.alerted = key;
+    const notice = new Notice(`${text} Tap for details.`, 0);
+    notice.noticeEl?.addEventListener("click", () => new ChangesModal(this.app, this).open());
+  }
+  /** Background failures: offline is retried quietly; anything else is shown until it's fixed. */
+  fail(error: unknown): void {
+    if (rejectedAccess(error)) {
+      const problem = accessProblem(error, this.settings);
+      this.setStatus("GitHub rejected the access token", true);
+      this.alert(`access:${problem}`, `Sync stopped: ${problem}`);
+      return;
+    }
+    if (offline(error)) {
+      const last = this.activity.syncedAt;
+      this.setStatus(last ? `Offline · last synced ${ago(last)}` : "Offline · will retry");
+      // A long silence means something more than a flaky connection.
+      if (last && Date.now() - last > 6 * 60 * 60 * 1000) this.alert("offline", `Can't reach GitHub. Last synced ${ago(last)}.`);
+      return;
+    }
+    const message = failure(error);
+    this.setStatus(message, true);
+    this.alert(`error:${message}`, `Sync stopped: ${message}`);
   }
   initialize(): Promise<void> {
     return this.owner().run(() => this.initializeOwned());
@@ -509,9 +543,6 @@ export default class GitVaultSync extends Plugin {
       return this.repository.history({ ...input, at: input.at ?? status.commit });
     });
   }
-  compactRecovery() {
-    return this.owner().run(() => this.compactRecoveryOwned());
-  }
   private async compactRecoveryOwned(): Promise<{ recordsRemoved: number; objectsRemoved: number }> {
     const status = await this.rawSession?.status();
     if (!status || status.kind !== "enrolled") throw new Error("Start syncing before cleaning up recovery copies.");
@@ -560,18 +591,23 @@ export default class GitVaultSync extends Plugin {
       if (!this.rawSession || !this.ready) return;
       await this.assertSingleWriter();
       this.owner().assertActive();
+      this.syncing = true;
       this.setStatus("Syncing…");
       let outcome: SyncOutcome;
       try { outcome = await this.rawSession.sync(); }
       catch (error) {
         if (rejectedAccess(error)) this.noteAccess(accessProblem(error, this.settings));
         throw error;
-      }
+      } finally { this.syncing = false; }
       if (outcome.kind === "synced" || outcome.kind === "up-to-date") this.noteAccess(null, true);
-      this.setStatus(describeOutcome(outcome));
+      const attention = outcomeAttention(outcome);
+      this.setStatus(describeOutcome(outcome), attention !== null);
+      if (attention) this.alert(attention.key, attention.text);
+      else this.alerted = null;
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
+        // Internal safety copies are pruned quietly; a failed cleanup retries next time.
         try { await this.compactRecoveryOwned(); }
-        catch (error) { this.setStatus(`Synced. Recovery cleanup paused: ${failure(error)}`); }
+        catch (error) { console.warn("GitHub Vault Sync: cleanup skipped", error); }
       }
     });
   }
@@ -621,27 +657,6 @@ export default class GitVaultSync extends Plugin {
       else this.scheduler?.schedule();
     });
   }
-  nativeRecoveryOverview() {
-    return this.owner().run(async () => {
-      if (!this.nativeVault) throw new Error("Connect this vault to GitHub first.");
-      return {
-        oversized: this.nativeVault.nativeRecoveries().filter(record => record.kind === "oversize"),
-        retained: await this.nativeVault.retainedHiddenSummary(),
-      };
-    });
-  }
-  inspectOversizeRecovery(id: string) {
-    return this.owner().run(async () => {
-      if (!this.nativeVault) throw new Error("Native recovery is unavailable.");
-      return this.nativeVault.inspectOversize(id);
-    });
-  }
-  exportOversizeRecovery(id: string) {
-    return this.owner().run(async () => {
-      if (!this.nativeVault) throw new Error("Native recovery is unavailable.");
-      return this.nativeVault.exportOversize(id);
-    });
-  }
   exportRecoveryCopy(id: string): Promise<string> {
     return this.owner().run(async () => {
       const snapshot = await this.rawSession?.exportRecovery({ id });
@@ -667,6 +682,12 @@ export default class GitVaultSync extends Plugin {
 }
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
+}
+function formatBytes(bytes: number): string {
+  const units = ["bytes", "KB", "MB", "GB"];
+  let value = bytes, unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${unit ? value.toFixed(value < 10 ? 1 : 0) : value} ${units[unit]}`;
 }
 function describeOutcome(outcome: SyncOutcome): string {
   switch (outcome.kind) {
@@ -699,6 +720,39 @@ function describeOutcome(outcome: SyncOutcome): string {
     case "native-error":
       return "A file needs attention · open Sync status";
   }
+}
+/** What a sync left for the person to do, or null when nothing needs them. */
+function outcomeAttention(outcome: SyncOutcome): { key: string; text: string } | null {
+  switch (outcome.kind) {
+    case "needs-decision":
+      return { key: `decide:${outcome.conflicts.map(conflict => conflict.id).join()}`,
+        text: `${plural(outcome.conflicts.length, "file was", "files were")} changed both here and on GitHub. Choose which version to keep.` };
+    case "blocked":
+      return { key: `blocked:${outcome.steps.map(step => step.path).join()}`, text: `${plural(outcome.steps.length, "update")} from GitHub couldn't be saved here.` };
+    case "publication-unknown":
+      return { key: "publication", text: "GitHub didn't confirm the last upload, so uploads are on hold." };
+    case "native-error":
+      return { key: "native", text: "A file couldn't be saved, so sync stopped." };
+    case "corrupt":
+      return { key: `corrupt:${outcome.detail}`, text: `Sync needs repair: ${outcome.detail}` };
+    case "paused":
+      return { key: `paused:${outcome.pause.detail}`, text: `Sync is paused: ${outcome.pause.detail}` };
+    case "synced":
+    case "up-to-date": {
+      const stuck = (outcome.attention?.unreadable.length ?? 0) + (outcome.attention?.held.length ?? 0);
+      return stuck ? { key: `stuck:${stuck}`, text: `${plural(stuck, "file isn't", "files aren't")} syncing.` } : null;
+    }
+    default:
+      return null;
+  }
+}
+/** A dropped connection or a GitHub outage: worth retrying, not worth interrupting for. */
+function offline(error: unknown): boolean {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  if (typeof error === "object" && error !== null && typeof Reflect.get(error, "retryAt") === "number") return true;
+  const status = httpStatus(error);
+  if (typeof status === "number") return status === 0 || status === 429 || status >= 500;
+  return /net::|network|timed? ?out|ECONN|ENOTFOUND|EAI_AGAIN|Failed to fetch|offline/i.test(failure(error));
 }
 interface AccessTarget { owner: string; repository: string; branch: string; token?: string }
 /** Per-vault, per-device record of the last working GitHub access, for the settings page. */
@@ -1028,53 +1082,33 @@ class GitSettings extends PluginSettingTab {
         .catch(error => new Notice(failure(error), 12000));
     }, 600, true);
 
-    const status = new Setting(el).setName(`${repository.owner}/${repository.name}`)
-      .addButton(button => button.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, plugin).open()))
-      .addButton(button => button.setButtonText("Status").onClick(() => new ChangesModal(this.app, plugin).open()))
-      .addButton(button => button.setButtonText("Sync now").setCta()
-        .setTooltip("Upload this device's changes and download changes from GitHub")
+    // The page answers one question first: is sync working, and does anything need me?
+    // Automatic sync does the routine work, so "Sync now" stays quiet; only things that need you get color.
+    const summary = new Setting(el).setName(`${repository.owner}/${repository.name}`)
+      .addButton(button => button.setButtonText("Sync now")
         .onClick(async () => {
           button.setDisabled(true);
           await plugin.syncNow();
           button.setDisabled(false);
         }));
-    const current = status.descEl.createDiv();
-    const activity = status.descEl.createDiv({ cls: "git-sync-line" });
-    const attention = el.createDiv();
-    let shown = "";
-    const refreshAttention = async () => {
+    summary.settingEl.addClass("git-sync-summary");
+    const decisions = el.createDiv();
+    let shown: string | null = null;
+    const refreshDecisions = async () => {
       const state = await plugin.session?.status().catch(() => null);
       if (generation !== this.generation) return;
       const conflicts = state?.kind === "enrolled" ? state.conflicts : [];
       const key = conflicts.map(conflict => conflict.id).join();
       if (key === shown) return;
       shown = key;
-      attention.empty();
-      if (!conflicts.length) return;
-      // Each file that needs a decision gets its own button right here.
-      const heading = new Setting(attention).setName(`${plural(conflicts.length, "file needs", "files need")} your choice`)
-        .setDesc("Changed on this device and on GitHub. Pick which version to keep.");
-      heading.settingEl.addClass("git-sync-attention");
-      renderBulkChoice(attention, this.app, plugin, conflicts, () => { shown = ""; void refreshAttention(); });
-      for (const conflict of conflicts) {
-        const row = new Setting(attention);
-        if (conflict.kind === "collision" || conflict.kind === "bulk-deletion") {
-          row.setName(conflict.kind === "collision" ? "Names differ only by capitals" : `${conflict.paths.length} files deleted`)
-            .addButton(b => b.setButtonText("Review").setCta().onClick(() => new ChangesModal(this.app, plugin).open()));
-          continue;
-        }
-        row.setName(conflict.path.split("/").pop() ?? conflict.path)
-          .setDesc(conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " "))
-          .addButton(b => b.setButtonText("Resolve").setCta().onClick(() =>
-            new ConflictModal(this.app, plugin, conflict, () => { shown = ""; void refreshAttention(); }).open()));
-      }
+      renderDecisions(decisions, this.app, plugin, conflicts, () => { shown = null; void refreshDecisions(); });
     };
     const refresh = () => {
-      current.setText(plugin.statusText);
-      const described = describeActivity(plugin.activity);
-      activity.setText(described.text);
-      activity.toggleClass("mod-warning", described.problem);
-      void refreshAttention();
+      const access = describeActivity(plugin.activity);
+      const problem = access.problem || plugin.statusProblem;
+      summary.setDesc(access.problem ? access.text : plugin.statusText);
+      summary.descEl.toggleClass("mod-warning", problem);
+      void refreshDecisions();
     };
     refresh();
     const unsubscribe = plugin.subscribe(refresh);
@@ -1083,20 +1117,16 @@ class GitSettings extends PluginSettingTab {
     // Opening settings re-checks a token that hasn't been proven in the last few minutes.
     const { checkedAt } = plugin.activity;
     if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void plugin.verifyAccess();
-    new Setting(el).setName("Sync automatically")
-      .setDesc("Sync shortly after you edit, and check GitHub for changes every 5 minutes while Obsidian is open.")
-      .addToggle(toggle => toggle.setValue(draft.automatic).onChange(value => { draft.automatic = value; save(); }));
-    const configuration = new Setting(el).setName("Obsidian settings");
-    void this.describeConfiguration(configuration, generation);
 
-    new Setting(el).setName("Commit messages").setHeading();
-    renderCommitSettings(el, draft, save);
+    new Setting(el).setName("Sync automatically")
+      .setDesc("Syncs a few seconds after you edit, and checks GitHub every 5 minutes while Obsidian is open.")
+      .addToggle(toggle => toggle.setValue(draft.automatic).onChange(value => { draft.automatic = value; save(); }));
+    const configuration = new Setting(el).setName("Obsidian settings").setDesc("Checking…");
+    void this.describeConfiguration(configuration, generation);
 
     const advanced = el.createEl("details", { cls: "git-sync-advanced" });
     advanced.open = Boolean(plugin.activity.problem);
     advanced.createEl("summary", { text: "Advanced" });
-    new Setting(advanced).setName("Repository")
-      .setDesc(`${repository.owner}/${repository.name} · ${repository.branch}. To sync a different repository, use another vault.`);
     // A replacement is saved only after it can read this repository; until then the working token stays.
     const creationUrl = () => tokenCreationUrl(repository.owner);
     const tokenSetting = new Setting(advanced).setName("Access token").setDesc(tokenDescription(creationUrl));
@@ -1110,21 +1140,23 @@ class GitSettings extends PluginSettingTab {
         }, "Repository access verified · token saved");
       },
     }, creationUrl);
-    new Setting(advanced).setName("File history")
-      .setDesc("Restore an earlier version of one note.")
-      .addButton(button => button.setButtonText("Open").onClick(() => new RestoreModal(this.app, plugin).open()));
-    new Setting(advanced).setName("Local recovery")
-      .setDesc("Copies this device kept before sync replaced or removed a file.")
-      .addButton(button => button.setButtonText("Open").onClick(() => new RecoveryModal(this.app, plugin).open()));
+    new Setting(advanced).setName("History")
+      .setDesc("Every sync from every device, or earlier versions of one note.")
+      .addButton(button => button.setButtonText("All syncs").onClick(() => new SyncHistoryModal(this.app, plugin).open()))
+      .addButton(button => button.setButtonText("One note").onClick(() => new RestoreModal(this.app, plugin).open()));
+    new Setting(advanced).setName("Commit messages").setHeading();
+    renderCommitSettings(advanced, draft, save);
+    new Setting(advanced).setName("Repository")
+      .setDesc(`${repository.owner}/${repository.name} · ${repository.branch}. To sync a different repository, use another vault.`);
   }
   private async describeConfiguration(setting: Setting, generation: number): Promise<void> {
     const listing = await this.plugin.session?.listConfiguration().catch(() => null);
     if (generation !== this.generation || listing?.kind !== "configuration") { setting.settingEl.remove(); return; }
     if (listing.rules === "config/1") {
       const waiting = listing.deferred.length + listing.guarded.length + listing.unpublished.length;
-      setting.setDesc(waiting ? `${plural(waiting, "change")} to review.` : "Themes, hotkeys and plugins sync too.")
+      setting.setDesc(waiting ? `${plural(waiting, "change")} waiting for your review.` : "Themes, hotkeys and plugins sync along with your notes.")
         .addButton(button => {
-          button.setButtonText("Review").onClick(() => new ConfigurationModal(this.app, this.plugin).open());
+          button.setButtonText(waiting ? "Review" : "View").onClick(() => new ConfigurationModal(this.app, this.plugin).open());
           if (waiting) button.setCta();
         });
       return;
@@ -1159,15 +1191,20 @@ class ConfigurationModal extends Modal {
     el.empty(); el.addClass("git-sync-panel");
     this.setTitle("Obsidian settings");
     if (!session) { el.createEl("p", { text: "Connect to GitHub in GitHub Vault Sync settings first." }); return; }
+    const loading = el.createEl("p", { text: "Checking settings on this device…", cls: "git-sync-muted" });
     try {
       const listing = await session.listConfiguration();
       if (!current()) return;
+      if (listing.kind !== "configuration" || !listing.deferred.length) loading.remove();
       if (listing.kind !== "configuration") throw new Error(`Settings sync isn't available right now (${listing.kind}).`);
       if (listing.rules !== "config/1") {
         el.createEl("p", { text: "Settings sync is off. Turn it on in GitHub Vault Sync settings." }); return;
       }
+      const incoming = el.createDiv();
+      if (!listing.deferred.length && !listing.guarded.length && !listing.unpublished.length)
+        el.createEl("p", { text: "Themes, hotkeys and plugins match your other devices. Nothing to review." });
       if (listing.guarded.length) {
-        el.createEl("h3", { text: `Changed after an update · ${listing.guarded.length}` });
+        new Setting(el).setName(`Changed here after an update · ${listing.guarded.length}`).setHeading();
         el.createEl("p", { text: "Obsidian or a plugin changed these after you applied an update. They stay on this device until you check them. Notes keep syncing." });
         for (const item of listing.guarded) {
           new Setting(el).setName(item.path)
@@ -1202,9 +1239,11 @@ class ConfigurationModal extends Modal {
             }));
         }
       }
-      const unpublished = el.createEl("details");
-      unpublished.createEl("summary", { text: `New on this device · ${listing.unpublished.length}` });
-      unpublished.createEl("p", { text: "Not uploaded until you approve. Check them for passwords or API keys first.", cls: "git-sync-muted" });
+      const unpublished = el.createDiv();
+      if (listing.unpublished.length) {
+        new Setting(unpublished).setName(`New on this device · ${listing.unpublished.length}`).setHeading()
+          .setDesc("These upload only after you approve each one. Check them for passwords or API keys first.");
+      }
       for (const item of listing.unpublished) {
         new Setting(unpublished).setName(item.path).addButton(button => button.setButtonText("Review").onClick(async () => {
           button.setDisabled(true);
@@ -1230,26 +1269,44 @@ class ConfigurationModal extends Modal {
           finally { button.setDisabled(false); }
         }));
       }
-      el.createEl("h3", { text: `From other devices · ${listing.deferred.length}` });
-      if (!listing.deferred.length) { el.createEl("p", { text: "Nothing waiting." }); return; }
+      if (!listing.deferred.length) return;
       const preview = await session.previewApplyConfiguration();
       if (!current()) return;
+      loading.remove();
       if (preview.kind !== "preview") throw new Error(`Can't apply updates right now (${preview.kind}).`);
+      new Setting(incoming).setName(`From your other devices · ${preview.items.length}`).setHeading()
+        .setDesc("Applying writes them into this device's Obsidian settings.");
+      // One row per plugin or theme, with each file's before and after one tap away.
+      const groups = new Map<string, typeof preview.items>();
       for (const item of preview.items) {
-        const details = el.createEl("details");
-        details.createEl("summary", { text: item.path });
-        details.createEl("h4", { text: "On this device" });
-        configurationEntryPreview(details, item.expectedEntry);
-        details.createEl("h4", { text: "Incoming" });
-        configurationEntryPreview(details, item.incomingEntry);
-        if (item.blockedReason) details.createEl("p", { text: item.blockedReason });
+        const { place } = describePath(item.path);
+        groups.set(place, [...(groups.get(place) ?? []), item]);
       }
-      for (const blocked of preview.blocked) el.createEl("p", { text: `${blocked.path}: ${blocked.reason}` });
-      el.createEl("p", { text: "Close settings and turn off affected plugins first so they don't overwrite the update. Restart Obsidian afterward." });
-      new Setting(el).addButton(button => button.setButtonText("Apply updates").setCta().setDisabled(preview.blocked.length > 0).onClick(async () => {
+      for (const [place, items] of groups) {
+        const details = incoming.createEl("details", { cls: "git-sync-group" });
+        const summary = details.createEl("summary");
+        summary.createSpan({ text: place });
+        summary.createSpan({ text: items.map(item => describePath(item.path).name).join(", "), cls: "git-sync-muted" });
+        for (const item of items) {
+          details.createEl("h4", { text: describePath(item.path).name });
+          if (item.blockedReason) details.createEl("p", { text: item.blockedReason, cls: "mod-warning" });
+          collapsible(details, "On this device now", item.expectedEntry);
+          collapsible(details, "Incoming", item.incomingEntry);
+        }
+      }
+      for (const blocked of preview.blocked)
+        incoming.createEl("p", { text: `${describePath(blocked.path).name}: ${blocked.reason}`, cls: "mod-warning" });
+      // Only plugins actually running here can overwrite an update before the restart.
+      // Loaded instances, not the enabled list: a desktop-only plugin is listed on a phone but never runs there.
+      const loaded: unknown = Reflect.get(Reflect.get(this.app, "plugins") ?? {}, "plugins");
+      const running = [...new Set(preview.items.map(item => /^\.obsidian\/plugins\/([^/]+)\//.exec(item.path)?.[1]).filter((id): id is string =>
+        id !== undefined && id !== this.plugin.manifest.id && typeof loaded === "object" && loaded !== null && id in loaded))];
+      if (running.length)
+        incoming.createEl("p", { text: `Turn off ${running.join(", ")} in Community plugins first, so ${running.length === 1 ? "it doesn't" : "they don't"} overwrite the update.`, cls: "mod-warning" });
+      const apply = new Setting(incoming).addButton(button => button.setButtonText(`Apply ${plural(preview.items.length, "update")}`).setCta().setDisabled(preview.blocked.length > 0).onClick(async () => {
         button.setDisabled(true);
         try {
-          if (!current()) throw new Error("Something changed. Close and try again.");
+          if (!current()) throw new Error("Something changed. Close this and try again.");
           await this.plugin.assertSingleWriter();
           const result = await session.applyConfiguration({ token: preview.token });
           if (result.kind === "review-needed") {
@@ -1258,11 +1315,18 @@ class ConfigurationModal extends Modal {
             new ChangesModal(this.app, this.plugin).open();
             return;
           }
-          if (result.kind !== "applied") throw new Error("Something changed. Close and try again.");
-          new Notice(`${plural(result.paths.length, "update")} applied. Restart Obsidian to load them.`, 12000);
-          await this.render();
+          if (result.kind !== "applied") throw new Error("Something changed. Close this and try again.");
+          apply.settingEl.remove();
+          new Setting(incoming).setName(`${plural(result.paths.length, "update")} applied`)
+            .setDesc("Obsidian picks them up after a reload.")
+            .addButton(reload => reload.setButtonText("Reload Obsidian").setCta().onClick(() => {
+              const commands: unknown = Reflect.get(this.app, "commands");
+              const run: unknown = commands && Reflect.get(commands, "executeCommandById");
+              if (typeof run === "function") run.call(commands, "app:reload");
+            }));
         } catch (error) { new Notice(failure(error), 12000); button.setDisabled(false); }
       }));
+      apply.settingEl.addClass("git-sync-footer");
     } catch (error) { if (current()) el.createEl("p", { text: failure(error) }); }
   }
 }
@@ -1274,7 +1338,7 @@ const reviewGroups: ReadonlyArray<readonly [EnrollmentPreview["items"][number]["
   ["download", "Only on GitHub", "Will be added to this device."],
   ["update-local", "Newer on GitHub", "Will be updated on this device."],
   ["unreadable", "Too large to sync", "Left as they are."],
-  ["native-pending", "Interrupted saves", "A copy is kept in local recovery."],
+  ["native-pending", "Interrupted saves", "You'll choose which version to keep."],
 ];
 /** Shows what the first sync would do. Starting is the only step that changes anything. */
 class EnrollmentModal extends Modal {
@@ -1342,13 +1406,60 @@ class EnrollmentModal extends Modal {
 }
 const conflictLabels: Record<string, string> = {
   "content": "Edited here and on GitHub",
-  "add-add": "Created here and on GitHub",
+  "add-add": "Different here and on GitHub",
   "local-deleted-remote-edited": "Deleted here, edited on GitHub",
   "local-edited-remote-deleted": "Edited here, deleted on GitHub",
+  "local-deletion": "Deleted here",
+  "remote-deletion": "Deleted on GitHub",
   "interrupted-write": "A save was interrupted",
-  "displaced-write": "Changed while sync was writing it",
-  "oversize-write": "Too large to compare automatically",
+  "displaced-write": "Changed while sync was saving it",
+  "oversize-write": "Too large to compare",
 };
+const settingsFiles: Record<string, string> = {
+  "community-plugins.json": "Enabled community plugins",
+  "core-plugins.json": "Enabled core plugins",
+  "appearance.json": "Appearance",
+  "hotkeys.json": "Hotkeys",
+  "app.json": "Editor and files",
+  "bookmarks.json": "Bookmarks",
+  "graph.json": "Graph view",
+};
+/** `.obsidian/plugins/vikalp/main.js` → main.js in "vikalp plugin"; notes keep their folder. */
+function describePath(path: string): { name: string; place: string } {
+  const parts = path.split("/");
+  const name = parts.pop() ?? path;
+  if (parts[0] === ".obsidian") {
+    if (parts.length === 1 && settingsFiles[name]) return { name: settingsFiles[name], place: "Obsidian settings" };
+    if (parts[1] === "plugins" && parts[2]) return { name, place: `${parts[2]} plugin` };
+    if (parts[1] === "themes" && parts[2]) return { name, place: `${parts[2]} theme` };
+    if (parts[1] === "snippets") return { name, place: "CSS snippet" };
+    return { name, place: "Obsidian settings" };
+  }
+  return { name, place: parts.length ? parts.join("/") : "Vault" };
+}
+/** Files waiting on a choice, one row each, plus one shared choice when there are several. */
+function renderDecisions(container: HTMLElement, app: App, plugin: GitVaultSync, conflicts: readonly Conflict[], changed: () => void): void {
+  container.empty();
+  container.toggleClass("git-sync-decisions", conflicts.length > 0);
+  for (const conflict of conflicts) {
+    const row = new Setting(container);
+    if (conflict.kind === "collision") {
+      row.setName("Names differ only by capital letters")
+        .setDesc(`Rename one of these to keep syncing: ${conflict.paths.join(", ")}`);
+      continue;
+    }
+    if (conflict.kind === "bulk-deletion") {
+      row.setName(`${plural(conflict.paths.length, "file")} deleted ${conflict.direction === "local" ? "here" : "on GitHub"}`)
+        .setDesc(conflict.direction === "local" ? "Confirm before they're removed from GitHub too." : "Confirm before they're removed here too.")
+        .addButton(button => button.setButtonText("Review").onClick(() => new BulkDeletionModal(app, plugin, conflict, changed).open()));
+      continue;
+    }
+    const { name, place } = describePath(conflict.path);
+    row.setName(name).setDesc(`${place} · ${conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " ")}`)
+      .addButton(button => button.setButtonText("Resolve").onClick(() => new ConflictModal(app, plugin, conflict, changed).open()));
+  }
+  renderBulkChoice(container, app, plugin, conflicts, changed);
+}
 class SyncHistoryModal extends Modal {
   private closed = false;
   constructor(app: App, private plugin: GitVaultSync) { super(app); }
@@ -1363,10 +1474,10 @@ class SyncHistoryModal extends Modal {
     list.createEl("p", { text: "Loading…", cls: "git-sync-muted" });
     new Setting(el).setName("Looking for one note?")
       .addButton(b => b.setButtonText("File history").onClick(() => { this.close(); new RestoreModal(this.app, this.plugin).open(); }));
-    const load = async (at?: string, page = 1): Promise<void> => {
+    const load = async (at?: string, page = 1): Promise<boolean> => {
       try {
         const result = await this.plugin.fileHistory({ at, page });
-        if (this.closed) return;
+        if (this.closed) return false;
         if (page === 1) list.empty();
         for (const version of result.entries) {
           new Setting(list)
@@ -1380,14 +1491,18 @@ class SyncHistoryModal extends Modal {
           const nextPage = result.nextPage;
           const more = new Setting(list).addButton(b => b.setButtonText("Show older").onClick(async () => {
             b.setDisabled(true);
-            await load(result.at, nextPage);
-            more.settingEl.remove();
+            // Keep the button after a failed load so it can be tried again.
+            if (await load(result.at, nextPage)) more.settingEl.remove();
+            else b.setDisabled(false);
           }));
         }
+        return true;
       } catch (error) {
-        if (this.closed) return;
+        if (this.closed) return false;
         if (page === 1) list.empty();
-        list.createEl("p", { text: failure(error) });
+        new Notice(`Couldn't load sync history. ${failure(error)}`, 8000);
+        if (page === 1) list.createEl("p", { text: failure(error), cls: "mod-warning" });
+        return false;
       }
     };
     void load();
@@ -1396,6 +1511,7 @@ class SyncHistoryModal extends Modal {
 class ChangesModal extends Modal {
   private unsubscribe: (() => void) | null = null;
   private summary: HTMLElement | null = null;
+  private generation = 0;
   constructor(
     app: App,
     private plugin: GitVaultSync,
@@ -1403,62 +1519,56 @@ class ChangesModal extends Modal {
     super(app);
   }
   onOpen(): void {
-    this.unsubscribe = this.plugin.subscribe(() =>
-      this.summary?.setText(this.plugin.statusText),
-    );
+    // A finished background sync can add or clear decisions, so redraw once it settles.
+    const redraw = debounce(() => { void this.render(); }, 400, true);
+    this.unsubscribe = this.plugin.subscribe(() => {
+      this.showSummary();
+      if (!this.plugin.syncing) redraw();
+    });
     void this.render();
   }
   onClose(): void {
+    this.generation++;
     this.unsubscribe?.();
   }
   async render(): Promise<void> {
+    const generation = ++this.generation;
+    const current = () => generation === this.generation;
     const el = this.contentEl;
     el.empty();
     el.addClass("git-sync-panel");
     this.setTitle("Sync status");
-    this.summary = el.createEl("p", { text: this.plugin.statusText });
-    new Setting(el)
-      .addButton((b) =>
-        b
-          .setButtonText("Sync now")
-          .setCta()
-          .onClick(async () => {
-            b.setDisabled(true);
-            await this.plugin.syncNow();
-            await this.render();
-          }),
-      )
-      .addButton((b) =>
-        b.setButtonText("History").onClick(() => {
-          new SyncHistoryModal(this.app, this.plugin).open();
-        }),
-      );
+    const summary = this.summary = el.createEl("p", { cls: "git-sync-summary-line" });
+    this.showSummary();
+    const body = el.createDiv();
+    const actions = new Setting(el)
+      .addButton(b => b.setButtonText("History").onClick(() => new SyncHistoryModal(this.app, this.plugin).open()))
+      .addButton(b => b.setButtonText("Sync now").setCta().onClick(async () => {
+        b.setDisabled(true);
+        await this.plugin.syncNow();
+        await this.render();
+      }));
+    actions.settingEl.addClass("git-sync-footer");
     try {
       // The cheap status lists decisions right away; the slower local scan fills in unsynced files below.
       const status = await this.plugin.session?.status();
+      if (!current()) return;
       if (!status || status.kind === "unenrolled") {
-        el.createEl("p", {
-          text: "Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.",
-        });
+        summary.setText("Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.");
         return;
       }
       if (status.kind === "corrupt") {
-        el.createEl("p", { text: status.detail });
+        summary.setText(status.detail);
+        summary.addClass("mod-warning");
         return;
       }
-      el.createEl("p", {
-        text: `${status.repository.owner}/${status.repository.name} · last synced commit ${status.commit.slice(0, 7)}`,
-        cls: "git-sync-muted",
-      });
-      if (status.pause) el.createEl("p", { text: status.pause.detail });
-      for (const error of status.nativeErrors) {
-        new Setting(el).setName(error.path ?? "Sync can't continue")
-          .setDesc(error.detail);
-      }
+      if (status.pause) body.createEl("p", { text: status.pause.detail, cls: "mod-warning" });
+      for (const error of status.nativeErrors)
+        new Setting(body).setName(error.path ?? "Sync can't continue").setDesc(error.detail).settingEl.addClass("mod-warning");
       if (status.phase === "publication-unknown")
-        new Setting(el)
+        new Setting(body)
           .setName("Last upload wasn't confirmed")
-          .setDesc("Uploads are on hold until this is sorted. Sync now checks GitHub again without re-uploading.")
+          .setDesc("Uploads are on hold. Sync now asks GitHub again without uploading twice.")
           .addButton(b => b.setButtonText("Review").onClick(async () => {
             b.setDisabled(true);
             try {
@@ -1469,84 +1579,52 @@ class ChangesModal extends Modal {
             } catch (error) { new Notice(failure(error), 12000); }
             finally { b.setDisabled(false); }
           }));
-      renderBulkChoice(el, this.app, this.plugin, status.conflicts, () => { void this.render(); });
-      for (const conflict of status.conflicts) {
-        if (conflict.kind === "collision") {
-          el.createEl("p", {
-            text: `These names differ only by capital letters. Rename one to keep syncing: ${conflict.paths.join(", ")}`,
-          });
-          continue;
-        }
-        if (conflict.kind === "bulk-deletion") {
-          new Setting(el).setName(`${conflict.paths.length} files deleted ${conflict.direction === "local" ? "on this device" : "on GitHub"}`)
-            .setDesc(conflict.direction === "local" ? "Confirm before they're removed from GitHub." : "Confirm before they're removed here.")
-            .addButton(button => button.setButtonText("Review deletions").onClick(() =>
-              new BulkDeletionModal(this.app, this.plugin, conflict, () => { void this.render(); }).open()));
-          continue;
-        }
-        new Setting(el)
-          .setName(conflict.path)
-          .setDesc(conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " "))
-          .addButton((b) =>
-            b.setButtonText("Review").onClick(() =>
-              new ConflictModal(this.app, this.plugin, conflict, () => {
-                void this.render();
-              }).open(),
-            ),
-          );
-      }
+      renderDecisions(body.createDiv(), this.app, this.plugin, status.conflicts, () => { void this.render(); });
       for (const step of status.blocked)
-        new Setting(el)
-          .setName(step.path)
-          .setDesc(step.reason)
-          .addButton((b) =>
-            b.setButtonText("Keep mine").onClick(() => {
-              new ConfirmModal(
-                this.app,
-                "Keep this device's version?",
-                "It will be uploaded on the next sync. If GitHub deleted this file, it comes back.",
-                async () => {
-                  const result = await this.plugin.session?.keepLocal({
-                    path: step.path,
-                  });
-                  if (result?.kind !== "recorded")
-                    throw new Error(
-                      "This file changed. Close and try again.",
-                    );
-                  await this.plugin.syncNow();
-                  await this.render();
-                },
-              ).open();
-            }),
-          );
-      const scanned = el.createDiv();
-      scanned.createEl("p", { text: "Checking this device for unsynced changes…", cls: "git-sync-muted" });
-      void this.plugin.session?.inspect().then(inspected => {
-        scanned.empty();
-        if (inspected.kind !== "enrolled") return;
-        for (const file of inspected.unreadable ?? []) {
-          new Setting(scanned).setName(file.path)
-            .setDesc(`Too large to sync (${file.size.toLocaleString()} bytes). Left as is; other files keep syncing.`);
-        }
-        const pending = inspected.pending ?? [];
-        scanned.createEl("h3", { text: pending.length ? `Not synced yet · ${pending.length}` : "Everything on this device is synced." });
-        if (pending.length) {
-          const list = scanned.createDiv({ cls: "git-sync-list" });
-          for (const change of pending)
-            list.createEl("p", { text: `${change.change} · ${change.path}` });
-        }
-      }, error => scanned.setText(failure(error)));
+        new Setting(body)
+          .setName(describePath(step.path).name)
+          .setDesc(`${describePath(step.path).place} · ${step.reason}`)
+          .addButton(b => b.setButtonText("Keep this device's").onClick(() => {
+            new ConfirmModal(this.app, "Keep this device's version?",
+              "It uploads on the next sync. If GitHub deleted it, it comes back.",
+              async () => {
+                const result = await this.plugin.session?.keepLocal({ path: step.path });
+                if (result?.kind !== "recorded") throw new Error("This file changed again. Close this and try again.");
+                await this.plugin.syncNow();
+                await this.render();
+              }, "Keep this device's").open();
+          }));
       const configuration = await this.plugin.session?.listConfiguration().catch(() => null);
+      if (!current()) return;
       const waiting = configuration?.kind === "configuration" && configuration.rules === "config/1"
         ? configuration.deferred.length + configuration.guarded.length + configuration.unpublished.length : 0;
       if (waiting)
-        new Setting(el).setName("Obsidian settings").setDesc(`${plural(waiting, "change")} to review.`)
+        new Setting(body).setName("Obsidian settings").setDesc(`${plural(waiting, "change")} waiting for your review.`)
           .addButton(b => b.setButtonText("Review").onClick(() => new ConfigurationModal(this.app, this.plugin).open()));
-      new Setting(el).setName("Local recovery").setDesc("Copies this device kept before sync replaced or removed a file.")
-        .addButton(b => b.setButtonText("Open").onClick(() => new RecoveryModal(this.app, this.plugin).open()));
+      const scanned = body.createDiv();
+      scanned.createEl("p", { text: "Checking this device for changes…", cls: "git-sync-muted" });
+      void this.plugin.session?.inspect().then(inspected => {
+        if (!current()) return;
+        scanned.empty();
+        if (inspected.kind !== "enrolled") return;
+        for (const file of inspected.unreadable ?? [])
+          new Setting(scanned).setName(describePath(file.path).name)
+            .setDesc(`Too large to sync (${formatBytes(file.size)}). It stays on this device; other files keep syncing.`);
+        const pending = inspected.pending ?? [];
+        if (!pending.length) { scanned.createEl("p", { text: "Everything on this device is on GitHub.", cls: "git-sync-muted" }); return; }
+        new Setting(scanned).setName(`Waiting to upload · ${pending.length}`).setHeading();
+        const list = scanned.createDiv({ cls: "git-sync-list" });
+        for (const change of pending) list.createEl("p", { text: `${change.change} · ${change.path}` });
+      }, error => scanned.setText(failure(error)));
     } catch (error) {
-      el.createEl("p", { text: failure(error) });
+      if (!current()) return;
+      summary.setText(failure(error));
+      summary.addClass("mod-warning");
     }
+  }
+  private showSummary(): void {
+    this.summary?.setText(this.plugin.statusText);
+    this.summary?.toggleClass("mod-warning", this.plugin.statusProblem);
   }
 }
 class BulkDeletionModal extends Modal {
@@ -1582,54 +1660,63 @@ class ConflictModal extends Modal {
   onOpen(): void {
     const el = this.contentEl;
     const conflict = this.conflict;
+    this.modalEl.addClass("git-sync-conflict");
     el.addClass("git-sync-panel");
-    this.setTitle(conflict.path.split("/").pop() ?? conflict.path);
-    el.createEl("p", { text: `${conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " ")} · ${conflict.path}`, cls: "git-sync-muted" });
+    const { name, place } = describePath(conflict.path);
+    this.setTitle(name);
+    el.createEl("p", { text: `${place} · ${conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " ")}`, cls: "git-sync-muted" });
     if ("expected" in conflict) {
-      el.createEl("p", { text: "A file write was interrupted or an edit was found in recovery. Compare the saved versions and choose what to keep." });
-      const versions: Array<readonly [string, Entry | null]> = [["Before the interrupted operation", conflict.expected], ["Intended update", conflict.next]];
-      if (conflict.kind !== "oversize-write") versions.push(["Recovered bytes", conflict.found]);
+      // Rare: a save was cut off mid-write. Each saved version is one tap away.
+      const versions: Array<readonly [string, Entry | null]> = [["Before the save", conflict.expected], ["What sync was saving", conflict.next]];
+      if (conflict.kind !== "oversize-write") versions.push(["What's in the file now", conflict.found]);
       versions.push(["This device", conflict.local], ["GitHub", conflict.remote]);
-      for (const [label, value] of versions) collapsible(el, label, value);
-      for (const source of conflict.oversize) {
-        new Setting(el).setName(`Large original · ${source.size.toLocaleString()} bytes`)
-          .setDesc(`${source.sourcePath}. Kept in local recovery; choosing below doesn't delete it.`)
-          .addButton(button => button.setButtonText("Inspect").onClick(() => new RecoveryModal(this.app, this.plugin).open()));
-      }
+      const box = el.createDiv({ cls: "git-sync-diff" });
+      for (const [label, value] of versions) collapsible(box, label, value);
+      for (const source of conflict.oversize)
+        el.createEl("p", { text: `The large original (${formatBytes(source.size)}) stays at ${source.sourcePath}.`, cls: "git-sync-muted" });
     } else {
       renderComparison(el, conflict.local, conflict.remote);
-      if (conflict.base) collapsible(el, "Version before either change", conflict.base);
     }
-    el.createEl("p", { text: "Whatever you don't keep stays in Local recovery.", cls: "git-sync-muted" });
-
-    const actions = el.createDiv({ cls: "git-sync-actions" });
-    const editable = /\.md$/i.test(conflict.path) && (conflict.local ?? conflict.remote) && entryText((conflict.local ?? conflict.remote)!) !== null;
+    this.renderActions(el.createDiv({ cls: "git-sync-actions" }));
+  }
+  private renderActions(actions: HTMLElement): void {
+    const conflict = this.conflict;
+    const source = conflict.local ?? conflict.remote;
+    const editable = /\.md$/i.test(conflict.path) && source !== null && entryText(source) !== null;
     const labels: Record<string, string> = {
-      mine: conflict.local ? "Keep this device's version" : "Delete it (as on this device)",
-      remote: conflict.remote ? "Keep GitHub's version" : "Delete it (as on GitHub)",
-      both: `Keep both · yours becomes ${"sibling" in conflict && conflict.sibling ? conflict.sibling.split("/").pop() : "a copy"}`,
-      edit: "Edit and combine…",
-      expected: "Restore before the operation",
-      next: "Use the intended update",
-      found: "Use recovered bytes",
+      mine: conflict.local ? "Keep this device's" : "Delete it, as on this device",
+      remote: conflict.remote ? "Keep GitHub's" : "Delete it, as on GitHub",
+      both: "Keep both",
+      edit: "Edit and combine",
+      expected: "Use the version before the save",
+      next: "Use what sync was saving",
+      found: "Use what's in the file now",
     };
     for (const kind of conflict.choices) {
       if (kind === "edit" && !editable) continue;
-      const button = actions.createEl("button", { text: labels[kind] ?? kind });
-      if (kind === "mine" || kind === "remote") button.addClass("mod-cta");
+      const secondary = kind === "both" || kind === "edit";
+      const button = actions.createEl("button", { text: labels[kind] ?? kind, cls: secondary ? "git-sync-secondary" : "" });
+      if (kind === "both" && "sibling" in conflict && conflict.sibling)
+        button.title = `Your version is saved as ${describePath(conflict.sibling).name}`;
       button.onclick = () => {
-        if (kind === "edit") { this.edit(actions); return; }
-        void this.resolve({ kind } as ChoiceInput, button);
+        if (kind === "edit") this.edit(actions);
+        else void this.resolve({ kind } as ChoiceInput, button);
       };
     }
   }
   private edit(actions: HTMLElement): void {
+    const diff = this.contentEl.querySelector(".git-sync-diff");
+    const legend = this.contentEl.querySelector(".git-sync-legend");
+    legend?.remove();
+    const editor = createEl("textarea", { cls: "git-sync-editor" });
+    editor.value = combinedDraft(this.conflict.local, this.conflict.remote) ?? entryText((this.conflict.local ?? this.conflict.remote)!) ?? "";
+    editor.setAttribute("aria-label", "Combined note");
+    if (diff) diff.replaceWith(editor); else actions.before(editor);
     actions.empty();
-    const source = (this.conflict.local ?? this.conflict.remote)!;
-    const editor = actions.createEl("textarea", { cls: "git-sync-editor" });
-    editor.value = combinedDraft(this.conflict.local, this.conflict.remote) ?? entryText(source) ?? "";
-    actions.createEl("p", { text: "Both versions are combined below where they differ. Tidy it up, then save.", cls: "git-sync-muted" });
-    const save = actions.createEl("button", { text: "Save combined note", cls: "mod-cta" });
+    actions.createEl("p", { text: "Lines that differ appear twice, this device's first. Delete what you don't want.", cls: "git-sync-muted" });
+    const cancel = actions.createEl("button", { text: "Cancel", cls: "git-sync-secondary" });
+    cancel.onclick = () => { this.contentEl.empty(); this.onOpen(); };
+    const save = actions.createEl("button", { text: "Save note", cls: "mod-cta" });
     save.onclick = () => void this.resolve({ kind: "edit", data: encodeBase64(new TextEncoder().encode(editor.value)) }, save);
     editor.focus();
   }
@@ -1637,7 +1724,7 @@ class ConflictModal extends Modal {
     button.disabled = true;
     try {
       const resolution = await this.plugin.session?.resolve({ conflictId: this.conflict.id, choice });
-      if (resolution?.kind !== "recorded") throw new Error("This file changed again. Close and review the new versions.");
+      if (resolution?.kind !== "recorded") throw new Error("This file changed again. Close this and review the new versions.");
       this.close();
       await this.plugin.syncNow();
       this.done();
@@ -1647,26 +1734,32 @@ class ConflictModal extends Modal {
     }
   }
 }
-/** "Keep GitHub's / this device's for all" when several files share one decision. */
-function renderBulkChoice(container: HTMLElement, app: App, plugin: GitVaultSync, conflicts: readonly (VersionConflict | NativeConflict | BulkDeletionConflict | { kind: "collision" })[], done: () => void): void {
+/** One shared choice for several files that changed in both places. */
+function renderBulkChoice(container: HTMLElement, app: App, plugin: GitVaultSync, conflicts: readonly Conflict[], done: () => void): void {
   const files = conflicts.filter((conflict): conflict is VersionConflict =>
     conflict.kind !== "collision" && conflict.kind !== "bulk-deletion" && !("expected" in conflict));
   if (files.length < 2) return;
-  const setting = new Setting(container).setName(`Same choice for all ${files.length}`);
-  for (const kind of ["remote", "mine"] as const) {
-    setting.addButton(button => button.setButtonText(kind === "remote" ? "Keep GitHub's for all" : "Keep this device's for all")
+  const setting = new Setting(container).setName(`All ${files.length} files`);
+  setting.settingEl.addClass("git-sync-bulk");
+  for (const kind of ["mine", "remote"] as const) {
+    const label = kind === "remote" ? "Keep GitHub's" : "Keep this device's";
+    setting.addButton(button => button.setButtonText(label)
       .onClick(() => new ConfirmModal(app,
         kind === "remote" ? `Keep GitHub's version of ${files.length} files?` : `Keep this device's version of ${files.length} files?`,
-        `${files.map(file => file.path).join("\n")}\n\nThe other versions stay in Local recovery.`,
+        files.map(file => file.path).join("\n"),
         async () => {
-          for (const file of files) {
-            if (!file.choices.includes(kind)) continue;
-            const result = await plugin.session?.resolve({ conflictId: file.id, choice: { kind } });
-            if (result?.kind !== "recorded") throw new Error(`${file.path} changed again. Review it on its own.`);
+          try {
+            for (const file of files) {
+              if (!file.choices.includes(kind)) continue;
+              const result = await plugin.session?.resolve({ conflictId: file.id, choice: { kind } });
+              if (result?.kind !== "recorded") throw new Error(`${file.path} changed again. Resolve it on its own.`);
+            }
+          } finally {
+            // Choices already recorded still apply, so sync and redraw either way.
+            await plugin.syncNow();
+            done();
           }
-          await plugin.syncNow();
-          done();
-        }).open()));
+        }, label).open()));
   }
 }
 function collapsible(container: HTMLElement, label: string, value: Entry | null): void {
@@ -1679,20 +1772,17 @@ function renderComparison(container: HTMLElement, local: Entry | null, remote: E
   const legend = container.createDiv({ cls: "git-sync-legend" });
   legend.createSpan({ text: "This device", cls: "git-sync-mine" });
   legend.createSpan({ text: "GitHub", cls: "git-sync-theirs" });
+  const box = container.createDiv({ cls: "git-sync-diff" });
   const mine = local ? entryText(local) : null;
   const theirs = remote ? entryText(remote) : null;
   const rows = mine !== null && theirs !== null ? diffRows(mine, theirs) : null;
   if (!rows) {
-    const box = container.createDiv({ cls: "git-sync-diff" });
-    for (const [kind, value, where] of [["mine", local, "this device"], ["theirs", remote, "GitHub"]] as const) {
-      const text = value === null ? `Deleted on ${where}` : entryPreview(value);
-      box.createDiv({ text, cls: `git-sync-row git-sync-${kind}` });
-    }
+    for (const [kind, value, where] of [["mine", local, "this device"], ["theirs", remote, "GitHub"]] as const)
+      box.createDiv({ text: value === null ? `Deleted on ${where}` : entryPreview(value), cls: `git-sync-row git-sync-${kind}` });
     return;
   }
-  const box = container.createDiv({ cls: "git-sync-diff" });
   for (const row of rows) {
-    if (row.kind === "skip") box.createDiv({ text: `⋯ ${plural(row.count, "unchanged line")}`, cls: "git-sync-row git-sync-skip" });
+    if (row.kind === "skip") box.createDiv({ text: `${plural(row.count, "unchanged line")}`, cls: "git-sync-row git-sync-skip" });
     else box.createDiv({ text: row.text.replace(/\r?\n$/, "") || " ", cls: `git-sync-row git-sync-${row.kind}` });
   }
 }
@@ -1740,7 +1830,7 @@ class PublicationRecoveryModal extends Modal {
       }
     }
     new Setting(el).addButton(b => b.setButtonText("Not now").onClick(() => this.close())).addButton(b => b.setButtonText("Save copies and review").setCta().onClick(() => {
-      new ConfirmModal(this.app, "Save copies and review?", "Both versions are kept in Local recovery. Sync resumes after you review the changes.", async () => {
+      new ConfirmModal(this.app, "Save copies and review?", "Sync resumes after you review the changes.", async () => {
         const result = await this.plugin.session?.recoverPublication({ token: this.preview.token });
         if (result?.kind !== "released") throw new Error("Something changed. Close this and try again.");
         this.plugin.setStatus("Paused · review changes in settings");
@@ -1748,7 +1838,7 @@ class PublicationRecoveryModal extends Modal {
         const enrollment = await this.plugin.session?.previewEnrollment();
         if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment, false).open();
         else new Notice("Open GitHub Vault Sync settings to review changes and resume.");
-      }).open();
+      }, "Save copies and review").open();
     }));
   }
 }
@@ -1758,6 +1848,7 @@ class ConfirmModal extends Modal {
     private titleText: string,
     private detail: string,
     private action: () => Promise<void>,
+    private confirmText = "Confirm",
   ) {
     super(app);
   }
@@ -1768,7 +1859,7 @@ class ConfirmModal extends Modal {
       .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
       .addButton((b) =>
         b
-          .setButtonText("Confirm")
+          .setButtonText(this.confirmText)
           .setCta()
           .onClick(async () => {
             b.setDisabled(true);
@@ -1862,95 +1953,5 @@ class RestoreModal extends Modal {
       }));
     el.insertBefore(controls.settingEl, history);
     if (path) void load(path, ++this.revision);
-  }
-}
-class RecoveryModal extends Modal {
-  constructor(
-    app: App,
-    private plugin: GitVaultSync,
-  ) {
-    super(app);
-  }
-  onOpen(): void {
-    void this.render();
-  }
-  async render(): Promise<void> {
-    const el = this.contentEl;
-    el.empty();
-    el.addClass("git-sync-panel");
-    el.createEl("h2", { text: "Local recovery" });
-    el.createEl("p", {
-      text: "Captured drafts and preimages stay on this device. Export creates a separate hidden folder and does not overwrite notes.",
-    });
-    new Setting(el).setName("Compact recovery journals")
-      .setDesc("Remove superseded journal records and unreferenced journal objects. Retained original files and exports are not deleted. Also runs automatically after successful sync.")
-      .addButton(button => button.setButtonText("Compact journals").onClick(async () => {
-        button.setDisabled(true);
-        try {
-          const result = await this.plugin.compactRecovery();
-          new Notice(`Removed ${result.recordsRemoved} old journal records and ${result.objectsRemoved} unused copies.`);
-        } catch (error) { new Notice(failure(error), 12000); }
-        finally { button.setDisabled(false); }
-      }));
-    try {
-      const native = await this.plugin.nativeRecoveryOverview();
-      el.createEl("h3", { text: "Retained original files" });
-      el.createEl("p", { text: `${native.retained.files.toLocaleString()} files · ${native.retained.bytes.toLocaleString()} known bytes${native.retained.missingStats ? ` · ${native.retained.missingStats} sizes unavailable` : ""}` });
-      el.createEl("p", { text: "These originals are not deleted automatically and can accumulate. Close editors and other writers before managing them in your file manager. Export and inspect anything you need to keep first.", cls: "git-sync-muted" });
-      if (native.oversized.length) el.createEl("h3", { text: "Large files needing review" });
-      for (const record of native.oversized) {
-        const details = el.createEl("details");
-        details.createEl("summary", { text: `${record.path} · ${record.size.toLocaleString()} bytes` });
-        details.createEl("p", { text: "The original remains on this device. Export makes a separate copy excluded from sync. Choose the version to sync in Changes; inspecting or exporting does not resolve the conflict." });
-        details.createEl("pre", { text: record.sourcePath, cls: "git-sync-preview" });
-        const status = details.createEl("p", { text: "Inspect to check whether this saved version is still present." });
-        new Setting(details)
-          .addButton(button => button.setButtonText("Inspect source").onClick(async () => {
-            button.setDisabled(true);
-            try {
-              const inspection = await this.plugin.inspectOversizeRecovery(record.id);
-              status.setText(inspection.currentSize === null ? "Source is missing. Review its location before resolving."
-                : inspection.currentSize === record.size && inspection.currentMtime === inspection.recovery.mtime
-                  ? `${inspection.currentSize.toLocaleString()} bytes · size and modification time match the saved record.`
-                  : "Source has changed. Sync now to refresh recovery before choosing a version.");
-            } catch (error) { status.setText(failure(error)); }
-            finally { button.setDisabled(false); }
-          }))
-          .addButton(button => button.setButtonText("Export copy").onClick(async () => {
-            button.setDisabled(true);
-            try {
-              const exported = await this.plugin.exportOversizeRecovery(record.id);
-              status.setText(`Exported ${exported.size.toLocaleString()} bytes to ${exported.path}. The original remains. Open this hidden folder in your file manager to inspect the copy.`);
-            } catch (error) { status.setText(failure(error)); }
-            finally { button.setDisabled(false); }
-          }));
-      }
-      const records = await this.plugin.session?.listRecovery();
-      if (!Array.isArray(records)) {
-        el.createEl("p", { text: "No accessible recovery records." });
-        return;
-      }
-      for (const record of records)
-        new Setting(el)
-          .setName(`${record.createdAt} · ${record.paths.length} files`)
-          .setDesc(
-            `${record.reason} · ${record.bytes.toLocaleString()} bytes${record.pinned ? " · local-only bytes retained" : ""}`,
-          )
-          .addButton((b) =>
-            b.setButtonText("Export copy").onClick(async () => {
-              b.setDisabled(true);
-              try {
-                const directory = await this.plugin.exportRecoveryCopy(record.id);
-                new Notice(`Recovery exported to ${directory}`, 15000);
-              } catch (error) {
-                new Notice(failure(error), 12000);
-              } finally {
-                b.setDisabled(false);
-              }
-            }),
-          );
-    } catch (error) {
-      el.createEl("p", { text: failure(error) });
-    }
   }
 }
