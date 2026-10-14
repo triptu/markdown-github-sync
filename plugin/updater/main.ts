@@ -5,6 +5,8 @@ const TARGET = "github-vault-sync";
 const REPOSITORY = "triptu/cloud-vault-sync";
 const BRANCH = "updates";
 const EVERY = 6 * 60 * 60 * 1000;
+/** After a failed check (often a phone waking without network), try again this soon. */
+const RETRY = 15 * 60 * 1000;
 
 interface UpdaterData { rejected: string[] }
 
@@ -21,6 +23,8 @@ interface PluginManager {
 export default class SyncUpdater extends Plugin {
   private data: UpdaterData = { rejected: [] };
   private checking = false;
+  private checkedAt = 0;
+  private failedAt = 0;
 
   async onload(): Promise<void> {
     const saved: unknown = await this.loadData();
@@ -30,8 +34,16 @@ export default class SyncUpdater extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       // Let startup and the first sync settle before looking for updates.
       this.registerInterval(window.setTimeout(() => { void this.check(false); }, 20_000));
-      this.registerInterval(window.setInterval(() => { void this.check(false); }, EVERY));
+      this.registerInterval(window.setInterval(() => { if (this.due()) void this.check(false); }, 60_000));
+      this.registerDomEvent(document, "visibilitychange", () => {
+        if (!document.hidden && this.due()) window.setTimeout(() => { void this.check(false); }, 10_000);
+      });
     });
+  }
+
+  private due(): boolean {
+    const now = Date.now();
+    return this.failedAt > this.checkedAt ? now - this.failedAt > RETRY : now - this.checkedAt > EVERY;
   }
 
   private get dir(): string { return normalizePath(`${this.app.vault.configDir}/plugins/${TARGET}`); }
@@ -46,8 +58,11 @@ export default class SyncUpdater extends Plugin {
     this.checking = true;
     try {
       const result = await checkForUpdate(this.host(), new Set(this.data.rejected));
+      // A sync that kept running counts as a miss, so it's retried soon rather than in 6 hours.
+      if (result.kind === "busy") this.failedAt = Date.now(); else this.checkedAt = Date.now();
       await this.report(result, manual);
     } catch (error) {
+      this.failedAt = Date.now();
       // Background checks stay quiet on failure (often just offline); a manual check says why.
       if (manual) new Notice(`Couldn't check for a GitHub Vault Sync update. ${error instanceof Error ? error.message : ""}`, 8000);
       else console.warn("GitHub Vault Sync updater:", error);
