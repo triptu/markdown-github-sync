@@ -1,4 +1,6 @@
 import { diff, splitLines } from "./git-sync/reconcile";
+import { entryText } from "./git-sync/codec";
+import type { Entry } from "./git-sync/contracts";
 
 export type DiffRow =
   | { kind: "same" | "mine" | "theirs"; text: string }
@@ -38,4 +40,27 @@ export function diffRows(mine: string, theirs: string): DiffRow[] | null {
   });
   same(position, a.length, hunks.length === 0, true);
   return rows;
+}
+
+/** Markdown with each differing block from both sides, labelled, for "Edit and combine". */
+export function combinedDraft(local: Entry | null, remote: Entry | null): string | null {
+  const mine = local ? entryText(local) : null;
+  const theirs = remote ? entryText(remote) : null;
+  if (mine === null || theirs === null) return null;
+  const a = splitLines(theirs);
+  const hunks = diff(a, splitLines(mine));
+  if (!hunks) return null;
+  const out: string[] = [];
+  let position = 0;
+  for (const hunk of hunks) {
+    out.push(...a.slice(position, hunk.start));
+    const gh = a.slice(hunk.start, hunk.end);
+    if (!gh.length) out.push(...hunk.lines);
+    else if (!hunk.lines.length) out.push(...gh);
+    else out.push(...hunk.lines, ...gh);
+    position = hunk.end;
+  }
+  out.push(...a.slice(position));
+  // A side's last line may lack a newline; keep lines from running together.
+  return out.map((line, at) => at < out.length - 1 && !line.endsWith("\n") ? `${line}\n` : line).join("");
 }
