@@ -17,7 +17,7 @@ import type {
   Snapshot,
 } from "../src/git-sync/contracts";
 import { digestText, entryFromBytes, entryFromText, entryText, isExcludedPath, sameEntry } from "../src/git-sync/codec";
-import { assertNoNestedGitignore, compileScope, type Scope, type ScopeRules } from "../src/git-sync/scope";
+import { assertNoNestedGitignore, compileScope, type Scope } from "../src/git-sync/scope";
 
 export class Crash extends Error {
   override name = "Crash";
@@ -74,7 +74,6 @@ export class MemoryRepository {
   delayed: Array<{ label: string; deliver: () => boolean }> = [];
   calls: string[] = [];
   private sequence = 0;
-  scopeRules: ScopeRules["rules"] = "visible-only";
 
   private constructor(root: CommitObject) {
     this.commits.set(root.oid, root);
@@ -102,25 +101,14 @@ export class MemoryRepository {
     return { oid: commit.oid, treeOid: commit.tree, files };
   }
 
-  async readCommitForScope(commit: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot> {
-    const value = this.commits.get(commit);
-    if (!value) throw new Error(`no commit ${commit}`);
-    const scope = rules === "visible-only"
-      ? await compileScope({ rules, configDir: ".obsidian", gitignore: null }, null)
-      : await this.scopeFor(commit);
-    const files: Snapshot = {};
-    for (const [path, entry] of Object.entries(value.files)) if (scope.includes(path)) files[path] = { ...entry };
-    return { oid: value.oid, treeOid: value.tree, files };
-  }
-
   async scopeFor(commit: string): Promise<Scope> {
     const files = this.commits.get(commit)?.files;
     if (!files) throw new Error(`no commit ${commit}`);
-    if (this.scopeRules === "config/1") assertNoNestedGitignore(Object.keys(files));
-    const entry = this.scopeRules === "config/1" ? files[".gitignore"] : undefined;
+    assertNoNestedGitignore(Object.keys(files));
+    const entry = files[".gitignore"];
     const text = entry ? entryText(entry) : null;
     if (entry && text === null) throw new Error("Invalid root .gitignore");
-    return compileScope({ rules: this.scopeRules, configDir: ".obsidian", gitignore: entry?.oid ?? null }, text);
+    return compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: entry?.oid ?? null }, text);
   }
 
   async readRootGitignore(commit: string): Promise<string | null> {
@@ -138,7 +126,6 @@ export class MemoryRepository {
       identity: () => this.identity(),
       head: () => this.head(),
       readCommit: (oid) => this.readCommit(oid),
-      readCommitForScope: (oid, rules) => this.readCommitForScope(oid, rules),
       scopeFor: (oid) => this.scopeFor(oid),
       readRootGitignore: (oid) => this.readRootGitignore(oid),
       isAncestor: (a, b) => this.isAncestor(a, b),
@@ -253,12 +240,10 @@ export class MemoryRepository {
       if (entry) files[path] = entry;
       else delete files[path];
     }
-    if (this.scopeRules === "config/1") {
-      const parentScope = await this.scopeFor(parent.oid);
-      const ignore = files[".gitignore"];
-      const nextScope = await compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: ignore?.oid ?? null }, ignore ? entryText(ignore) : null);
-      for (const path of Object.keys(changes)) if (!parentScope.includes(path) || !nextScope.includes(path)) throw new Error(`Candidate excludes changed path ${path}`);
-    }
+    const parentScope = await this.scopeFor(parent.oid);
+    const ignore = files[".gitignore"];
+    const nextScope = await compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: ignore?.oid ?? null }, ignore ? entryText(ignore) : null);
+    for (const path of Object.keys(changes)) if (!parentScope.includes(path) || !nextScope.includes(path)) throw new Error(`Candidate excludes changed path ${path}`);
     const commit = await MemoryRepository.object(files, [parent.oid], ++this.sequence);
     this.commits.set(commit.oid, commit);
     const receipt = await MemoryRepository.object(files, ledger.anchor ? [ledger.anchor, commit.oid] : [commit.oid], ++this.sequence, `receipt ${ledger.operation}`);

@@ -12,12 +12,11 @@ const NOW = () => new Date("2026-10-13T12:00:00Z");
 
 async function fixture(guarded: boolean) {
   const repository = await MemoryRepository.create(await snapshot({ "note.md": "note", [PATH]: OLD }));
-  repository.scopeRules = "config/1";
   const historical = repository.branchHead;
   const vault = new MemoryVault(await snapshot({ "note.md": "note", [PATH]: OLD }));
   const store = new MemoryStore();
   const session = (hostLifetimeId: string) => new SyncSession({
-    repository: repository.device("A"), vault, store, scopeRules: "config/1", hostLifetimeId, now: NOW, delay: async () => {},
+    repository: repository.device("A"), vault, store, hostLifetimeId, now: NOW, delay: async () => {},
   });
   const first = session("host-1");
   const enrollment = await first.previewEnrollment();

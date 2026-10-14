@@ -82,7 +82,6 @@ export class HiddenConfigPort {
     if (scope.rules.configDir !== this.configDir) throw new Error("Configuration directory does not match the repository scope");
     const files: Snapshot = dictionary();
     const unreadable: UnreadableFile[] = [];
-    if (scope.rules.rules === "visible-only") return { files, unreadable };
     const paths = await this.inventory();
     assertNoNestedGitignore(paths);
     let total = 0;

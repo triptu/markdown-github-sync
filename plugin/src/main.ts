@@ -1,5 +1,3 @@
-import { inspectGitTakeover, takeOverGit } from "./git-takeover";
-import { detectGitRepository, type DetectedRepository } from "./git-setup";
 import { readLocalCandidate } from "./git-sync/local-candidate";
 import { Notice, Plugin, requestUrl } from "obsidian";
 import { GitHubRepository } from "./git-sync/github";
@@ -10,7 +8,7 @@ import { GitObsidianVault } from "./git-sync/obsidian-vault";
 import { FileJournalStore } from "./git-sync/store";
 import { ForegroundScheduler } from "./git-sync/scheduler";
 import { PluginOwnership, hostLifetimeId } from "./git-sync/ownership";
-import { NativeTransactionJournal, NativePolicyMismatchError } from "./git-sync/native-transactions";
+import { NativeTransactionJournal } from "./git-sync/native-transactions";
 import { NativePathPolicy } from "./git-sync/native-path-policy";
 import { NativeModeStore, parseModes } from "./git-sync/native-modes";
 import { defaultSettings, parseSettings, type Settings } from "./settings";
@@ -227,13 +225,8 @@ export default class GitVaultSync extends Plugin {
     const store = new FileJournalStore(files, installation);
     const raw = await store.load();
     const state = raw === null ? null : await parseState(raw);
-    const scopeRules = state?.pause?.reason === "scope-enrollment"
-      ? "config/1"
-      : state?.scope.rules ?? (this.settings.configuration ? "config/1" : "visible-only");
-    const nativePolicy = scopeRules === "config/1"
-      ? await NativePathPolicy.forConfig(this.app.vault.configDir)
-      : NativePathPolicy.legacy;
-    const repository = this.createRepository(installation, scopeRules);
+    const nativePolicy = await NativePathPolicy.forConfig(this.app.vault.configDir);
+    const repository = this.createRepository(installation);
     const modes: Record<string, FileMode> = Object.create(null);
     if (state !== null) {
       for (const [path, ref] of Object.entries(state.base.files)) modes[path] = ref.mode;
@@ -244,27 +237,13 @@ export default class GitVaultSync extends Plugin {
       Object.assign(modes, parseModes(storedModes));
     const modeStore = new FileJournalStore(files, installation, "modes");
     this.modes = await NativeModeStore.open(modeStore, modes);
-    let nativeJournal: NativeTransactionJournal;
-    try {
-      nativeJournal = await NativeTransactionJournal.open(files, installation, nativePolicy);
-    } catch (error) {
-      if (!(error instanceof NativePolicyMismatchError) || state?.pause?.reason !== "scope-enrollment") throw error;
-      const legacyJournal = await NativeTransactionJournal.open(files, installation, NativePathPolicy.legacy);
-      await legacyJournal.upgradePolicy(nativePolicy, async () => {
-        owner.assertActive();
-        const current = await store.load();
-        if (current === null || (await parseState(current)).pause?.reason !== "scope-enrollment")
-          throw new Error("Configuration sync requires a durable reviewed enrollment pause.");
-        owner.assertActive();
-      });
-      nativeJournal = await NativeTransactionJournal.open(files, installation, nativePolicy);
-    }
+    const nativeJournal = await NativeTransactionJournal.open(files, installation, nativePolicy);
     this.nativeJournal = nativeJournal;
     await this.transferRenamesOwned();
-    const nativeVault = new GitObsidianVault(this.app, owner.fence(this.modes), () => {
+    const nativeVault = new GitObsidianVault(this.app, nativePolicy, owner.fence(this.modes), () => {
       owner.assertActive();
       if (owner.hasPendingRenames()) throw new Error("A vault rename is pending. Retry after its mode metadata is saved.");
-    }, owner.fence(nativeJournal), hostLifetimeId(this.app), nativePolicy);
+    }, owner.fence(nativeJournal), hostLifetimeId(this.app));
     this.nativeVault = nativeVault;
     const rawSession = new SyncSession({
       repository: owner.fence(repository),
@@ -273,7 +252,6 @@ export default class GitVaultSync extends Plugin {
       deviceName: this.settings.deviceName,
       commitMessage: this.commitMessage,
       hostLifetimeId: hostLifetimeId(this.app),
-      scopeRules,
     });
     owner.assertActive();
     this.rawSession = rawSession;
@@ -293,11 +271,10 @@ export default class GitVaultSync extends Plugin {
     if (status.kind === "enrolled") this.scheduler?.schedule(1000);
   }
   /** `target` checks a draft repository or unsaved token without touching saved settings or status. */
-  private createRepository(installation: string, scopeRules: "visible-only" | "config/1", target?: AccessTarget): GitHubRepository {
+  private createRepository(installation: string, target?: AccessTarget): GitHubRepository {
     const owner = this.owner();
     return new GitHubRepository({
       installation,
-      scopeRules,
       configDir: this.app.vault.configDir,
       owner: target?.owner ?? this.settings.owner,
       name: target?.repository ?? this.settings.repository,
@@ -350,10 +327,6 @@ export default class GitVaultSync extends Plugin {
       },
     });
   }
-  /** Read-only guess from this vault's Git metadata, used to prefill a blank setup form. */
-  detectRepository(): Promise<DetectedRepository | null> {
-    return detectGitRepository(this.owner().fence(this.app.vault.adapter));
-  }
   hasToken(): boolean {
     return Boolean(this.settings.secretId && this.app.secretStorage?.getSecret(this.settings.secretId));
   }
@@ -381,7 +354,7 @@ export default class GitVaultSync extends Plugin {
     if (target.token === undefined && !this.hasToken()) throw new Error("No token is saved on this device. Paste one.");
     // Two read-only GETs; with no stored identity yet, a throwaway one names nothing.
     const installation = installationId(this.app, { create: false, nonString: "missing" }) ?? crypto.randomUUID();
-    await this.createRepository(installation, "visible-only", target).checkAccess();
+    await this.createRepository(installation, target).checkAccess();
   }
   /** Re-checks the saved repository and token for the settings page. Being offline is not recorded as a token problem. */
   async verifyAccess(): Promise<void> {
@@ -425,74 +398,15 @@ export default class GitVaultSync extends Plugin {
     this.app.saveLocalStorage(activityKey, next);
     for (const fn of this.listeners) fn();
   }
-  previewConfigurationUpgrade() {
-    return this.owner().run(async () => {
-      const owner = this.owner();
-      const current = this.rawSession;
-      const vault = this.nativeVault;
-      const store = this.journals[0];
-      const journal = this.nativeJournal;
-      if (!current || !vault || !store || !journal) throw new Error("Start syncing first, then turn on settings sync.");
-      await this.assertSingleWriter();
-      const configuration = await current.listConfiguration();
-      if (configuration.kind === "configuration" && configuration.rules === "config/1")
-        throw new Error("Settings sync is already on. Review incoming updates from Sync status.");
-      const installation = installationId(this.app, { create: false, nonString: "missing" });
-      if (installation === null) throw new Error("Missing device identity.");
-      const migration = new SyncSession({
-        repository: owner.fence(this.createRepository(installation, "config/1")),
-        vault: owner.fence(vault), store: owner.fence(store),
-        deviceName: this.settings.deviceName, commitMessage: this.commitMessage, scopeRules: "config/1", hostLifetimeId: hostLifetimeId(this.app),
-      });
-      const policy = await NativePathPolicy.forConfig(this.app.vault.configDir);
-      await journal.previewPolicyUpgrade(policy);
-      const preview = await migration.previewConfigurationScope();
-      if (preview.kind !== "preview") throw new Error(preview.kind === "paused" ? `Sync is paused: ${preview.pause.detail}` : preview.kind === "busy" ? "Finish the open items in Sync status first." : "Settings sync can't start yet. Try again after the next sync.");
-      return {
-        note: preview.note,
-        confirm: () => owner.run(async () => {
-          if (this.rawSession !== current) throw new Error("Sync configuration changed. Reopen the review.");
-          await this.assertSingleWriter();
-          await journal.previewPolicyUpgrade(policy);
-          const result = await migration.enableConfigurationScope({ token: preview.token });
-          if (result.kind !== "reenroll") throw new Error(result.kind === "paused" ? `Sync is paused: ${result.pause.detail}` : "Something changed. Try turning on settings sync again.");
-          await this.initializeOwned();
-          return this.rawSession?.previewEnrollment();
-        }),
-      };
-    });
-  }
-  async checkSetup(): Promise<boolean> {
-    await this.assertNoCompetingSync();
-    const check = await inspectGitTakeover(this.owner().fence(this.app.vault.adapter));
-    if (check.kind === "blocked") throw new Error(check.reason);
-    return check.kind === "ready";
-  }
   startSyncing(token: string): ReturnType<SyncSession["enroll"]> {
     return this.owner().run(async () => {
       if (!this.rawSession) throw new Error("Connect to GitHub first.");
-      await this.checkSetup();
-      const preview = await this.rawSession.previewEnrollment();
-      if (preview.kind !== "preview") return preview;
-      if (preview.token !== token) return { kind: "stale", preview };
-      const result = await takeOverGit(this.owner().fence(this.app.vault.adapter));
-      if (result.kind === "blocked") throw new Error(result.reason);
       await this.assertSingleWriter();
-      try {
-        return await this.rawSession.enroll({ token });
-      } catch (error) {
-        if (result.kind === "moved")
-          throw new Error(`${failure(error)} Your previous Git folder is kept at ${result.keptAt}. Reopen setup to try again.`);
-        throw error;
-      }
+      return this.rawSession.enroll({ token });
     });
   }
+  /** Refuses while another sync plugin is enabled in this vault. */
   async assertSingleWriter(): Promise<void> {
-    if (await this.app.vault.adapter.exists(".git"))
-      throw new Error("Finish connecting in GitHub Vault Sync settings before syncing this Git vault.");
-    await this.assertNoCompetingSync();
-  }
-  private async assertNoCompetingSync(): Promise<void> {
     const path = `${this.app.vault.configDir}/community-plugins.json`;
     if (await this.app.vault.adapter.exists(path)) {
       const plugins: unknown = JSON.parse(
@@ -614,14 +528,6 @@ export default class GitVaultSync extends Plugin {
     const saved = parseSettings(next);
     return this.owner().run(async () => {
       const binding = await this.repositoryBinding();
-      if (!binding && Boolean(saved.configuration) !== Boolean(this.settings.configuration)) {
-        const installation = installationId(this.app, { create: false, nonString: "missing" });
-        const nativeState = installation !== null
-          ? await new FileJournalStore(this.owner().fence(this.app.vault.adapter), installation, "native").load()
-          : null;
-        if (this.nativeJournal || nativeState !== null)
-          throw new Error("Settings sync was already chosen for this vault. Start syncing first, then change it from the settings page.");
-      }
       if (binding &&
           (saved.owner.toLowerCase() !== binding.owner.toLowerCase() ||
            saved.repository.toLowerCase() !== binding.name.toLowerCase() ||
@@ -635,6 +541,4 @@ export default class GitVaultSync extends Plugin {
       else this.scheduler?.schedule();
     });
   }
-
-
 }

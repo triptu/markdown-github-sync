@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describePath, formatBytes, offline, outcomeAttention, setConfigDirName } from "../src/ui/copy";
+import { describePath, formatBytes, offline, outcomeAttention, setConfigDirName, tokenCreationUrl } from "../src/ui/copy";
 import type { SyncOutcome } from "../src/git-sync/session";
 
 const withStatus = (status: number, message = "GitHub request failed") => Object.assign(new Error(message), { status });
@@ -37,9 +37,6 @@ test("outcomeAttention: each kind that needs a person gets a stable key and plai
   });
   assert.deepEqual(outcomeAttention(outcome({ kind: "blocked", commit: "abc", steps: [{ path: "img.png", reason: "Close the open view before replacing or deleting img.png." }] }))?.text,
     "1 update from GitHub couldn't be saved here, so sync is waiting. Close the open view before replacing or deleting img.png.");
-  assert.deepEqual(outcomeAttention(outcome({ kind: "publication-unknown" })), {
-    key: "publication", text: "GitHub didn't confirm the last upload, so uploads are on hold.",
-  });
   assert.deepEqual(outcomeAttention(outcome({ kind: "native-error" })), { key: "native", text: "A file couldn't be saved, so sync stopped." });
   assert.deepEqual(outcomeAttention(outcome({ kind: "corrupt", detail: "bad journal" })), {
     key: "corrupt:bad journal", text: "Sync needs repair: bad journal", fix: "settings",
@@ -96,4 +93,15 @@ test("formatBytes: whole bytes, then one decimal below 10 of a unit", () => {
   assert.equal(formatBytes(8 * 1024 * 1024 + 1), "8.0 MB");
   assert.equal(formatBytes(250 * 1024 * 1024), "250 MB");
   assert.equal(formatBytes(3 * 1024 ** 4), "3072 GB");
+});
+
+test("token link prefills repository permissions and owner without adding broader permissions", () => {
+  const url = new URL(tokenCreationUrl("triptu"));
+  assert.equal(url.origin + url.pathname, "https://github.com/settings/personal-access-tokens/new");
+  assert.equal(url.searchParams.get("target_name"), "triptu");
+  assert.equal(url.searchParams.get("contents"), "write");
+  assert.equal(url.searchParams.get("metadata"), "read");
+  assert.equal(url.searchParams.get("name"), "Obsidian GitHub Vault Sync");
+  assert.deepEqual([...url.searchParams.keys()].sort(), ["contents", "description", "metadata", "name", "target_name"]);
+  assert.equal(new URL(tokenCreationUrl("")).searchParams.has("target_name"), false);
 });

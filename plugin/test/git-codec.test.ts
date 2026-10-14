@@ -47,7 +47,7 @@ test("text entries keep BOM, CRLF, missing final newline and Unicode byte-exact"
   assert.equal(entryText(await entryFromBytes(Uint8Array.of(0xff, 0xfe, 0x00))), null, "invalid UTF-8 is not text");
 });
 
-test("paths: structural validity and V1 scope", () => {
+test("paths: structural validity and visible content", () => {
   for (const ok of ["a.md", "Notes/Plan 2026.md", "img/ü.png", "a/b/c.canvas"]) assert.ok(isSyncablePath(ok), ok);
   for (const bad of ["", "/a.md", "a.md/", "a//b.md", "./a.md", "a/../b.md", "a\\b.md", "a\u0000.md", "a\nb.md"]) {
     assert.equal(isValidPath(bad), false, JSON.stringify(bad));
@@ -67,12 +67,15 @@ test("semantic equality compares content identity and mode, not encoding", async
   assert.ok(!sameEntry(plain, null));
 });
 
+/** Admits ordinary visible paths only. */
+const visible = { includes: isSyncablePath };
+
 test("snapshot verification rejects tampered bytes and out-of-scope paths", async () => {
   const entry = await entryFromText("real");
-  await verifySnapshot({ "a.md": entry }, "test");
-  await assert.rejects(verifySnapshot({ "a.md": { ...entry, data: encodeBase64(new TextEncoder().encode("fake")) } }, "test"), IntegrityError);
-  await assert.rejects(verifySnapshot({ ".obsidian/x.json": entry }, "test"), IntegrityError);
-  await assert.rejects(verifySnapshot({ "a.md": { ...entry, mode: "120000" } }, "test"), IntegrityError);
+  await verifySnapshot({ "a.md": entry }, "test", visible);
+  await assert.rejects(verifySnapshot({ "a.md": { ...entry, data: encodeBase64(new TextEncoder().encode("fake")) } }, "test", visible), IntegrityError);
+  await assert.rejects(verifySnapshot({ ".obsidian/x.json": entry }, "test", visible), IntegrityError);
+  await assert.rejects(verifySnapshot({ "a.md": { ...entry, mode: "120000" } }, "test", visible), IntegrityError);
 });
 
 test("explicit configuration scope admits eligible hidden files but still rejects protected paths", async () => {
@@ -93,7 +96,7 @@ test("explicit configuration scope admits eligible hidden files but still reject
 test("prototype-key files survive verification and manifests; absent access is own-only", async () => {
   const entry = await entryFromText("saved prototype-key bytes");
   const source = Object.fromEntries(["__proto__", "constructor", "toString"].map((path) => [path, entry]));
-  const verified = await verifySnapshot(source, "prototype files");
+  const verified = await verifySnapshot(source, "prototype files", visible);
   const manifest = toManifest(verified);
   assert.equal(Object.getPrototypeOf(verified), null);
   assert.equal(Object.getPrototypeOf(manifest), null);
@@ -103,7 +106,7 @@ test("prototype-key files survive verification and manifests; absent access is o
   assert.equal(own({}, "__proto__"), undefined);
   assert.ok(!sameManifest(Object.fromEntries([["constructor", entry]]), {}));
   const inherited = Object.create({ oid: entry.oid, mode: entry.mode, data: entry.data });
-  await assert.rejects(verifySnapshot({ x: inherited }, "inherited entry fields"), IntegrityError);
+  await assert.rejects(verifySnapshot({ x: inherited }, "inherited entry fields", visible), IntegrityError);
 });
 
 test("entries hashed by their producer skip re-verification until their fields change", async () => {
@@ -117,20 +120,20 @@ test("entries hashed by their producer skip re-verification until their fields c
   try {
     const produced = await entryFromText("produced");
     digests = 0;
-    const verified = await verifySnapshot({ "a.md": produced, "b.md": withMode(produced, "100755") }, "trusted");
+    const verified = await verifySnapshot({ "a.md": produced, "b.md": withMode(produced, "100755") }, "trusted", visible);
     assert.equal(digests, 0, "producer-hashed entries and their mode copies are not hashed again");
     assert.equal(verified["b.md"].mode, "100755");
     // A structurally identical copy from untrusted input is hashed once, then trusted.
     const copy = JSON.parse(JSON.stringify(produced)) as typeof produced;
-    await verifySnapshot({ "a.md": copy }, "copy");
+    await verifySnapshot({ "a.md": copy }, "copy", visible);
     assert.equal(digests, 1);
-    await verifySnapshot({ "a.md": copy }, "copy again");
+    await verifySnapshot({ "a.md": copy }, "copy again", visible);
     assert.equal(digests, 1);
     // Mutation voids trust: forged bytes under the trusted oid are rejected.
     copy.data = encodeBase64(new TextEncoder().encode("forged"));
-    await assert.rejects(verifySnapshot({ "a.md": copy }, "mutated"), IntegrityError);
+    await assert.rejects(verifySnapshot({ "a.md": copy }, "mutated", visible), IntegrityError);
     produced.oid = (await entryFromText("other")).oid;
-    await assert.rejects(verifySnapshot({ "a.md": produced }, "mutated oid"), IntegrityError);
+    await assert.rejects(verifySnapshot({ "a.md": produced }, "mutated oid", visible), IntegrityError);
   } finally {
     delete (subtle as { digest?: unknown }).digest;
   }

@@ -23,7 +23,7 @@ npm run package
 ```
 
 1. Copy `main.js`, `manifest.json` and `styles.css` from `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/github-vault-sync/` and enable **GitHub Vault Sync**. Turn off any other sync plugin first.
-2. In its settings, paste a fine-grained GitHub token with Contents read/write and Metadata read on the vault's private repository. Repository and branch are filled from the vault's `.git` folder when present (that folder is set aside under `.git-vault-sync/previous-git/`).
+2. In its settings, enter the vault's private repository and branch, and paste a fine-grained GitHub token with Contents read/write and Metadata read on it. A `.git` folder in the vault is left alone and never synced.
 3. Click **Connect**, review the first sync, then **Start syncing**.
 
 Set up each device separately; copy only the plugin files, never `.git-vault-sync/`.

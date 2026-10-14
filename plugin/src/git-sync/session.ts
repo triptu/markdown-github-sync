@@ -12,7 +12,6 @@ import {
   digestText,
   entryFromBytes,
   isOid,
-  isSyncablePath,
   isValidPath,
   entryText,
   sameEntry,
@@ -27,10 +26,9 @@ import { nativeChoices, reconcile } from "./reconcile";
 import type { Choice, Conflict, NativeHold } from "./reconcile";
 import { CorruptStateError, STATE_FORMAT, parseState, referencedBlobs } from "./state";
 import { compileScope, freezeTransactionScope, ScopeError } from "./scope";
-import type { Scope, ScopeRules, TransactionScope } from "./scope";
+import type { Scope, TransactionScope } from "./scope";
 import type {
   ApplyOperation,
-  LedgerPublication,
   NativeError,
   OversizeEvidence,
   Pause,
@@ -57,8 +55,6 @@ export interface SessionPorts {
   /** Backoff between cancelled publication rounds; injectable for tests. */
   delay?: (ms: number) => Promise<void>;
   random?: () => number;
-  /** Config sync is opt-in. Existing /3 enrollments remain visible-only until reviewed re-enrollment. */
-  scopeRules?: ScopeRules["rules"];
   /** Stable for an Obsidian App lifetime, including plugin reloads; changes on full host restart. */
   hostLifetimeId?: string;
 }
@@ -103,13 +99,6 @@ export type SyncOutcome =
    * replica (or an out-of-contract rewind) explains; nothing is sent meanwhile.
    */
   | { kind: "settling"; operationId: string; reason: "unreachable" | "stale-ledger" }
-  /**
-   * A /2 publication sent without a ledger, held until reachable or reviewed.
-   * `fenced`: the branch has left the legacy parent (through this device's
-   * ledger fence or other commits), so the old request can no longer land and
-   * publication recovery is available.
-   */
-  | { kind: "publication-unknown"; operationId: string; parent: string; candidate: string; head: string; fenced: boolean }
   /** Native recovery evidence of unknown scope could not be verified; nothing was planned. */
   | { kind: "native-error"; errors: NativeError[] };
 
@@ -185,17 +174,16 @@ export type RestoreOutcome =
 
 export interface ConfigurationListing {
   kind: "configuration";
-  rules: ScopeRules["rules"];
   deferred: Array<{ path: string; expected: Ref | null; next: Ref | null; blockedReason: string | null }>;
   unpublished: Array<{ path: string; version: Ref }>;
   guarded: Array<{ path: string; applied: Ref | null; local: Ref | null; unreadable: boolean }>;
 }
 export type ConfigurationPreview =
-  | Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "disabled" }
+  | Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" }
   | { kind: "preview"; token: string; items: Array<ConfigurationListing["deferred"][number] & { expectedEntry: Entry | null; incomingEntry: Entry | null }>; blocked: BlockedStep[] };
 export type ConfigurationOutcome = ConfigurationPreview | { kind: "stale" } | { kind: "applied"; paths: string[] } | { kind: "review-needed"; applied: string[]; changed: string[] } | { kind: "blocked"; steps: BlockedStep[] } | { kind: "native-error"; errors: NativeError[] };
-export type HiddenPublicationPreview = Unavailable | { kind: "disabled" } | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref; entry: Entry };
-export type GuardedConfigurationPreview = Unavailable | { kind: "disabled" } | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "missing" } | { kind: "unreadable" } | { kind: "preview"; token: string; path: string; head: string; scopeDigest: string; applied: Ref | null; version: Ref | null; entry: Entry | null };
+export type HiddenPublicationPreview = Unavailable | { kind: "missing" } | { kind: "tracked" } | { kind: "invalid-path" } | { kind: "preview"; token: string; path: string; version: Ref; entry: Entry };
+export type GuardedConfigurationPreview = Unavailable | { kind: "paused"; pause: Pause } | { kind: "busy" } | { kind: "missing" } | { kind: "unreadable" } | { kind: "preview"; token: string; path: string; head: string; scopeDigest: string; applied: Ref | null; version: Ref | null; entry: Entry | null };
 
 export interface PublicationRecoveryPreview {
   kind: "preview";
@@ -211,15 +199,12 @@ export interface PublicationRecoveryPreview {
 export type PublicationRecoveryRefusal =
   | Unavailable
   | { kind: "missing" }
-  | { kind: "reachable"; candidate: string }
   | { kind: "paused"; pause: Pause }
   /** The ledger protocol settles this publication automatically; no review applies. */
-  | { kind: "settling" }
-  /** A /2 publication whose branch still sits at its parent: sync first, which fences it. */
-  | { kind: "unfenced" };
+  | { kind: "settling" };
 export type PublicationRecoveryOutcome = PublicationRecoveryRefusal | { kind: "stale" } | { kind: "released"; pause: Pause };
 
-export type Phase = "idle" | "local-changes" | "needs-decision" | "publication-unknown" | "settling" | "applying" | "blocked" | "paused" | "native-error";
+export type Phase = "idle" | "local-changes" | "needs-decision" | "settling" | "applying" | "blocked" | "paused" | "native-error";
 
 export interface PendingChange {
   path: string;
@@ -305,7 +290,6 @@ export class SyncSession {
   readonly #now: () => Date;
   readonly #delay: (ms: number) => Promise<void>;
   readonly #random: () => number;
-  readonly #requestedRules: ScopeRules["rules"];
   readonly #hostLifetimeId: string | null;
   #queue: Promise<unknown> = Promise.resolve();
   readonly #previewSession = crypto.randomUUID();
@@ -329,7 +313,6 @@ export class SyncSession {
     this.#now = ports.now ?? (() => new Date());
     this.#delay = ports.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#random = ports.random ?? Math.random;
-    this.#requestedRules = ports.scopeRules ?? "visible-only";
     this.#hostLifetimeId = ports.hostLifetimeId ?? null;
   }
 
@@ -353,61 +336,26 @@ export class SyncSession {
       const state = loaded.state;
       const unpublished: ConfigurationListing["unpublished"] = [];
       const guarded: ConfigurationListing["guarded"] = [];
-      if (state.scope.rules === "config/1") {
-        const head = await this.#readHead("config/1");
-        const scope = await this.#scopeFor(head.oid, "config/1");
-        const local = await this.#capture(state, "configuration inventory", false, scope);
-        for (const [path, entry] of Object.entries(local)) {
-          if (scope.classify(path) !== "config-inert" && scope.classify(path) !== "config-live") continue;
-          if (path === ".gitignore" || head.files[path] || state.base.files[path]) continue;
-          if (!sameEntry(state.hiddenConsent[path], entry)) unpublished.push({ path, version: toRef(entry) });
-        }
-        for (const [path, guard] of Object.entries(state.configurationGuards)) {
-          if (!scope.includes(path)) continue;
-          const unreadable = this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path);
-          const entry = local[path] ?? null;
-          if (unreadable || !sameEntry(entry, guard.applied) || needsConfigurationReconsent(guard, entry, head.oid, scope.digest)) {
-            guarded.push({ path, applied: guard.applied, local: entry && toRef(entry), unreadable });
-          }
+      const head = await this.#readHead();
+      const scope = await this.#scopeFor(head.oid);
+      const local = await this.#capture(state, "configuration inventory", false, scope);
+      for (const [path, entry] of Object.entries(local)) {
+        if (scope.classify(path) !== "config-inert" && scope.classify(path) !== "config-live") continue;
+        if (path === ".gitignore" || head.files[path] || state.base.files[path]) continue;
+        if (!sameEntry(state.hiddenConsent[path], entry)) unpublished.push({ path, version: toRef(entry) });
+      }
+      for (const [path, guard] of Object.entries(state.configurationGuards)) {
+        if (!scope.includes(path)) continue;
+        const unreadable = this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path);
+        const entry = local[path] ?? null;
+        if (unreadable || !sameEntry(entry, guard.applied) || needsConfigurationReconsent(guard, entry, head.oid, scope.digest)) {
+          guarded.push({ path, applied: guard.applied, local: entry && toRef(entry), unreadable });
         }
       }
-      return { kind: "configuration", rules: state.scope.rules,
+      return { kind: "configuration",
         deferred: Object.entries(state.deferred).map(([path, item]) => ({ path, expected: item.expected, next: item.next, blockedReason: item.blockedReason })),
         unpublished: unpublished.sort((a, b) => a.path.localeCompare(b.path)),
         guarded: guarded.sort((a, b) => a.path.localeCompare(b.path)) };
-    });
-  }
-
-  previewConfigurationScope(): Promise<Unavailable | { kind: "already-enabled" } | { kind: "busy" } | { kind: "paused"; pause: Pause } | { kind: "preview"; token: string; note: string }> {
-    return this.#exclusive(async () => {
-      const loaded = await this.#load();
-      if (loaded.kind !== "enrolled") return loaded;
-      const state = loaded.state;
-      if (state.scope.rules === "config/1") return { kind: "already-enabled" };
-      if (state.pause) return { kind: "paused", pause: state.pause };
-      if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
-      const head = await this.#readHead("config/1");
-      const scope = await this.#scopeFor(head.oid, "config/1");
-      const token = await digestText(JSON.stringify(["scope-enable/1", this.#previewSession, state.base.commit, head.oid, scope.digest]));
-      return { kind: "preview", token, note: "Fresh enrollment review is required before configuration scope becomes active" };
-    });
-  }
-
-  enableConfigurationScope(input: { token: string }): Promise<Unavailable | { kind: "stale" } | { kind: "busy" } | { kind: "paused"; pause: Pause } | { kind: "already-enabled" } | { kind: "reenroll" }> {
-    return this.#exclusive(async () => {
-      const loaded = await this.#load();
-      if (loaded.kind !== "enrolled") return loaded;
-      const state = loaded.state;
-      if (state.scope.rules === "config/1") return { kind: "already-enabled" };
-      if (state.pause) return { kind: "paused", pause: state.pause };
-      if (state.operation || state.review || Object.keys(state.holds).length || state.nativeErrors.length) return { kind: "busy" };
-      const head = await this.#readHead("config/1");
-      const scope = await this.#scopeFor(head.oid, "config/1");
-      const token = await digestText(JSON.stringify(["scope-enable/1", this.#previewSession, state.base.commit, head.oid, scope.digest]));
-      if (token !== input.token) return { kind: "stale" };
-      state.pause = { reason: "scope-enrollment", detail: "Review fresh enrollment before configuration sync starts" };
-      await this.#save(state);
-      return { kind: "reenroll" };
     });
   }
 
@@ -439,13 +387,12 @@ export class SyncSession {
     const loaded = await this.#load();
     if (loaded.kind !== "enrolled") return loaded;
     const state = loaded.state;
-    if (state.scope.rules !== "config/1") return { kind: "disabled" };
     if (state.pause) return { kind: "paused", pause: state.pause };
     if (state.operation) return { kind: "busy" };
     const guard = state.configurationGuards[path];
     if (!guard) return { kind: "missing" };
-    const head = await this.#readHead("config/1");
-    const scope = await this.#scopeFor(head.oid, "config/1");
+    const head = await this.#readHead();
+    const scope = await this.#scopeFor(head.oid);
     if (!scope.includes(path)) return { kind: "missing" };
     const local = await this.#capture(state, "guarded configuration preview", false, scope);
     if (this.#unreadable.some((item) => item.path === path) || this.#quarantined(state).has(path)) return { kind: "unreadable" };
@@ -473,10 +420,9 @@ export class SyncSession {
     const loaded = await this.#load();
     if (loaded.kind !== "enrolled") return loaded;
     const state = loaded.state;
-    if (state.scope.rules !== "config/1") return { kind: "disabled" };
     if (!isValidPath(path)) return { kind: "invalid-path" };
-    const head = await this.#readHead("config/1");
-    const scope = await this.#scopeFor(head.oid, "config/1");
+    const head = await this.#readHead();
+    const scope = await this.#scopeFor(head.oid);
     if (!scope.includes(path) || scope.classify(path) === "content" || path === ".gitignore") return { kind: "invalid-path" };
     if (head.files[path] || state.base.files[path]) return { kind: "tracked" };
     const local = await this.#capture(state, "hidden publication preview", false, scope);
@@ -498,11 +444,10 @@ export class SyncSession {
       if (loaded.kind !== "enrolled") return loaded;
       state = loaded.state;
     }
-    if (state.scope.rules !== "config/1") return { kind: "disabled" };
     if (state.pause) return { kind: "paused", pause: state.pause };
     if (state.operation) return { kind: "busy" };
-    const head = await this.#readHead("config/1");
-    const scope = await this.#scopeFor(head.oid, "config/1");
+    const head = await this.#readHead();
+    const scope = await this.#scopeFor(head.oid);
     const local = await this.#capture(state, "configuration preview", false, scope);
     const items = Object.entries(state.deferred).sort(([a], [b]) => a.localeCompare(b)).map(([path, item]) => ({
       path, expected: item.expected, next: item.next, blockedReason: item.blockedReason,
@@ -526,7 +471,6 @@ export class SyncSession {
       const loaded = await this.#load();
       if (loaded.kind !== "enrolled") return loaded;
       const initial = loaded.state;
-      if (initial.scope.rules !== "config/1") return { kind: "disabled" };
       if (initial.pause) return { kind: "paused", pause: initial.pause };
       if (initial.operation) return { kind: "busy" };
       const identity = await this.#repository.identity();
@@ -535,11 +479,8 @@ export class SyncSession {
         if (result.kind !== "paused") throw new IntegrityError("Repository identity fence returned an unexpected outcome");
         return result;
       }
-      const bound = await this.#bindLedger(initial);
-      if (bound) {
-        if (bound.kind !== "paused") throw new IntegrityError("Ledger binding returned an unexpected outcome");
-        return bound;
-      }
+      const owned = await this.#checkLedger(initial);
+      if (owned) return owned;
       const native = await this.#recoverNative(initial);
       if (native) {
         if (native.kind !== "native-error") throw new IntegrityError("Native recovery returned an unexpected outcome");
@@ -567,7 +508,7 @@ export class SyncSession {
   }
 
   /**
-   * Compatibility hook for vault events. Events only schedule synchronization:
+   * Hook for vault events. Events only schedule synchronization:
    * consent is bound to exact versions and checked by compare-and-swap, so an
    * event (including the echo of this engine's own writes) changes no state.
    */
@@ -660,7 +601,7 @@ export class SyncSession {
       const sameRepository = sameIdentity(identity, state.repository);
       let published = false;
       if (state.pause) {
-        if (sameRepository && state.pause.reason === "ledger-diverged" && state.operation?.kind === "publish" && state.operation.publication.phase !== "legacy") {
+        if (sameRepository && state.pause.reason === "ledger-diverged" && state.operation?.kind === "publish") {
           // Read-only: a fresh receipt or seal settles the publication; nothing is sent.
           const rechecked = await this.#recheckDiverged(state, state.operation);
           if (rechecked) return rechecked;
@@ -684,8 +625,8 @@ export class SyncSession {
       if (!sameRepository) {
         return this.#pause(state, "repository-changed", `Expected ${describe(state.repository)}, found ${describe(identity)}`);
       }
-      const bound = await this.#bindLedger(state);
-      if (bound) return bound;
+      const owned = await this.#checkLedger(state);
+      if (owned) return owned;
       const native = await this.#recoverNative(state);
       if (native) return native;
       let cancellations = 0;
@@ -811,11 +752,8 @@ export class SyncSession {
       if (!sameIdentity(await this.#repository.identity(), state.repository)) {
         return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before restoring history" } };
       }
-      const bound = await this.#bindLedger(state);
-      if (bound) {
-        if (bound.kind !== "paused") throw new IntegrityError("Ledger binding returned an unexpected outcome");
-        return bound;
-      }
+      const owned = await this.#checkLedger(state);
+      if (owned) return owned;
       // No operation is in flight, so every pending native intent is cancelled.
       const native = await this.#recoverNative(state);
       if (native) return { kind: "blocked", reason: "Native recovery evidence could not be verified; open Changes" };
@@ -908,12 +846,7 @@ export class SyncSession {
     });
   }
 
-  /**
-   * Review abandonment of a held candidate: a legacy /2 publication sent
-   * without a ledger (only after the branch left its parent, see
-   * `#settleLegacy`), or a publication held by ledger divergence. This never
-   * asserts nonpublication.
-   */
+  /** Review abandonment of a publication held by ledger divergence. This never asserts nonpublication. */
   previewPublicationRecovery(): Promise<PublicationRecoveryPreview | PublicationRecoveryRefusal> {
     return this.#exclusive(async () => {
       const loaded = await this.#load();
@@ -937,8 +870,6 @@ export class SyncSession {
       const preview = await this.#publicationRecoveryPreview(state);
       if (preview.kind !== "preview") return preview;
       if (preview.token !== input.token) return { kind: "stale" };
-      const operation = state.operation;
-      const legacy = operation?.kind === "publish" && operation.publication.phase === "legacy";
       this.#record(state, "publication-recovery", preview.candidateFiles);
       this.#record(state, "publication-recovery", preview.localFiles);
       if (input.choice !== "republish") {
@@ -951,10 +882,7 @@ export class SyncSession {
       state.operation = null;
       state.review = null;
       state.decisions = dictionary();
-      const sent = legacy
-        ? `Its request was sent without a ledger; the branch has left its parent ${operation.parent}, so that request can no longer land`
-        : "Re-enrollment anchors this device to the ledger value it then observes";
-      state.pause = { reason: "history-rewritten", detail: `Archived unresolved candidate ${preview.candidate} after review. ${sent}. Re-enroll against the current head` };
+      state.pause = { reason: "history-rewritten", detail: `Archived unresolved candidate ${preview.candidate} after review. Re-enrollment anchors this device to the ledger value it then observes. Re-enroll against the current head` };
       await this.#save(state);
       return { kind: "released", pause: state.pause };
     });
@@ -963,20 +891,14 @@ export class SyncSession {
   async #publicationRecoveryPreview(state: StoredState): Promise<PublicationRecoveryPreview | PublicationRecoveryRefusal> {
     const operation = state.operation;
     if (operation?.kind !== "publish") return { kind: "missing" };
-    const legacy = operation.publication.phase === "legacy";
-    if (!legacy && !(state.pause && LEDGER_PAUSES.has(state.pause.reason))) return { kind: "settling" };
+    if (!(state.pause && LEDGER_PAUSES.has(state.pause.reason))) return { kind: "settling" };
     const identity = await this.#repository.identity();
     if (!sameIdentity(identity, state.repository)) {
       return { kind: "paused", pause: { reason: "repository-changed", detail: "Restore the enrolled repository identity before reviewing publication recovery" } };
     }
-    const head = await this.#readHead(state.scope.rules);
-    if (legacy && (head.oid === operation.candidate.commit || await this.#repository.isAncestor(operation.candidate.commit, head.oid))) {
-      return { kind: "reachable", candidate: operation.candidate.commit };
-    }
-    // Releasing before the branch leaves the parent would let the old request land later as remote content.
-    if (legacy && (head.oid === operation.parent || operation.fence)) return { kind: "unfenced" };
+    const head = await this.#readHead();
     const candidate = await this.#repository.readCommit(operation.candidate.commit);
-    const candidateScope = await this.#scopeFor(candidate.oid, state.scope.rules);
+    const candidateScope = await this.#scopeFor(candidate.oid);
     const candidateFiles = await verifySnapshot(filterSnapshot(candidate.files, candidateScope), "recovery candidate", candidateScope);
     if (candidate.oid !== operation.candidate.commit || candidate.treeOid !== operation.candidate.tree || !sameManifest(candidateFiles, operation.target)) {
       throw new IntegrityError("Recovery candidate differs from the durable operation");
@@ -993,7 +915,7 @@ export class SyncSession {
     // The head is read before the local capture: a vault event (such as a
     // rename) during the read must still be able to refuse a stale capture.
     let head: CommitSnapshot;
-    try { head = await this.#readHead(state.scope.rules, prefetchedHead); }
+    try { head = await this.#readHead(prefetchedHead); }
     catch (error) {
       if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
       throw error;
@@ -1016,7 +938,7 @@ export class SyncSession {
       }
       if (reread >= STALE_REREADS) throw new StaleHeadError(state.base.commit, head.oid, now + 60_000);
       await this.#delay(500 * 2 ** reread + Math.floor(this.#random() * 500));
-      try { head = await this.#readHead(state.scope.rules); }
+      try { head = await this.#readHead(); }
       catch (error) {
         if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
         throw error;
@@ -1026,28 +948,25 @@ export class SyncSession {
     const hadReview = state.review !== null || Object.keys(state.decisions).length > 0;
     const local = await this.#capture(state, "local capture");
     this.#guardCapture(state, local);
-    const hadPrototypeBaseline = Object.hasOwn(state.base.files, "__proto__");
     const base = await this.#effectiveBase(state, local, head);
     if (base.kind === "paused") return base.outcome;
     let headScope: Scope;
     let parentScope: Scope;
     try {
-      headScope = await this.#scopeFor(head.oid, state.scope.rules);
-      parentScope = await this.#scopeFor(state.base.commit, state.scope.rules);
+      headScope = await this.#scopeFor(head.oid);
+      parentScope = await this.#scopeFor(state.base.commit);
     } catch (error) {
       if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
       throw error;
     }
-    let transaction: TransactionScope = parentScope;
-    if (state.scope.rules === "config/1") {
-      if (this.#unreadable.some((item) => item.path === ".gitignore")) return this.#pause(state, "scope-unreadable", "Local .gitignore cannot be read");
-      const localIgnore = local[".gitignore"] ? entryText(local[".gitignore"]!) : null;
-      if (local[".gitignore"] && localIgnore === null) return this.#pause(state, "scope-unreadable", "Local .gitignore is not valid UTF-8");
-      try { transaction = await freezeTransactionScope(parentScope, headScope, localIgnore); }
-      catch (error) {
-        if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
-        throw error;
-      }
+    if (this.#unreadable.some((item) => item.path === ".gitignore")) return this.#pause(state, "scope-unreadable", "Local .gitignore cannot be read");
+    const localIgnore = local[".gitignore"] ? entryText(local[".gitignore"]!) : null;
+    if (local[".gitignore"] && localIgnore === null) return this.#pause(state, "scope-unreadable", "Local .gitignore is not valid UTF-8");
+    let transaction: TransactionScope;
+    try { transaction = await freezeTransactionScope(parentScope, headScope, localIgnore); }
+    catch (error) {
+      if (error instanceof ScopeError) return this.#pause(state, "scope-unreadable", error.message);
+      throw error;
     }
     const planBase = filterSnapshot(base.files, transaction);
     for (const path of state.reentry) delete planBase[path];
@@ -1163,12 +1082,10 @@ export class SyncSession {
       await this.#save(state);
       return { kind: "needs-decision", conflicts: plan.conflicts, merged: plan.merged, published: false, carried: [] };
     }
-    if (state.scope.rules === "config/1") {
-      for (const step of [...plan.incoming]) {
-        if (!step.path.startsWith(`${headScope.rules.configDir}/`)) continue;
-        this.#defer(state, step.path, step.expected, step.next, head.oid);
-        plan.incoming.splice(plan.incoming.indexOf(step), 1);
-      }
+    for (const step of [...plan.incoming]) {
+      if (!step.path.startsWith(`${headScope.rules.configDir}/`)) continue;
+      this.#defer(state, step.path, step.expected, step.next, head.oid);
+      plan.incoming.splice(plan.incoming.indexOf(step), 1);
     }
     for (const id of decidedOversize) if (!state.unacknowledged.includes(id)) state.unacknowledged.push(id);
     if (decidedOversize.length > 0) {
@@ -1199,7 +1116,6 @@ export class SyncSession {
         sameCarry(state.carry, kept) &&
         !guardsChanged &&
         !hadReview &&
-        hadPrototypeBaseline === Object.hasOwn(state.base.files, "__proto__") &&
         !state.review &&
         Object.keys(state.decisions).length === 0;
       if (!settled) {
@@ -1345,9 +1261,6 @@ export class SyncSession {
 
   async #resumeRestore(state: StoredState, operation: RestoreOperation): Promise<{ kind: "continue"; published: false; carried: string[] } | { kind: "held"; outcome: SyncOutcome }> {
     await this.#verifyRestoreOperation(state, operation);
-    // Older journals can contain a reviewed restore without a guard. Install
-    // one before any resumed write, including a write with a lost response.
-    if (await this.#ensureRestoreGuard(state, operation.step)) await this.#save(state);
     const local = await this.#capture(state, "restore resumption capture");
     const step = operation.step;
     const observed = this.#observeLocal(state, local, step.path);
@@ -1408,59 +1321,19 @@ export class SyncSession {
 
   async #resumeApply(state: StoredState, operation: ApplyOperation): Promise<Applied> {
     const target = await this.#repository.readCommit(operation.target.commit);
-    const targetScope = await this.#scopeFor(target.oid, state.scope.rules);
+    const targetScope = await this.#scopeFor(target.oid);
     const files = await verifySnapshot(filterSnapshot(target.files, targetScope), "target commit", targetScope);
     if (target.oid !== operation.target.commit || target.treeOid !== operation.target.tree || !sameManifest(files, operation.target.files)) {
       throw new IntegrityError(`Commit ${operation.target.commit} does not match the recorded operation`);
     }
     const local = await this.#capture(state, "local capture");
     this.#guardCapture(state, local);
-    if (operation.replan) {
-      const planned = await this.#replan(state, operation, local, { oid: target.oid, treeOid: target.treeOid, files });
-      if (planned) return { kind: "blocked", outcome: planned };
-    }
     return this.#applySteps(state, operation, local, files);
-  }
-
-  /**
-   * Migrated /2 operations: replace their consent-bearing steps by exact
-   * compare-and-swap steps from the effective base to the accepted target.
-   * Any path whose bytes differ from that base is carried, never written.
-   */
-  async #replan(state: StoredState, operation: ApplyOperation, local: Snapshot, target: CommitSnapshot): Promise<SyncOutcome | null> {
-    const base = await this.#effectiveBase(state, local, target);
-    if (base.kind === "paused") return base.outcome;
-    const preimages: Snapshot = dictionary();
-    const incoming: Snapshot = dictionary();
-    const steps: StoredStep[] = [];
-    for (const path of [...new Set([...Object.keys(base.files), ...Object.keys(local), ...Object.keys(target.files), ...this.#untouched(state)])].sort()) {
-      const observed = this.#observeLocal(state, local, path);
-      const next = target.files[path] ?? null;
-      const expected = base.files[path] ?? null;
-      if (observed.kind === "unknown") {
-        if (expected) preimages[path] = expected;
-        if (next) incoming[path] = next;
-        steps.push({ path, expected: expected && toRef(expected), next: next && toRef(next), status: "changed", decision: null, reason: null });
-        continue;
-      }
-      const current = observed.entry;
-      if (sameEntry(current, next)) continue;
-      if (expected) preimages[path] = expected;
-      if (next) incoming[path] = next;
-      steps.push({ path, expected: expected && toRef(expected), next: next && toRef(next), status: sameEntry(current, expected) ? "pending" : "changed", decision: null, reason: null });
-    }
-    operation.recoveryId = this.#record(state, "migration", preimages);
-    operation.incomingRecoveryId = this.#record(state, "incoming", incoming);
-    operation.steps = steps;
-    operation.replan = false;
-    await this.#save(state);
-    return null;
   }
 
   /** Settles a ledger publication of the current operation: receipt accepts, own seal cancels. */
   async #settle(state: StoredState, operation: PublishOperation): Promise<Settlement> {
-    if (operation.publication.phase === "legacy") return this.#settleLegacy(state, operation);
-    const verdict = await this.#settleLedger(state, ledgerView(operation), operation.id);
+    const verdict = await this.#settleLedger(state, operation);
     if (verdict.kind === "receipt") return this.#accept(state, operation);
     if (verdict.kind === "seal") return this.#cancel(state, operation, verdict.seal);
     if (verdict.kind === "held") return verdict;
@@ -1476,8 +1349,8 @@ export class SyncSession {
    * publication stays settling and nothing is sent; no number of stale reads
    * is ever treated as divergence. Anything else fails closed as divergence.
    */
-  async #settleLedger(state: StoredState, item: LedgerPublication, operationId: string): Promise<Verdict> {
-    const held = (reason: "unreachable" | "stale-ledger"): Verdict => ({ kind: "held", outcome: { kind: "settling", operationId, reason } });
+  async #settleLedger(state: StoredState, item: PublishOperation): Promise<Verdict> {
+    const held = (reason: "unreachable" | "stale-ledger"): Verdict => ({ kind: "held", outcome: { kind: "settling", operationId: item.id, reason } });
     let stale = 0;
     for (let round = 0; round < SETTLE_ROUNDS; ) {
       let value: string | null;
@@ -1540,79 +1413,6 @@ export class SyncSession {
     return null;
   }
 
-  /**
-   * /2 publications carried no ledger update: only branch reachability can
-   * accept them, and nothing ever proves them rejected. While the branch sits
-   * at the legacy parent, the old request (`parent -> candidate`) could still
-   * land, so the branch is moved off the parent by a same-tree fence commit
-   * published through this device's ledger. The fence identity is durable
-   * before dispatch and settles like any publication (receipt: fenced; seal:
-   * retried). Release still needs the user's review: a fence proves only that
-   * the old request can no longer land, not that it never did.
-   */
-  async #settleLegacy(state: StoredState, operation: PublishOperation, fenceAllowed = true): Promise<Settlement> {
-    if (operation.fence) {
-      const fence = operation.fence;
-      const verdict = await this.#settleLedger(state, fence, operation.id);
-      if (verdict.kind === "held") return verdict;
-      if (verdict.kind === "diverged") return this.#fenceDiverged(state, operation, fence, verdict.value);
-      state.ledger.anchor = verdict.kind === "receipt" ? fence.receipt : verdict.seal;
-      operation.fence = null;
-      await this.#save(state);
-    }
-    const head = await this.#readHead(state.scope.rules);
-    const candidate = operation.candidate.commit;
-    let published = head.oid === candidate;
-    if (!published) {
-      try {
-        published = await this.#repository.isAncestor(candidate, head.oid);
-      } catch {
-        published = false;
-      }
-    }
-    if (published) return this.#accept(state, operation);
-    const unknown = (fenced: boolean, at: string): Settlement => ({ kind: "held", outcome: { kind: "publication-unknown", operationId: operation.id, parent: operation.parent, candidate, head: at, fenced } });
-    if (head.oid !== operation.parent) return unknown(true, head.oid);
-    // At most one new fence per sync; a sealed fence is retried by the next sync.
-    if (!fenceAllowed) return unknown(false, head.oid);
-    const id = `fence-${this.#nextId(state, "fence")}-${crypto.randomUUID()}`;
-    const anchor = state.ledger.anchor;
-    const prepared = await this.#repository.prepare(head, dictionary(), `Vault sync fence from ${this.#deviceName}`, { anchor, operation: id });
-    if (!isOid(prepared.oid) || prepared.oid === head.oid || prepared.oid === candidate || prepared.treeOid !== head.treeOid || !sameManifest(prepared.files, head.files)) {
-      throw new IntegrityError("Prepared fence is not a same-tree commit on the legacy parent");
-    }
-    if (!isOid(prepared.receipt) || [prepared.oid, head.oid, anchor, candidate].includes(prepared.receipt)) {
-      throw new IntegrityError("Prepared fence receipt is not a distinct commit");
-    }
-    const fence: LedgerPublication = { id, parent: head.oid, candidate: { commit: prepared.oid, tree: prepared.treeOid }, receipt: prepared.receipt, anchor, publication: { phase: "dispatched" } };
-    // The fence and legacy identities are durable before the fence's only dispatch.
-    operation.fence = fence;
-    await this.#save(state);
-    const ack = await this.#repository.publish({ parent: head.oid, candidate: prepared.oid, anchor, receipt: prepared.receipt }).catch(() => "unconfirmed" as const);
-    if (ack !== "acknowledged") return this.#settleLegacy(state, operation, false);
-    state.ledger.anchor = fence.receipt;
-    operation.fence = null;
-    await this.#save(state);
-    return unknown(true, fence.candidate.commit);
-  }
-
-  async #fenceDiverged(state: StoredState, operation: PublishOperation, fence: LedgerPublication, value: string | null): Promise<Settlement> {
-    const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id, reason: "unreachable" } };
-    const seal = fence.publication.phase === "sealing" ? fence.publication.seal : null;
-    for (const [mine, label] of [[fence.receipt, "fence receipt"], [seal, "fence seal"]] as const) {
-      if (value === null || mine === null) continue;
-      const past = await this.#ancestry(mine, value);
-      if (past === null) return settling;
-      if (past) {
-        state.ledger.anchor = mine;
-        operation.fence = null;
-        await this.#save(state);
-        return { kind: "held", outcome: await this.#pause(state, "duplicate-installation", `Ledger ${state.ledger.ref} advanced past this device's ${label} ${mine}; another installation is writing it`) };
-      }
-    }
-    return { kind: "held", outcome: await this.#pause(state, "ledger-diverged", `Ledger ${state.ledger.ref} is ${value ?? "absent"}, expected ${fence.anchor ?? "absent"} while fencing a legacy publication; review publication recovery`) };
-  }
-
   async #accept(state: StoredState, operation: PublishOperation): Promise<Settlement> {
     const promoted: ApplyOperation = {
       kind: "apply",
@@ -1621,9 +1421,9 @@ export class SyncSession {
       steps: operation.steps,
       recoveryId: operation.recoveryId,
       incomingRecoveryId: operation.incomingRecoveryId,
-      replan: operation.publication.phase === "legacy",
+      replan: false,
     };
-    if (operation.receipt !== null) state.ledger.anchor = operation.receipt;
+    state.ledger.anchor = operation.receipt;
     state.operation = promoted;
     await this.#save(state);
     return { kind: "accepted", operation: promoted };
@@ -1640,7 +1440,7 @@ export class SyncSession {
 
   async #diverged(state: StoredState, operation: PublishOperation, value: string | null): Promise<Settlement> {
     const settling: Settlement = { kind: "held", outcome: { kind: "settling", operationId: operation.id, reason: "unreachable" } };
-    if (value !== null && operation.receipt !== null) {
+    if (value !== null) {
       const accepted = await this.#ancestry(operation.receipt, value);
       if (accepted === null) return settling;
       if (accepted) {
@@ -1661,21 +1461,13 @@ export class SyncSession {
     return { kind: "held", outcome: await this.#pause(state, "ledger-diverged", `Ledger ${state.ledger.ref} is ${found}, expected ${operation.anchor ?? "absent"}; review publication recovery`) };
   }
 
-  /** Binds a migrated /2 state to this installation's ledger, which must not exist yet. */
-  async #bindLedger(state: StoredState): Promise<SyncOutcome | null> {
+  /** Pauses when the journal belongs to another installation's ledger. */
+  async #checkLedger(state: StoredState): Promise<{ kind: "paused"; pause: Pause } | null> {
     const ref = this.#repository.ledgerRef();
-    if (state.ledger.ref === null) {
-      if (await this.#readLedgerValue() !== null) {
-        return this.#pause(state, "duplicate-installation", `Ledger ${ref} already exists before this vault's first ledger publication; this device identity may be shared`);
-      }
-      state.ledger.ref = ref;
-      await this.#save(state);
-      return null;
-    }
-    if (state.ledger.ref !== ref) {
-      return this.#pause(state, "duplicate-installation", `This journal belongs to ${state.ledger.ref}, not ${ref}`);
-    }
-    return null;
+    if (state.ledger.ref === ref) return null;
+    state.pause = { reason: "duplicate-installation", detail: `This journal belongs to ${state.ledger.ref}, not ${ref}` };
+    await this.#save(state);
+    return { kind: "paused", pause: state.pause };
   }
 
   async #readLedgerValue(): Promise<string | null> {
@@ -1780,7 +1572,7 @@ export class SyncSession {
     // Untouched paths (unknown local bytes) keep their origin across the advance.
     const untouched = this.#untouched(state).filter((path) => !stepsByPath.has(path));
     Object.assign(carry, await this.#untouchedCarry(state, untouched, [local, files], operation.target.files));
-    const priorScope = await this.#scopeFor(state.base.commit, state.scope.rules);
+    const priorScope = await this.#scopeFor(state.base.commit);
     for (const [path, origin] of Object.entries(state.carry)) {
       if (!priorScope.includes(path) && !Object.hasOwn(carry, path)) carry[path] = origin;
     }
@@ -1790,7 +1582,7 @@ export class SyncSession {
     // blobs, so both this completion and a restart retain the same evidence.
     this.#record(state, "carried", materialize(state, origins));
     if (Object.keys(newer).length > 0) await this.#save(state);
-    const appliedScope = await this.#scopeFor(operation.target.commit, state.scope.rules);
+    const appliedScope = await this.#scopeFor(operation.target.commit);
     this.#releaseRecovery(state, operation, recaptured, carry, appliedScope);
 
     state.base = { commit: operation.target.commit, tree: operation.target.tree, files: operation.target.files };
@@ -1806,7 +1598,7 @@ export class SyncSession {
   }
 
   async #applyConfigurationSteps(state: StoredState, operation: ConfigurationOperation): Promise<{ kind: "applied"; paths: string[] } | { kind: "review-needed"; applied: string[]; changed: string[] } | { kind: "blocked"; steps: BlockedStep[] }> {
-    const scope = await this.#scopeFor(state.base.commit, state.scope.rules);
+    const scope = await this.#scopeFor(state.base.commit);
     const local = await this.#capture(state, "configuration application capture", true, scope);
     // A prior call may have saved an applied step before a crash. Rebuild its
     // guard before the operation can retire or another transaction can plan.
@@ -1870,7 +1662,7 @@ export class SyncSession {
 
   async #ensureRestoreGuard(state: StoredState, step: StoredStep): Promise<boolean> {
     if (state.configurationGuards[step.path]) return false;
-    if (state.scope.rules !== "config/1" || !(await this.#scopeFor(state.base.commit, "config/1")).isLive(step.path)) return false;
+    if (!(await this.#scopeFor(state.base.commit)).isLive(step.path)) return false;
     // Until the write lands, expected is the last version known to be on disk.
     // A later observation of next can retire on a different host, while the
     // writing host retains the guard through publication and stale flushes.
@@ -1898,8 +1690,7 @@ export class SyncSession {
     const configurationReplay: StoredStep[] = [];
     const restoreReplay: StoredStep[] = [];
     const cancel: string[] = [];
-    const restoreScope = operation?.kind === "restore" && state.scope.rules === "config/1"
-      ? await this.#scopeFor(state.base.commit, "config/1") : null;
+    const restoreScope = operation?.kind === "restore" ? await this.#scopeFor(state.base.commit) : null;
     for (const intent of pending) {
       const step = operation?.kind === "apply" || operation?.kind === "configuration" ? operation.steps.find((item) => item.path === intent.path) :
         operation?.kind === "restore" && operation.step.path === intent.path ? operation.step : undefined;
@@ -2119,14 +1910,9 @@ export class SyncSession {
     head: CommitSnapshot,
   ): Promise<{ kind: "ready"; files: Snapshot } | { kind: "paused"; outcome: SyncOutcome }> {
     const commit = state.base.commit === head.oid ? head : await this.#readWithKnown(state.base.commit, state, local, head.files);
-    const checkpointScope = await this.#scopeFor(commit.oid, state.scope.rules);
+    const checkpointScope = await this.#scopeFor(commit.oid);
     if (checkpointScope.digest !== state.scope.digest) return { kind: "paused", outcome: await this.#pause(state, "base-mismatch", "Stored scope digest differs from the checkpoint policy") };
     const checkpoint = await verifySnapshot(filterSnapshot(commit.files, checkpointScope), "checkpoint commit", checkpointScope);
-    // Old ordinary-object manifests could omit the __proto__ path. Recover its
-    // baseline from the immutable checkpoint before classifying any deletion.
-    if (!Object.hasOwn(state.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) {
-      state.base.files["__proto__"] = toRef(checkpoint["__proto__"]!);
-    }
     if (commit.oid !== state.base.commit || commit.treeOid !== state.base.tree || !sameManifest(checkpoint, state.base.files)) {
       return { kind: "paused", outcome: await this.#pause(state, "base-mismatch", `Commit ${state.base.commit} no longer matches the recorded checkpoint`) };
     }
@@ -2160,26 +1946,16 @@ export class SyncSession {
     scope: Scope;
   }> {
     const repository = await this.#repository.identity();
-    const rules = prior?.pause?.reason === "scope-enrollment" ? "config/1" : prior?.scope.rules ?? this.#requestedRules;
-    const head = await this.#readHead(rules);
-    const scope = await this.#scopeFor(head.oid, rules);
+    const head = await this.#readHead();
+    const scope = await this.#scopeFor(head.oid);
     const pending = await this.#pendingIntents();
-    // A preview cannot pin newly visible hidden paths into the old visible-only
-    // state: its parser would reject those paths on the next load.
     const local = await this.#capture(null, "local capture", false, scope);
     const unreadable = new Set(this.#unreadable.map((item) => item.path));
     const nativePending = new Set(pending.map((intent) => intent.path));
     if (prior) {
-      const migrating = prior.scope.rules !== rules;
-      let checkpointCommit: CommitSnapshot;
-      if (migrating) {
-        const readForScope = this.#repository.readCommitForScope;
-        if (!readForScope) throw new IntegrityError("Repository cannot read the prior checkpoint under its original scope");
-        checkpointCommit = await readForScope.call(this.#repository, prior.base.commit, prior.scope.rules);
-      } else checkpointCommit = prior.base.commit === head.oid ? head : await this.#readWithKnown(prior.base.commit, prior, local, head.files);
-      const priorScope = await this.#scopeFor(checkpointCommit.oid, prior.scope.rules);
+      const checkpointCommit = prior.base.commit === head.oid ? head : await this.#readWithKnown(prior.base.commit, prior, local, head.files);
+      const priorScope = await this.#scopeFor(checkpointCommit.oid);
       const checkpoint = await verifySnapshot(filterSnapshot(checkpointCommit.files, priorScope), "re-enrollment checkpoint", priorScope);
-      if (!Object.hasOwn(prior.base.files, "__proto__") && Object.hasOwn(checkpoint, "__proto__")) prior.base.files["__proto__"] = toRef(checkpoint["__proto__"]!);
       if (checkpointCommit.oid !== prior.base.commit || checkpointCommit.treeOid !== prior.base.tree || !sameManifest(checkpoint, prior.base.files)) {
         throw new IntegrityError("Re-enrollment checkpoint differs from its immutable commit");
       }
@@ -2252,7 +2028,7 @@ export class SyncSession {
   // ---- Restore -----------------------------------------------------------
 
   async #restorePreview(state: StoredState, input: { path: string; commit: string }): Promise<RestorePreview | RestoreRefusal> {
-    if (!isValidPath(input.path) || !(await this.#scopeFor(state.base.commit, state.scope.rules)).includes(input.path)) return { kind: "invalid-path" };
+    if (!isValidPath(input.path) || !(await this.#scopeFor(state.base.commit)).includes(input.path)) return { kind: "invalid-path" };
     if (!isOid(input.commit)) return { kind: "not-in-history" };
     if (input.commit !== state.base.commit && !(await this.#repository.isAncestor(input.commit, state.base.commit))) {
       return { kind: "not-in-history" };
@@ -2313,7 +2089,7 @@ export class SyncSession {
       : state.nativeErrors.some((item) => item.path === null)
         ? "native-error"
       : operation?.kind === "publish"
-        ? operation.publication.phase === "legacy" ? "publication-unknown" : "settling"
+        ? "settling"
         : operation
           ? blocked.length > 0
             ? "blocked"
@@ -2343,12 +2119,12 @@ export class SyncSession {
 
   /** Archives every local draft not already pinned before an API can return early. */
   async #capture(state: StoredState | null, label: string, persist = true, scope?: Scope): Promise<Snapshot> {
-    const active = scope ?? (state ? await this.#scopeFor(state.base.commit, state.scope.rules) : undefined);
+    const active = scope ?? await this.#scopeFor(state!.base.commit);
     const scanned = this.#vault.scan ? await this.#vault.scan(active) : { files: await this.#vault.capture(active), unreadable: [] };
     const local = await verifySnapshot(scanned.files, label, active);
     if (!Array.isArray(scanned.unreadable)) throw new IntegrityError(`${label}: malformed unreadable list`);
     for (const item of scanned.unreadable) {
-      if (!isValidPath(item?.path) || (active ? !active.includes(item.path) : !isSyncablePath(item.path)) || Object.hasOwn(local, item.path) || typeof item.size !== "number" || item.reason !== "oversize") {
+      if (!isValidPath(item?.path) || !active.includes(item.path) || Object.hasOwn(local, item.path) || typeof item.size !== "number" || item.reason !== "oversize") {
         throw new IntegrityError(`${label}: malformed unreadable file`);
       }
     }
@@ -2427,11 +2203,8 @@ export class SyncSession {
     return { kind: "paused", pause: state.pause };
   }
 
-  async #scopeFor(commit: string, rules: ScopeRules["rules"]): Promise<Scope> {
-    if (rules === "visible-only") return compileScope({ rules, configDir: ".obsidian", gitignore: null }, null);
-    if (!this.#repository.scopeFor || !this.#repository.readRootGitignore) throw new ScopeError("Repository does not support configuration scope");
+  async #scopeFor(commit: string): Promise<Scope> {
     const scope = await this.#repository.scopeFor(commit);
-    if (scope.rules.rules !== "config/1") throw new ScopeError("Repository scope mode does not match the session");
     const ignoreText = await this.#repository.readRootGitignore(commit);
     const verified = await compileScope({ ...scope.rules }, ignoreText);
     if (verified.digest !== scope.digest) throw new ScopeError("Repository scope and root .gitignore disagree");
@@ -2459,7 +2232,7 @@ export class SyncSession {
   }
 
   /** `prefetchedOid`: a branch head id requested earlier in this sync, standing in for `head()`'s own ref read. */
-  async #readHead(rules: ScopeRules["rules"] = "visible-only", prefetchedOid: Promise<Settled<string>> | null = null): Promise<CommitSnapshot> {
+  async #readHead(prefetchedOid: Promise<Settled<string>> | null = null): Promise<CommitSnapshot> {
     let head: CommitSnapshot;
     if (!prefetchedOid) head = await this.#repository.head();
     else {
@@ -2468,7 +2241,7 @@ export class SyncSession {
       head = await this.#repository.readCommit(oid.value);
     }
     if (!isOid(head.oid) || !isOid(head.treeOid)) throw new IntegrityError("Repository head has malformed object IDs");
-    const scope = await this.#scopeFor(head.oid, rules);
+    const scope = await this.#scopeFor(head.oid);
     return { oid: head.oid, treeOid: head.treeOid, files: await verifySnapshot(filterSnapshot(head.files, scope), "remote head", scope) };
   }
 
@@ -2680,7 +2453,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Checks one untrusted native issue; never throws. */
-async function checkIssue(raw: unknown, requiredPath?: string, allowedPath: (path: string) => boolean = isSyncablePath): Promise<{ kind: "valid"; issue: NativeIssue } | { kind: "invalid"; error: NativeError }> {
+async function checkIssue(raw: unknown, requiredPath: string | undefined, allowedPath: (path: string) => boolean): Promise<{ kind: "valid"; issue: NativeIssue } | { kind: "invalid"; error: NativeError }> {
   const id = isRecord(raw) && typeof raw.id === "string" && raw.id.length > 0 && raw.id.length <= 256 ? raw.id : null;
   const candidate = isRecord(raw) ? raw.path : undefined;
   const path = isValidPath(candidate) && allowedPath(candidate) && (requiredPath === undefined || candidate === requiredPath) ? candidate : null;
@@ -2714,20 +2487,3 @@ function sameCarry(a: Record<string, Ref | null>, b: Record<string, Ref | null>)
   return keys.length === Object.keys(b).length && keys.every((path) => Object.hasOwn(b, path) && sameRef(a[path], b[path]));
 }
 
-/** The ledger fields of a non-legacy publish operation, sharing its publication state. */
-function ledgerView(operation: PublishOperation): LedgerPublication {
-  const view = {
-    id: operation.id,
-    parent: operation.parent,
-    candidate: operation.candidate,
-    receipt: operation.receipt!,
-    anchor: operation.anchor,
-    get publication() {
-      return operation.publication as LedgerPublication["publication"];
-    },
-    set publication(value: LedgerPublication["publication"]) {
-      operation.publication = value;
-    },
-  };
-  return view;
-}

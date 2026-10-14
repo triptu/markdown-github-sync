@@ -49,7 +49,7 @@ class FakeGitHub implements GitHubTransport {
   refs = new Map<string, string>();
   ledgerQuery: "normal" | "other-ref" | "not-commit" | "prefix-list" = "normal";
   intercept?: (request: GitHubRequest) => GitHubResponse | undefined;
-  constructor(initial: Snapshot = { "note.md": file("base\r\n"), ".obsidian/config.json": file("secret config"), "nested/.cache/skip": file("skip") }) {
+  constructor(initial: Snapshot = { "note.md": file("base\r\n"), ".obsidian/workspace.json": file("workspace state"), "nested/.cache/skip": file("skip") }) {
     this.head = this.addCommit(initial);
   }
   addCommit(snapshot: Snapshot, parent?: string | string[]): string {
@@ -137,8 +137,8 @@ class FakeGitHub implements GitHubTransport {
 const INSTALLATION = "0f8a6e3c-1b2d-4c5e-8f90-123456789abc";
 const LEDGER = `refs/vault-sync/devices/${INSTALLATION}`;
 const L = { anchor: null, operation: "publish-1" };
-function client(api: FakeGitHub, token: () => Promise<string> = async () => "SHOULD_NOT_ESCAPE", installation = INSTALLATION, scopeRules?: "visible-only" | "config/1", configDir?: string): GitHubRepository {
-  return new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token, installation, now: () => 1_000_000, scopeRules, configDir });
+function client(api: FakeGitHub, token: () => Promise<string> = async () => "SHOULD_NOT_ESCAPE", installation = INSTALLATION, configDir?: string): GitHubRepository {
+  return new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token, installation, now: () => 1_000_000, configDir });
 }
 test("browser byte codec matches independent Git hashing including binary and empty blobs", async () => {
   for (const bytes of [Buffer.alloc(0), Buffer.from("\ufeffhello 日本語\r\n"), Buffer.from([0, 255, 128, 10])]) {
@@ -389,7 +389,7 @@ test("prepare preserves excluded paths, binaries, modes and parent without advan
   const changes = { "note.md": file("\ufeff日本語\r\n"), "media/binary.bin": file(Uint8Array.from([0, 128, 255])), "scripts/run.sh": file("#!/bin/sh\n", "100755") };
   const candidate = await repo.prepare(parent, changes, "roundtrip", L);
   assert.equal(api.head, parent.oid); assert.deepEqual(candidate.files, Object.assign(Object.create(null), changes));
-  const stored = api.files.get(candidate.treeOid); assert.equal(stored?.get(".obsidian/config.json")?.oid, file("secret config").oid);
+  const stored = api.files.get(candidate.treeOid); assert.equal(stored?.get(".obsidian/workspace.json")?.oid, file("workspace state").oid);
   assert.equal(stored?.get("nested/.cache/skip")?.oid, file("skip").oid);
   assert.deepEqual(await repo.readCommit(candidate.oid), { oid: candidate.oid, treeOid: candidate.treeOid, files: candidate.files });
   assert.equal(await repo.publish({ parent: parent.oid, candidate: candidate.oid, anchor: null, receipt: candidate.receipt }), "acknowledged");
@@ -397,18 +397,18 @@ test("prepare preserves excluded paths, binaries, modes and parent without advan
   const mutation = api.requests.find(r => r.url.endsWith("graphql")); assert.ok(mutation?.body?.includes(`"beforeOid":"${parent.oid}"`));
   assert.ok(api.requests.filter(r => r.method === "POST").every(r => !r.url.includes("/git/refs")));
 });
-test("an empty change set prepares a same-tree fence without creating a tree and publishes through the ledger", async () => {
+test("an empty change set prepares a same-tree commit without creating a tree and publishes through the ledger", async () => {
   const api = new FakeGitHub(); const repo = client(api), parent = await repo.head();
   api.requests = [];
-  const fence = await repo.prepare(parent, {}, "fence", { anchor: null, operation: "fence-1" });
+  const candidate = await repo.prepare(parent, {}, "empty", { anchor: null, operation: "empty-1" });
   assert.ok(!api.requests.some(r => r.method === "POST" && r.url.endsWith("/git/trees")), "GitHub rejects an empty tree edit list");
-  assert.equal(fence.treeOid, parent.treeOid);
-  assert.notEqual(fence.oid, parent.oid);
-  assert.deepEqual(api.commits.get(fence.oid)!.parents, [{ sha: parent.oid }]);
-  assert.deepEqual(Object.keys(fence.files), Object.keys(parent.files));
-  assert.equal(await repo.publish({ parent: parent.oid, candidate: fence.oid, anchor: null, receipt: fence.receipt }), "acknowledged");
-  assert.equal(api.head, fence.oid);
-  assert.deepEqual(await repo.readLedger(), { kind: "present", value: fence.receipt });
+  assert.equal(candidate.treeOid, parent.treeOid);
+  assert.notEqual(candidate.oid, parent.oid);
+  assert.deepEqual(api.commits.get(candidate.oid)!.parents, [{ sha: parent.oid }]);
+  assert.deepEqual(Object.keys(candidate.files), Object.keys(parent.files));
+  assert.equal(await repo.publish({ parent: parent.oid, candidate: candidate.oid, anchor: null, receipt: candidate.receipt }), "acknowledged");
+  assert.equal(api.head, candidate.oid);
+  assert.deepEqual(await repo.readLedger(), { kind: "present", value: candidate.receipt });
 });
 test("deletes only visible paths and supports executable mode-only edits", async () => {
   const api = new FakeGitHub(); const repo = client(api), parent = await repo.head();
@@ -684,9 +684,10 @@ test("file history pins pagination to a commit and safely encodes the file path"
 });
 test("history rejects unsafe paths, unpinned later pages and malformed metadata", async () => {
   const api = new FakeGitHub(), repo = client(api);
-  for (const path of ["", ".obsidian/settings.json", "../note.md"]) await assert.rejects(repo.history({path}));
+  for (const path of ["", "../note.md"]) await assert.rejects(repo.history({path}));
   await assert.rejects(repo.history({path: "note.md", page: 2}), /history page/);
   assert.equal(api.requests.length, 0);
+  await assert.rejects(repo.history({path: ".obsidian/workspace.json"}), /outside the commit's scope/);
   api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo/commits" ? response([{sha: "a".repeat(40), commit: { message: "broken", author: { name: "author", date: "not-a-date" } }}]) : undefined;
   await assert.rejects(repo.history({path: "note.md"}), /history date/);
 });
@@ -703,7 +704,7 @@ test("config scope reads tracked eligible hidden files while preserving ignored 
     ".obsidian/plugins/obsidian-git/main.js": file("competing"),
     ".obsidian/plugins/github-vault-sync/data.json": file("device secret"),
   };
-  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  const api = new FakeGitHub(initial), repo = client(api);
   const snapshot = await repo.head();
   assert.deepEqual(Object.keys(snapshot.files).sort(), [".gitignore", ".obsidian/appearance.json", ".obsidian/plugins/vikalp/main.js", "note.md"].sort());
   assert.equal(await repo.readRootGitignore(snapshot.oid), Buffer.from(initial[".gitignore"].data, "base64").toString());
@@ -712,8 +713,6 @@ test("config scope reads tracked eligible hidden files while preserving ignored 
   assert.equal(scope.classify(".obsidian/plugins/vikalp/data.json"), "ignored");
   assert.equal(scope.classify(".obsidian/plugins/obsidian-git/main.js"), "denied");
   assert.equal(scope.classify(".gitignore"), "config-inert", "root control file cannot ignore itself");
-  const legacy = await client(api).head();
-  assert.deepEqual(Object.keys(legacy.files), ["note.md"], "default is still visible-only");
 });
 
 test("prepare retains every excluded parent terminal exactly and returns the candidate's new policy", async () => {
@@ -724,7 +723,7 @@ test("prepare retains every excluded parent terminal exactly and returns the can
     ".obsidian/cache/index": file("ignored bytes", "100755"),
     ".obsidian/plugins/obsidian-git/main.js": file("denied bytes"),
   };
-  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  const api = new FakeGitHub(initial), repo = client(api);
   const parent = await repo.head();
   const candidate = await repo.prepare(parent, { ".gitignore": file(".obsidian/cache/\n.obsidian/config.json\n"), "note.md": file("edited") }, "scope update", L);
   assert.deepEqual(Object.keys(candidate.files).sort(), [".gitignore", "note.md"]);
@@ -749,7 +748,7 @@ const firstConfigCases: Snapshot[] = [
 ];
 for (const initial of firstConfigCases) {
   test(`first eligible config file can be added with ${Object.keys(initial).length === 1 ? "a new" : "an excluded-only"} config directory`, async () => {
-    const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+    const api = new FakeGitHub(initial), repo = client(api);
     const parent = await repo.head();
     const candidate = await repo.prepare(parent, { ".obsidian/appearance.json": file("new config") }, "add configuration", L);
     assert.equal(candidate.files[".obsidian/appearance.json"].oid, file("new config").oid);
@@ -777,7 +776,7 @@ test("a forged candidate changing excluded terminal bytes is refused while addin
     api.files.set(forgedTree.sha, forgedFiles);
     return response({ sha: forgedTree.sha }, 201);
   };
-  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  const repo = client(api), parent = await repo.head();
   await assert.rejects(repo.prepare(parent, { ".obsidian/appearance.json": file("new config") }, "forged", L),
     /Prepared tree changed excluded repository paths/);
   assert.equal(api.requests.filter(request => request.method === "POST" && request.url.endsWith("/git/commits")).length, 0);
@@ -787,7 +786,7 @@ test("a forged candidate changing excluded terminal bytes is refused while addin
 test("a new local ignore rule rejects changes it excludes before uploading or deleting", async () => {
   for (const changed of [file("new private bytes"), null]) {
     const api = new FakeGitHub({ ".gitignore": file(""), "note.md": file("base"), ".obsidian/plugins/vikalp/data.json": file("old") });
-    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const repo = client(api), parent = await repo.head();
     await assert.rejects(repo.prepare(parent, {
       ".gitignore": file(".obsidian/plugins/vikalp/data.json\n"),
       ".obsidian/plugins/vikalp/data.json": changed,
@@ -801,7 +800,7 @@ test("ambiguous candidate ignore text is rejected before any secret blob POST", 
   const path = ".obsidian/plugins/custom/data.json";
   for (const pattern of [`${path}\n\ufeff!${path}\n`, `${path}\0garbage\n`]) {
     const api = new FakeGitHub({ ".gitignore": file(""), [path]: file("tracked baseline"), "note.md": file("safe") });
-    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const repo = client(api), parent = await repo.head();
     await assert.rejects(repo.prepare(parent, { ".gitignore": file(pattern), [path]: file("synthetic private change") }, "unsafe policy", L), ScopeError);
     assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
     assert.equal(api.head, parent.oid);
@@ -812,7 +811,7 @@ test("an ambiguous committed ignore policy blocks capture before hidden blob rea
   const path = ".obsidian/plugins/custom/data.json", secret = file("synthetic private bytes");
   for (const pattern of [`${path}\n\ufeff!${path}\n`, `${path}\0garbage\n`]) {
     const api = new FakeGitHub({ ".gitignore": file(pattern), [path]: secret, "note.md": file("safe") });
-    const repo = client(api, undefined, INSTALLATION, "config/1");
+    const repo = client(api);
     await assert.rejects(repo.head(), ScopeError);
     assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
     assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
@@ -828,7 +827,7 @@ test("included paths and ancestors cannot alias ignored paths in a verified tree
   for (const [excluded, included] of cases) {
     const secret = file("synthetic excluded bytes");
     const api = new FakeGitHub({ ".gitignore": file(`${excluded}\n`), [excluded]: secret, [included]: file("included") });
-    const repo = client(api, undefined, INSTALLATION, "config/1");
+    const repo = client(api);
     await assert.rejects(repo.head(), /collision/);
     assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0,
       `excluded bytes were read for ${excluded}`);
@@ -844,7 +843,7 @@ test("proposed full namespace rejects an included alias before any blob POST", a
   for (const [excluded, added] of cases) {
     const secret = file("synthetic excluded bytes");
     const api = new FakeGitHub({ ".gitignore": file(`${excluded}\n`), [excluded]: secret, "note.md": file("safe") });
-    const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const repo = client(api), parent = await repo.head();
     await assert.rejects(repo.prepare(parent, { [added]: file("new included bytes") }, "alias", L), /collision/);
     assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
     assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
@@ -856,7 +855,7 @@ test("a candidate ignore edit that unignores aliases fails before every POST", a
   const first = ".obsidian/plugins/custom/Data.json", second = ".obsidian/plugins/custom/data.json";
   const privateA = file("synthetic private A"), privateB = file("synthetic private B");
   const api = new FakeGitHub({ ".gitignore": file(`${first}\n${second}\n`), [first]: privateA, [second]: privateB, "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  const repo = client(api), parent = await repo.head();
   await assert.rejects(repo.prepare(parent, { ".gitignore": file("") }, "unignore aliases", L), /collision/);
   assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
   for (const secret of [privateA, privateB])
@@ -871,7 +870,7 @@ test("removed parent directories do not block case and Unicode directory renames
   ] as const;
   for (const [from, to] of cases) {
     const original = file("unchanged");
-    const api = new FakeGitHub({ [from]: original }), repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const api = new FakeGitHub({ [from]: original }), repo = client(api), parent = await repo.head();
     const candidate = await repo.prepare(parent, { [from]: null, [to]: original }, "rename", L);
     assert.deepEqual(Object.keys(candidate.files), [to]);
     assert.deepEqual(Array.from(api.files.get(candidate.treeOid)!.keys()), [to]);
@@ -892,7 +891,7 @@ test("a genuinely empty preserved tree still blocks an included directory alias"
   ] });
   api.files.set(rootTree, new Map([["note.md", note]]));
   api.commits.get(api.head)!.tree.sha = rootTree;
-  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  const repo = client(api), parent = await repo.head();
   await assert.rejects(repo.prepare(parent, { "empty/new.md": file("new") }, "unsafe alias", L), /collision/);
   assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
 });
@@ -901,12 +900,12 @@ test("canonical aliases of root and nested ignore controls block GitHub reads an
   const hidden = ".obsidian/plugins/custom/data.json", secret = file("synthetic private bytes");
   for (const control of [".GITIGNORE", ".obsidian/plugins/custom/.GITIGNORE"]) {
     const api = new FakeGitHub({ [control]: file("data.json\n"), [hidden]: secret });
-    await assert.rejects(client(api, undefined, INSTALLATION, "config/1").head(), ScopeError);
+    await assert.rejects(client(api).head(), ScopeError);
     assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
     assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
 
     const clean = new FakeGitHub({ "note.md": file("safe") });
-    const repo = client(clean, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+    const repo = client(clean), parent = await repo.head();
     await assert.rejects(repo.prepare(parent, { [control]: file("data.json\n") }, "control alias", L), ScopeError);
     assert.equal(clean.requests.filter(request => request.method === "POST").length, 0);
   }
@@ -915,7 +914,7 @@ test("canonical aliases of root and nested ignore controls block GitHub reads an
 test("an excluded-only alias namespace remains readable without downloading excluded bytes", async () => {
   const first = ".obsidian/plugins/custom/Data.json", second = ".obsidian/plugins/custom/data.json";
   const api = new FakeGitHub({ ".gitignore": file(`${first}\n${second}\n`), [first]: file("first private"), [second]: file("second private"), "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1"), snapshot = await repo.head();
+  const repo = client(api), snapshot = await repo.head();
   assert.deepEqual(Object.keys(snapshot.files).sort(), [".gitignore", "note.md"]);
   const candidate = await repo.prepare(snapshot, { "note.md": file("changed") }, "visible edit", L);
   assert.equal(candidate.files["note.md"].oid, file("changed").oid);
@@ -928,7 +927,7 @@ test("an excluded-only alias namespace remains readable without downloading excl
 test("a canonical self-plugin alias is excluded even when no second spelling exists", async () => {
   const protectedPath = ".obsidian/plugins/GITHUB-VAULT-SYNC/data.json", secret = file("synthetic device binding");
   const api = new FakeGitHub({ [protectedPath]: secret, "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1");
+  const repo = client(api);
   const snapshot = await repo.head();
   assert.equal(snapshot.files[protectedPath], undefined);
   assert.equal(api.requests.filter(request => request.method === "GET" && request.url.endsWith(`/git/blobs/${secret.oid}`)).length, 0);
@@ -945,7 +944,7 @@ test("denied and ignored tracked paths cannot be edited, including competing syn
     ".obsidian/workspace.json": file("live workspace"),
     "note.md": file("safe"),
   });
-  const repo = client(api, undefined, INSTALLATION, "config/1"), parent = await repo.head();
+  const repo = client(api), parent = await repo.head();
   for (const path of [".obsidian/plugins/vikalp/data.json", ".obsidian/plugins/obsidian-git/main.js", ".obsidian/plugins/github-vault-sync/data.json", ".obsidian/workspace.json"]) {
     await assert.rejects(repo.prepare(parent, { [path]: null }, "forbidden", L), /outside parent commit scope/);
   }
@@ -956,7 +955,7 @@ test("different commits retain independent ignore policies and repeat reads reus
   const api = new FakeGitHub({ ".gitignore": file(""), "note.md": file("one"), ".obsidian/config.json": file("config") });
   const first = api.head;
   const second = api.addCommit({ ".gitignore": file(".obsidian/config.json\n"), "note.md": file("two"), ".obsidian/config.json": file("config") }, first);
-  const repo = client(api, undefined, INSTALLATION, "config/1");
+  const repo = client(api);
   assert.ok((await repo.scopeFor(first)).includes(".obsidian/config.json"));
   assert.equal((await repo.scopeFor(second)).includes(".obsidian/config.json"), false);
   assert.ok((await repo.scopeFor(first)).includes(".obsidian/config.json"));
@@ -970,7 +969,7 @@ test("different commits retain independent ignore policies and repeat reads reus
 
 test("nested ignore rules block config activation even inside denied directories", async () => {
   const api = new FakeGitHub({ ".gitignore": file(""), ".obsidian/plugins/obsidian-git/.gitignore": file("secret\n"), "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1");
+  const repo = client(api);
   await assert.rejects(repo.head(), /Nested .gitignore is unsupported/);
   await assert.rejects(repo.scopeFor(api.head), /Nested .gitignore is unsupported/);
   assert.equal(api.requests.filter(request => request.method === "POST").length, 0);
@@ -979,14 +978,14 @@ test("nested ignore rules block config activation even inside denied directories
 test("eligible hidden LFS pointers and size limits block config snapshots", async () => {
   for (const hidden of [file("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 9\n"), file(Buffer.alloc(8 * 1024 * 1024 + 1))]) {
     const api = new FakeGitHub({ ".obsidian/plugins/vikalp/main.js": hidden, "note.md": file("safe") });
-    await assert.rejects(client(api, undefined, INSTALLATION, "config/1").head(), /LFS|size limit/);
+    await assert.rejects(client(api).head(), /LFS|size limit/);
   }
 });
 
 test("hidden symlinks block when eligible and remain untouched when ignored", async () => {
   const symlink = { ...file("target"), mode: "120000" } as unknown as Entry;
   const initial = { ".gitignore": file(""), ".obsidian/plugins/vikalp/main.js": symlink, "note.md": file("safe") };
-  const api = new FakeGitHub(initial), repo = client(api, undefined, INSTALLATION, "config/1");
+  const api = new FakeGitHub(initial), repo = client(api);
   await assert.rejects(repo.head(), /Symlink or submodule unsupported/);
   const ignored = api.addCommit({ ...initial, ".gitignore": file(".obsidian/plugins/vikalp/main.js\n") }, api.head);
   const snapshot = await repo.readCommit(ignored);
@@ -996,7 +995,7 @@ test("hidden symlinks block when eligible and remain untouched when ignored", as
 
 test("history accepts only paths in the selected commit's scope, including tracked hidden paths", async () => {
   const api = new FakeGitHub({ ".gitignore": file(".obsidian/plugins/vikalp/data.json\n"), ".obsidian/appearance.json": file("{}"), ".obsidian/plugins/vikalp/data.json": file("ignored"), "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1");
+  const repo = client(api);
   api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo/commits" ? response([]) : undefined;
   const history = await repo.history({ path: ".obsidian/appearance.json", at: api.head });
   assert.equal(history.at, api.head);
@@ -1008,23 +1007,12 @@ test("history accepts only paths in the selected commit's scope, including track
 
 test("explicit configuration directory is applied to commit scope", async () => {
   const api = new FakeGitHub({ ".gitignore": file(".vault/private.json\n"), ".vault/settings.json": file("sync"), ".vault/private.json": file("ignored"), ".obsidian/settings.json": file("other config"), "note.md": file("safe") });
-  const repo = client(api, undefined, INSTALLATION, "config/1", ".vault");
+  const repo = client(api, undefined, INSTALLATION, ".vault");
   const head = await repo.head();
   assert.ok(head.files[".vault/settings.json"]);
   assert.equal(head.files[".vault/private.json"], undefined);
   assert.equal(head.files[".obsidian/settings.json"], undefined);
   assert.equal((await repo.scopeFor(head.oid)).rules.configDir, ".vault");
-});
-
-test("config client reads an ignored visible historical checkpoint under visible-only rules", async () => {
-  const ignored = file("visible checkpoint bytes");
-  const api = new FakeGitHub({ ".gitignore": file("drafts/\n"), "drafts/x.md": ignored, "note.md": file("base") });
-  const repo = client(api, undefined, INSTALLATION, "config/1");
-  assert.equal((await repo.readCommit(api.head)).files["drafts/x.md"], undefined);
-  const checkpoint = await repo.readCommitForScope(api.head, "visible-only");
-  assert.equal(checkpoint.files["drafts/x.md"]?.oid, ignored.oid);
-  assert.equal(checkpoint.files[".gitignore"], undefined);
-  assert.equal(checkpoint.treeOid, (await repo.readCommit(api.head)).treeOid);
 });
 
 test("sync history lists all files and pins pagination without a path filter", async () => {
@@ -1080,7 +1068,7 @@ function localCopy(snapshot: Snapshot): Map<string, Uint8Array> {
   return new Map(Object.entries(snapshot).map(([path, entry]) => [path, Buffer.from(entry.data, "base64")]));
 }
 test("an empty vault's first read is one zipball of the pinned commit, verified against the tree", async () => {
-  const initial = { ...vault(60), ".obsidian/app.json": file("{}") };
+  const initial = { ...vault(60), ".obsidian/workspace.json": file("{}") };
   const api = new ArchiveGitHub(initial), progress: [number, number][] = [];
   const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, readLocal: async () => null, onReadProgress: (done, total) => { progress.push([done, total]); } });
   const head = await repo.head();
@@ -1206,7 +1194,7 @@ test("a failed read publishes no partial snapshot, and readLocal failures fail t
 test("the root .gitignore establishing scope is read on its own before the archive", async () => {
   const initial: Snapshot = { ...vault(40), ".gitignore": file("private/\n"), "private/secret.md": file("x"), ".obsidian/app.json": file("{}") };
   const api = new ArchiveGitHub(initial);
-  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION, scopeRules: "config/1" });
+  const repo = new GitHubRepository({ owner: "owner", name: "repo", branch: "main", transport: api, token: async () => "t", installation: INSTALLATION });
   const head = await repo.head();
   assert.equal(head.files["private/secret.md"], undefined);
   assert.deepEqual(head.files["notes/3.md"], initial["notes/3.md"]);

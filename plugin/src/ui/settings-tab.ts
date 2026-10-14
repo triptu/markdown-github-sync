@@ -4,13 +4,11 @@ import type GitVaultSync from "../main";
 import type { SyncSession } from "../git-sync/session";
 import type { RepositoryIdentity } from "../git-sync/contracts";
 import type { Settings } from "../settings";
-import { tokenCreationUrl } from "../git-setup";
 import { formatCommitMessage } from "../commit-message";
-import { failure, plural, parseRepository, describeActivity, type AccessTarget } from "./copy";
+import { failure, plural, parseRepository, describeActivity, tokenCreationUrl, type AccessTarget } from "./copy";
 import { EnrollmentModal } from "./enrollment-modal";
 import { SyncHistoryModal, RestoreModal } from "./history-modals";
 import { ConfigurationModal } from "./configuration-modal";
-import { ConfirmModal } from "./confirm-modal";
 import { renderDecisions } from "./changes-modal";
 
 /** Default device name for commits, after the platform. */
@@ -194,16 +192,6 @@ export class GitSettings extends PluginSettingTab {
     const draft = { ...this.plugin.settings };
     new Setting(el).setName("Connect to GitHub").setHeading()
       .setDesc("Your notes are saved as commits in a private GitHub repository you own.");
-    // Detection only fills blanks; anything already saved or typed wins.
-    let detected = false;
-    if (!draft.owner || !draft.repository) {
-      const found = await this.plugin.detectRepository().catch(() => null);
-      if (generation !== this.generation) return;
-      if (found) {
-        draft.owner = found.owner; draft.repository = found.repository; draft.branch = found.branch;
-        detected = true;
-      }
-    }
     let repository = draft.owner && draft.repository ? `${draft.owner}/${draft.repository}` : "";
     const target = (): AccessTarget | null => {
       const parsed = parseRepository(repository);
@@ -218,7 +206,7 @@ export class GitSettings extends PluginSettingTab {
     const recheck = debounce(() => { void check(); }, 800, true);
     const edited = () => { access.clear(); recheck(); };
     new Setting(el).setName("Repository")
-      .setDesc(detected ? "Found in this vault's Git folder. Edit if it's wrong." : "Owner and name, or paste the repository link.")
+      .setDesc("Owner and name, or paste the repository link.")
       .addText(text => text.setValue(repository).setPlaceholder("username/notes")
         .onChange(value => { repository = value; edited(); }));
     new Setting(el).setName("Branch")
@@ -232,13 +220,6 @@ export class GitSettings extends PluginSettingTab {
       committed: () => { recheck.cancel(); void check(); },
     }, creationUrl);
     void check();
-    new Setting(el).setName("Sync themes, hotkeys and plugins")
-      .setDesc(this.plugin.session === null
-        ? "Include Obsidian settings on this device. Notes and attachments always sync."
-        : "Include Obsidian settings on this device. Notes and attachments always sync. Already chosen for this vault; change it after syncing starts.")
-      .addToggle(toggle => toggle.setValue(draft.configuration ?? false)
-        .setDisabled(this.plugin.session !== null)
-        .onChange(value => { draft.configuration = value; }));
     const commits = el.createEl("details", { cls: "git-sync-advanced" });
     commits.createEl("summary", { text: "Commit messages" });
     renderCommitSettings(commits, draft, () => {});
@@ -280,12 +261,12 @@ export class GitSettings extends PluginSettingTab {
   private async review(button: { setDisabled(disabled: boolean): unknown }): Promise<void> {
     button.setDisabled(true);
     try {
-      const keepsGit = await this.plugin.checkSetup();
+      await this.plugin.assertSingleWriter();
       const session = this.plugin.session;
       if (!session) throw new Error(this.plugin.statusText);
       const preview = await session.previewEnrollment();
       if (preview.kind === "corrupt") throw new Error(preview.detail);
-      if (preview.kind === "preview") new EnrollmentModal(this.app, this.plugin, preview, keepsGit, () => this.refresh()).open();
+      if (preview.kind === "preview") new EnrollmentModal(this.app, this.plugin, preview, () => this.refresh()).open();
       else this.refresh();
     } catch (error) {
       new Notice(failure(error), 12000);
@@ -373,29 +354,11 @@ export class GitSettings extends PluginSettingTab {
   private async describeConfiguration(setting: Setting, generation: number): Promise<void> {
     const listing = await this.plugin.session?.listConfiguration().catch(() => null);
     if (generation !== this.generation || listing?.kind !== "configuration") { setting.settingEl.remove(); return; }
-    if (listing.rules === "config/1") {
-      const waiting = listing.deferred.length + listing.guarded.length + listing.unpublished.length;
-      setting.setDesc(waiting ? `${plural(waiting, "change")} waiting for your review.` : "Themes, hotkeys and plugins sync along with your notes.")
-        .addButton(button => {
-          button.setButtonText(waiting ? "Review" : "View").onClick(() => new ConfigurationModal(this.app, this.plugin).open());
-          if (waiting) button.setCta();
-        });
-      return;
-    }
-    setting.setDesc("Only notes and attachments sync. Turn on to include themes, hotkeys and plugins.")
-      .addButton(button => button.setButtonText("Turn on").onClick(async () => {
-        button.setDisabled(true);
-        try {
-          const upgrade = await this.plugin.previewConfigurationUpgrade();
-          new ConfirmModal(this.app, "Sync Obsidian settings too?",
-            "Sync pauses while you review what would change. Your notes stay as they are.",
-            async () => {
-              const preview = await upgrade.confirm();
-              if (preview?.kind !== "preview") throw new Error("Open the settings page to review changes.");
-              new EnrollmentModal(this.app, this.plugin, preview, false, () => this.refresh()).open();
-            }).open();
-        } catch (error) { new Notice(failure(error), 12000); }
-        finally { button.setDisabled(false); }
-      }));
+    const waiting = listing.deferred.length + listing.guarded.length + listing.unpublished.length;
+    setting.setDesc(waiting ? `${plural(waiting, "change")} waiting for your review.` : "Themes, hotkeys and plugins sync along with your notes.")
+      .addButton(button => {
+        button.setButtonText(waiting ? "Review" : "View").onClick(() => new ConfigurationModal(this.app, this.plugin).open());
+        if (waiting) button.setCta();
+      });
   }
 }

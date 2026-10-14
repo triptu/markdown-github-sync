@@ -101,7 +101,7 @@ export class ChangesModal extends Modal {
       if (status.pause) body.createEl("p", { text: status.pause.detail, cls: "mod-warning" });
       for (const error of status.nativeErrors)
         new Setting(body).setName(error.path ?? "Sync can't continue").setDesc(error.detail).settingEl.addClass("mod-warning");
-      if (status.phase === "publication-unknown")
+      if (status.pause?.reason === "ledger-diverged" || status.pause?.reason === "duplicate-installation")
         new Setting(body)
           .setName("Last upload wasn't confirmed")
           .setDesc("Uploads are on hold. Sync now asks GitHub again without uploading twice.")
@@ -109,8 +109,7 @@ export class ChangesModal extends Modal {
             b.setDisabled(true);
             try {
               const preview = await this.plugin.session?.previewPublicationRecovery();
-              if (preview?.kind === "reachable") { await this.plugin.syncNow(); await this.render(); }
-              else if (preview?.kind === "preview") new PublicationRecoveryModal(this.app, this.plugin, preview).open();
+              if (preview?.kind === "preview") new PublicationRecoveryModal(this.app, this.plugin, preview).open();
               else throw new Error("This can't be reviewed right now. Try again after the next sync.");
             } catch (error) { new Notice(failure(error), 12000); }
             finally { b.setDisabled(false); }
@@ -132,7 +131,7 @@ export class ChangesModal extends Modal {
           }));
       const configuration = await this.plugin.session?.listConfiguration().catch(() => null);
       if (!current()) return;
-      const waiting = configuration?.kind === "configuration" && configuration.rules === "config/1"
+      const waiting = configuration?.kind === "configuration"
         ? configuration.deferred.length + configuration.guarded.length + configuration.unpublished.length : 0;
       if (waiting)
         new Setting(body).setName("Obsidian settings").setDesc(`${plural(waiting, "change")} waiting for your review.`)

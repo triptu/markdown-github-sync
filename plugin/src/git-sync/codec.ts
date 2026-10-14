@@ -182,14 +182,12 @@ export function isValidPath(path: unknown): path is string {
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
-/**
- * V1 content scope excludes every hidden segment: `.git`, `.obsidian`
- * (configuration, plugin state, workspaces), `.trash` and other dot paths.
- */
+/** A hidden path: some segment starts with a dot (`.git`, `.obsidian`, `.trash`, ...). */
 export function isExcludedPath(path: string): boolean {
   return path.split("/").some((segment) => segment.startsWith("."));
 }
 
+/** A valid path with no hidden segment: an ordinary note or attachment. */
 export function isSyncablePath(path: unknown): path is string {
   return isValidPath(path) && !isExcludedPath(path);
 }
@@ -238,8 +236,8 @@ export async function verifyEntry(path: string, entry: unknown): Promise<Entry> 
   return trustVerifiedEntry(entry);
 }
 
-/** Validates structure and bytes, then membership in an explicit policy (legacy by default). */
-export async function verifySnapshot(snapshot: unknown, label: string, scope?: Pick<Scope, "includes">): Promise<Snapshot> {
+/** Validates structure and bytes, then membership in `scope`. */
+export async function verifySnapshot(snapshot: unknown, label: string, scope: Pick<Scope, "includes">): Promise<Snapshot> {
   if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
     throw new IntegrityError(`${label}: snapshot is not an object`);
   }
@@ -247,7 +245,7 @@ export async function verifySnapshot(snapshot: unknown, label: string, scope?: P
   let count = 0;
   for (const [path, entry] of Object.entries(snapshot)) {
     if (++count % 256 === 0) await yieldToHost();
-    if (!isValidPath(path) || !(scope ? scope.includes(path) : isSyncablePath(path))) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
+    if (!isValidPath(path) || !scope.includes(path)) throw new IntegrityError(`${label}: unsupported or out-of-scope path ${JSON.stringify(path)}`);
     verified[path] = await verifyEntry(`${label}: ${path}`, entry);
   }
   return verified;

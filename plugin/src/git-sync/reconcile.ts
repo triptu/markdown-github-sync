@@ -21,11 +21,7 @@ export type VersionConflictKind =
   | "content" // both sides edited, not safely mergeable
   | "add-add" // both sides created the path with different content
   | "local-deleted-remote-edited"
-  | "local-edited-remote-deleted"
-  /** Retired: emitted only by format /2 and parsed for migration. One-sided deletions are automatic. */
-  | "local-deletion"
-  /** Retired: see `local-deletion`. */
-  | "remote-deletion";
+  | "local-edited-remote-deleted";
 
 /** A decision tied to exact versions; `id` changes whenever any version changes. */
 export interface VersionConflict {
@@ -156,8 +152,6 @@ const CHOICES: Record<VersionConflictKind, ChoiceKind[]> = {
   "add-add": ["mine", "remote", "both", "edit"],
   "local-deleted-remote-edited": ["mine", "remote", "edit"],
   "local-edited-remote-deleted": ["mine", "remote", "edit"],
-  "local-deletion": ["mine", "remote"],
-  "remote-deletion": ["mine", "remote"],
 };
 
 export function choicesFor(kind: VersionConflictKind): ChoiceKind[] {

@@ -100,8 +100,8 @@ test("unknown held local bytes cannot reuse a mine choice as deletion", async ()
   assert.equal(entryText(plan.target["note.md"]!), "new", "other paths still progress");
 });
 
-// Changed guarantee (v3): one-sided deletions are automatic like edits; only
-// delete/edit and add/add remain decisions tied to exact versions.
+// One-sided deletions are automatic like edits; only delete/edit and add/add
+// are decisions tied to exact versions.
 test("one-sided deletions are automatic; delete/edit and add/add need a decision tied to exact versions", async () => {
   const base = await snapshot({ "gone-here.md": "x", "gone-there.md": "y", "del-edit.md": "1", "edit-del.md": "1" });
   const local = await snapshot({ "gone-there.md": "y", "edit-del.md": "2", "both.md": "mine" });
@@ -232,7 +232,7 @@ test("case-insensitive collisions are reported instead of materialized", async (
     remote: await snapshot({ "A.md": "x" }),
     decisions: {},
   });
-  // v3: the remote rename is automatic (delete + create).
+  // The remote rename is automatic (delete + create).
   assert.equal(renamed.kind, "ready");
   if (renamed.kind === "ready") assert.deepEqual(renamed.incoming.map((step) => [step.path, step.next ? "write" : "delete"]), [["a.md", "delete"], ["A.md", "write"]]);
 });

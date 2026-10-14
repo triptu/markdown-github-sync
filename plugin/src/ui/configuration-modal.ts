@@ -27,9 +27,6 @@ export class ConfigurationModal extends Modal {
       if (!current()) return;
       if (listing.kind !== "configuration" || !listing.deferred.length) loading.remove();
       if (listing.kind !== "configuration") throw new Error(listing.kind === "unenrolled" ? "Connect to GitHub first." : "Settings can't be checked right now. Try again after the next sync.");
-      if (listing.rules !== "config/1") {
-        el.createEl("p", { text: "Settings sync is off. Turn it on in GitHub Vault Sync settings." }); return;
-      }
       const incoming = el.createDiv();
       if (!listing.deferred.length && !listing.guarded.length && !listing.unpublished.length)
         el.createEl("p", { text: "Themes, hotkeys and plugins match your other devices. Nothing to review." });

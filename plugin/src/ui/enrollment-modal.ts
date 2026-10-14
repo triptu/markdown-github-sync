@@ -13,7 +13,6 @@ export class EnrollmentModal extends Modal {
     app: App,
     private plugin: GitVaultSync,
     private preview: EnrollmentPreview,
-    private keepsGit: boolean,
     private done?: () => void,
   ) {
     super(app);
@@ -29,8 +28,6 @@ export class EnrollmentModal extends Modal {
         ? `${plural(this.preview.unchanged, "file")} already match. Files changed in both places, and deletions found now, wait for your choice.`
         : `Everything already matches GitHub (${plural(this.preview.unchanged, "file")}).`,
     });
-    if (this.keepsGit)
-      el.createEl("p", { text: "Your notes stay here. Your previous Git setup will be kept locally for switching back. It won't receive new syncs." });
     for (const [action, name, description] of reviewGroups) {
       const paths = this.preview.items.filter(item => item.action === action).map(item => item.path);
       if (!paths.length) continue;
@@ -53,7 +50,7 @@ export class EnrollmentModal extends Modal {
             if (outcome?.kind === "stale") {
               this.close();
               new Notice("Files changed while you were reviewing. Here is the updated list.");
-              new EnrollmentModal(this.app, this.plugin, outcome.preview, this.keepsGit, this.done).open();
+              new EnrollmentModal(this.app, this.plugin, outcome.preview, this.done).open();
               return;
             }
             if (outcome?.kind !== "enrolled") throw new Error("Couldn't start syncing. Open the review again.");
@@ -99,7 +96,7 @@ export class PublicationRecoveryModal extends Modal {
         this.plugin.setStatus("Paused · review changes in settings");
         this.close();
         const enrollment = await this.plugin.session?.previewEnrollment();
-        if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment, false).open();
+        if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment).open();
         else new Notice("Open GitHub Vault Sync settings to review changes and resume.");
       }, "Save copies and review").open();
     }));

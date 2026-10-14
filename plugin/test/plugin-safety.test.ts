@@ -12,12 +12,10 @@ import type { GitHubRepository } from "../src/git-sync/github";
 import { MemoryRepository } from "./git-fakes";
 import { entryFromText, entryText } from "../src/git-sync/codec";
 import { NativeModeStore } from "../src/git-sync/native-modes";
+import { NativePathPolicy } from "../src/git-sync/native-path-policy";
+import { compileScope } from "../src/git-sync/scope";
 import type { GitObsidianVault } from "../src/git-sync/obsidian-vault";
 import { FileJournalStore, type JournalFiles } from "../src/git-sync/store";
-
-// V3 consent follows exact contents: notifications no longer revoke unchanged decisions.
-// One-sided renames sync automatically; a saved restore intent resumes after restart.
-// Native uncertainty now produces a per-file decision instead of a global mode error.
 
 const temporary = mkdtempSync(join(tmpdir(), "git-plugin-safety-"));
 const hostModule = join(temporary, "obsidian.cjs");
@@ -70,7 +68,7 @@ class Files implements JournalFiles {
   async list(path: string): ReturnType<JournalFiles["list"]> { return { files: [...this.values.keys()].filter(key => key.startsWith(path + "/") && !key.slice(path.length + 1).includes("/")), folders: [] }; }
 }
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
-const settings = { ...defaultSettings(), configuration: false, format: 2 as const, owner: "me", repository: "vault", branch: "main", secretId: "secret", deviceName: "Lab", automatic: false };
+const settings = { ...defaultSettings(), format: 2 as const, owner: "me", repository: "vault", branch: "main", secretId: "secret", deviceName: "Lab", automatic: false };
 function harness() {
   const docs = new Map<string, { file: InstanceType<typeof loaded.TFile>; data: Uint8Array }>();
   const local = new Map<string, unknown>(), files = new Files();
@@ -308,9 +306,9 @@ test("a post-crash edit with ambiguous mode is held instead of published with a 
 test("new files named like Object prototype keys capture exact bytes with default logical modes", async () => {
   const host = harness();
   const modes = await NativeModeStore.open(new FileJournalStore(host.files, "12345678-1234-1234-1234-123456789abc", "modes"), Object.create(null));
-  const vault = new loaded.GitObsidianVault(host.app as unknown as App, modes);
+  const vault = new loaded.GitObsidianVault(host.app as unknown as App, await NativePathPolicy.forConfig(".obsidian"), modes);
   for (const name of ["__proto__", "constructor", "toString"]) host.put(name, name + "\n");
-  const captured = await vault.capture();
+  const captured = await vault.capture(await compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: null }, null));
   for (const name of ["__proto__", "constructor", "toString"]) {
     assert.equal(entryText(captured[name]), name + "\n"); assert.equal(captured[name].mode, "100644");
   }
@@ -477,71 +475,17 @@ test("the first interrupted-write decision applies without a second review", asy
 });
 
 
-test("configuration migration resumes fresh enrollment with the bound native policy across reload", async () => {
-  const { repo, host, plugin } = await setup();
-  assert.equal(loaded.options().scopeRules, "visible-only");
-  repo.scopeRules = "config/1";
-  const upgrade = await plugin.previewConfigurationUpgrade();
-  assert.equal(loaded.options().scopeRules, "config/1");
-  assert.equal((await upgrade.confirm())?.kind, "preview");
-  plugin.onunload();
-  const next = host.create(true);
-  await next.initialize();
-  assert.equal(reloaded.options().scopeRules, "config/1");
-  const resumed = await next.session!.previewEnrollment();
-  assert.equal(resumed.kind, "preview");
-  if (resumed.kind !== "preview") throw Error("missing resumed enrollment");
-  assert.equal((await next.session!.enroll({ token: resumed.token })).kind, "enrolled");
-  const listing = await next.session!.listConfiguration();
-  assert.equal(listing.kind, "configuration");
-  if (listing.kind !== "configuration") throw Error("missing listing");
-  assert.equal(listing.rules, "config/1");
-  assert.equal(new TextDecoder().decode(host.docs.get("a.md")!.data), "base\n");
-});
-
-test("a configuration migration preview cannot authorize a replacement plugin instance", async () => {
-  const { repo, host, plugin } = await setup();
-  repo.scopeRules = "config/1";
-  const upgrade = await plugin.previewConfigurationUpgrade();
-  plugin.onunload();
-  const next = host.create(true);
-  await next.initialize();
-  assert.equal(reloaded.options().scopeRules, "visible-only");
-  await assert.rejects(upgrade.confirm(), /retired/);
-  const listing = await next.session!.listConfiguration();
-  assert.equal(listing.kind, "configuration");
-  if (listing.kind !== "configuration") throw Error("missing listing");
-  assert.equal(listing.rules, "visible-only");
-});
-
-test("configuration inventory failures leave legacy enrollment usable without a durable migration pause", async () => {
-  const { repo, host, plugin } = await setup();
-  await host.files.write(".obsidian/plugins/example/.gitignore", "cache/\n");
-  repo.scopeRules = "config/1";
-  await assert.rejects(plugin.previewConfigurationUpgrade(), /Nested .gitignore/);
-  assert.equal((await plugin.session!.sync()).kind, "up-to-date");
-  plugin.onunload();
-  const next = host.create(true);
-  await next.initialize();
-  assert.equal(reloaded.options().scopeRules, "visible-only");
-  assert.equal((await next.session!.sync()).kind, "up-to-date");
-  assert.equal(await host.files.read(".obsidian/plugins/example/.gitignore"), "cache/\n");
-});
-
-test("a fresh configured vault enrolls directly with hidden local files and committed ignores", async () => {
+test("a fresh vault enrolls directly with hidden local files and committed ignores", async () => {
   const repo = await MemoryRepository.create({
     "a.md": await entryFromText("base\n"),
     ".gitignore": await entryFromText("private.md\n"),
     "private.md": await entryFromText("excluded remote file\n"),
   });
-  repo.scopeRules = "config/1";
   loaded.useRepository(repo);
   const host = harness();
   host.put(".obsidian/app.json", "{\"local\":true}");
   const plugin = host.create();
-  plugin.settings = { ...settings, configuration: true };
   await plugin.initialize();
-  assert.equal(loaded.options().scopeRules, "config/1");
   await enroll(plugin);
   assert.equal((await plugin.session!.status()).kind, "enrolled");
   assert.equal(host.docs.has("private.md"), false);
@@ -549,72 +493,29 @@ test("a fresh configured vault enrolls directly with hidden local files and comm
   const listing = await plugin.session!.listConfiguration();
   assert.equal(listing.kind, "configuration");
   if (listing.kind !== "configuration") throw Error("missing listing");
-  assert.equal(listing.rules, "config/1");
   assert.ok(listing.unpublished.some(file => file.path === ".obsidian/app.json"));
-  await assert.rejects(plugin.previewConfigurationUpgrade(), /already on/);
 });
 
-test("startup failure cannot bypass the durable initial scope binding", async () => {
-  loaded.useRepository(await MemoryRepository.create({ "a.md": await entryFromText("base\n") }));
-  const host = harness();
-  const first = host.create();
-  await first.initialize();
-  first.onunload();
-  const secrets = host.app.secretStorage;
-  Reflect.deleteProperty(host.app, "secretStorage");
-  const next = host.create(true);
-  await assert.rejects(next.initialize(), /secret storage/);
-  await assert.rejects(next.saveConfiguration({ ...settings, configuration: true }), /Settings sync was already chosen/);
-  assert.equal(Boolean(next.settings.configuration), false);
-  host.app.secretStorage = secrets;
-  await next.initialize();
-  assert.equal((await next.session!.previewEnrollment()).kind, "preview");
-});
-
-test("existing Git vault can preview setup without moving anything; stale confirmation cannot archive Git", async () => {
-  const repo = await MemoryRepository.create({ "a.md": await entryFromText("base") }); loaded.useRepository(repo);
-  const host = harness(), plugin = host.create();
-  host.files.folders.add(".git"); host.files.values.set(".git/HEAD", "ref: refs/heads/main\n");
-  await plugin.initialize();
-  const before = [...host.files.writes];
-  assert.equal(await plugin.checkSetup(), true);
-  assert.deepEqual(host.files.writes, before);
-  const result = await plugin.startSyncing("stale-token");
-  assert.equal(result.kind, "stale");
-  assert.equal(await host.files.exists(".git"), true);
-  await assert.rejects(plugin.assertSingleWriter(), /Finish connecting/);
-});
-
-test("setup detects an enabled old sync plugin before archiving Git", async () => {
-  const host = harness(), plugin = host.create();
-  host.files.folders.add(".git");
-  host.files.values.set(".obsidian/community-plugins.json", JSON.stringify(["obsidian-git"]));
-  await assert.rejects(plugin.checkSetup(), /Turn off the other sync plugin/);
-  assert.equal(await host.files.exists(".git"), true);
-  assert.deepEqual(host.files.writes, []);
-});
-
-test("Start syncing adopts an existing vault after review, preserving Git metadata and notes", async () => {
+test("a vault with a .git folder enrolls and syncs, leaving .git untouched", async () => {
   const repo = await MemoryRepository.create({ "a.md": await entryFromText("base") }); loaded.useRepository(repo);
   const host = harness(), plugin = host.create(); host.put("a.md", "base");
   host.files.folders.add(".git"); host.files.values.set(".git/HEAD", "ref: refs/heads/main\n");
-  const rename = host.app.vault.adapter.rename.bind(host.app.vault.adapter);
-  host.app.vault.adapter.rename = async (from, to) => {
-    if (from !== ".git") return rename(from, to);
-    host.files.folders.delete(from); host.files.folders.add(to);
-    for (const [name, data] of [...host.files.values]) if (name.startsWith(from + "/")) {
-      host.files.values.set(to + name.slice(from.length), data); host.files.values.delete(name);
-    }
-  };
   await plugin.initialize();
   const preview = await plugin.session!.previewEnrollment();
   if (preview.kind !== "preview") throw Error("Expected setup preview");
   assert.equal((await plugin.startSyncing(preview.token)).kind, "enrolled");
-  assert.equal(await host.files.exists(".git"), false);
-  const kept = [...host.files.values].find(([path]) => path.endsWith("/dot-git/HEAD"));
-  assert.equal(kept?.[1], "ref: refs/heads/main\n");
-  assert.equal(new TextDecoder().decode(host.docs.get("a.md")?.data), "base");
-  await plugin.assertSingleWriter();
+  host.put("a.md", "edited");
+  await plugin.syncOnce();
+  assert.equal(entryText(repo.headFiles()["a.md"]), "edited");
+  assert.equal(await host.files.read(".git/HEAD"), "ref: refs/heads/main\n");
+  assert.equal(repo.headFiles()[".git/HEAD"], undefined);
+});
+
+test("setup and sync refuse while another sync plugin is enabled", async () => {
+  const host = harness(), plugin = host.create();
+  host.files.values.set(".obsidian/community-plugins.json", JSON.stringify(["obsidian-git"]));
+  await assert.rejects(plugin.assertSingleWriter(), /Turn off the other sync plugin/);
+  assert.deepEqual(host.files.writes, []);
 });
 
 function accessHost() {

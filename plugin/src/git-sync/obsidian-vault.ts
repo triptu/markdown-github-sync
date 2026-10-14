@@ -1,10 +1,10 @@
 import { App, FileView, TFile } from "obsidian";
-import { decodeBase64, entryFromBytes, hashBlob, isSyncablePath, isValidPath, verifyEntry, withMode, yieldToHost } from "./codec";
+import { decodeBase64, entryFromBytes, hashBlob, isValidPath, verifyEntry, withMode, yieldToHost } from "./codec";
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
 import { HiddenConfigPort, racyWindowMs, sameScanKey, scanKey, type ScanCache } from "./hidden-config";
-import { assertLocalNamespace, inventoryLocal, NativePathPolicy } from "./native-path-policy";
+import { assertLocalNamespace, inventoryLocal, type NativePathPolicy } from "./native-path-policy";
 import { assertNoNestedGitignore, type Scope } from "./scope";
 
 export interface RecoveryAuthorization { replay: string[]; cancel: string[]; released?: string[] }
@@ -40,7 +40,7 @@ class OversizeReadError extends Error {
   constructor(readonly path: string) { super(`File exceeds 8 MiB: ${path}`); }
 }
 function visible(path: string): boolean { return path.split("/").every(part => !part.startsWith(".")); }
-function safePath(path: string, policy: NativePathPolicy = NativePathPolicy.legacy): void {
+function safePath(path: string, policy: NativePathPolicy): void {
   if (!policy.allows(path) || path.split("/").some(part => !part || part === "." || part === ".."
     || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
     || /[\\:\x00-\x1f\x7f]/.test(path)) throw new Error(`Unsupported vault path: ${path}`);
@@ -76,21 +76,19 @@ export class GitObsidianVault implements LocalVault {
   now: () => number = () => Date.now();
   constructor(
     private app: App,
+    private nativePolicy: NativePathPolicy,
     private modes: NativeModes = { get: () => "100644", set: () => {} },
     private assertActive: () => void = () => {},
     private transactions?: NativeTransactionJournal,
     private hostLifetime: string | null = null,
-    private nativePolicy: NativePathPolicy = NativePathPolicy.legacy,
     private indexTick: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, indexWaitIntervalMs)),
   ) {
     if (transactions && !transactions.matchesPolicy(nativePolicy))
       throw new Error("Native transaction journal policy does not match the vault.");
-    if (nativePolicy.binding.rules === "config/1" && app.vault.configDir !== nativePolicy.binding.configDir)
-      throw new Error("Vault configuration directory does not match native policy.");
+    this.assertConfigDir();
   }
   private assertConfigDir(): void {
-    if (this.nativePolicy.binding.rules === "config/1" &&
-      this.app.vault.configDir !== this.nativePolicy.binding.configDir)
+    if (this.app.vault.configDir !== this.nativePolicy.binding.configDir)
       throw new Error("Vault configuration directory does not match native policy.");
   }
   private openView(path: string): boolean {
@@ -594,7 +592,7 @@ export class GitObsidianVault implements LocalVault {
     this.oversizeRecord(id);
     await this.acknowledgeRecovery([id]);
   }
-  async capture(scope?: Scope): Promise<Snapshot> {
+  async capture(scope: Scope): Promise<Snapshot> {
     const { files, unreadable } = await this.scan(scope);
     if (unreadable.length) throw new Error(`File exceeds 8 MiB: ${unreadable[0].path}`);
     return files;
@@ -629,53 +627,37 @@ export class GitObsidianVault implements LocalVault {
     }
   }
   /** Read-only survey; oversized visible files are reported without reading their bytes. */
-  async scan(scope?: Scope): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
+  async scan(scope: Scope): Promise<{ files: Snapshot; unreadable: UnreadableNativeFile[] }> {
     this.assertActive();
     this.assertConfigDir();
-    if (scope?.rules.rules === "config/1") {
-      if (this.nativePolicy.binding.rules !== "config/1" ||
-        scope.rules.configDir !== this.nativePolicy.binding.configDir ||
-        this.app.vault.configDir !== scope.rules.configDir)
-        throw new Error("Configuration scope does not match the native vault policy.");
-    }
-    const scoped = scope?.rules.rules === "config/1" ? scope : null;
+    if (scope.rules.configDir !== this.nativePolicy.binding.configDir)
+      throw new Error("Configuration scope does not match the native vault policy.");
     const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive, { pruneOpaque: true });
-    if (scoped) {
-      assertLocalNamespace(inventory, scoped);
-    }
+    assertLocalNamespace(inventory, scope);
     const visibleFiles = this.app.vault.getFiles().filter(file => visible(file.path)).map(file => ({
       path: file.path, size: file.stat.size, mtime: file.stat.mtime,
     }));
     const indexed = new Set(visibleFiles.map(file => file.path));
     for (const file of visibleFiles) {
-      if (scoped && !scoped.includes(file.path)) continue;
+      if (!scope.includes(file.path)) continue;
       if (!inventory.files.has(file.path))
         throw new Error(`Visible file missing from local inventory: ${file.path}`);
     }
     for (const path of inventory.files) {
-      if (!visible(path) || !(scoped ? scoped.includes(path) : isSyncablePath(path))) continue;
+      if (!visible(path) || !scope.includes(path)) continue;
       if (!indexed.has(path)) throw new Error(`Visible file missing from host index: ${path}`);
     }
-    let snapshot: Snapshot = Object.create(null);
-    let unreadable: UnreadableNativeFile[] = [];
-    let total = 0;
-    if (scoped) {
-      const hidden = await new HiddenConfigPort(this.app.vault.adapter, scoped.rules.configDir,
-        this.assertActive, this.hiddenScanCache, () => this.now()).scan(scoped, path => this.modes.get(path));
-      snapshot = hidden.files;
-      unreadable = hidden.unreadable;
-      total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
-        - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
-    }
+    const hidden = await new HiddenConfigPort(this.app.vault.adapter, scope.rules.configDir,
+      this.assertActive, this.hiddenScanCache, () => this.now()).scan(scope, path => this.modes.get(path));
+    const snapshot: Snapshot = hidden.files;
+    const unreadable: UnreadableNativeFile[] = hidden.unreadable;
+    let total = Object.values(snapshot).reduce((sum, entry) => sum + (entry.data.length / 4) * 3
+      - (entry.data.endsWith("==") ? 2 : entry.data.endsWith("=") ? 1 : 0), 0);
     const seen = new Set<string>();
     const targets: typeof visibleFiles = [];
     for (const file of visibleFiles) {
-      if (scoped && !scoped.includes(file.path)) continue;
-      safePath(file.path, scoped ? this.nativePolicy : NativePathPolicy.legacy);
-      // Two included files that differ only by case or Unicode form (possible
-      // on case-sensitive storage) are both captured: the engine reports them
-      // as a collision for the person to rename, and never writes either.
-      // Aliases involving excluded or protected names are refused above.
+      if (!scope.includes(file.path)) continue;
+      safePath(file.path, this.nativePolicy);
       targets.push(file);
     }
     // Stats are independent reads; overlap them instead of one round trip per file.
@@ -739,7 +721,6 @@ export class GitObsidianVault implements LocalVault {
   }
   private async assertWritableNamespace(path: string): Promise<void> {
     this.assertConfigDir();
-    if (this.nativePolicy.binding.rules !== "config/1") return;
     const inventory = await inventoryLocal(this.app.vault.adapter, this.assertActive, { pruneOpaque: true });
     assertLocalNamespace(inventory, this.nativePolicy, path);
   }

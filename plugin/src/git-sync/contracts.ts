@@ -1,4 +1,4 @@
-import type { Scope, ScopeRules } from "./scope";
+import type { Scope } from "./scope";
 
 export type FileMode = "100644" | "100755";
 export interface Entry {
@@ -44,12 +44,10 @@ export interface Repository {
    * one in place of a download only after verifying it hashes to the blob ID.
    */
   offerKnownBlobs?(blobs: Iterable<{ oid: string; data: string }>): void;
-  /** Read a historical checkpoint under its original policy during reviewed scope migration. */
-  readCommitForScope?(oid: string, rules: ScopeRules["rules"]): Promise<CommitSnapshot>;
-  /** Immutable policy for the complete tree at this commit; needed only in config/1 mode. */
-  scopeFor?(commit: string): Promise<Scope>;
-  /** Verified root ignore text at this commit; needed only in config/1 mode. */
-  readRootGitignore?(commit: string): Promise<string | null>;
+  /** Immutable policy for the complete tree at this commit. */
+  scopeFor(commit: string): Promise<Scope>;
+  /** Verified root ignore text at this commit. */
+  readRootGitignore(commit: string): Promise<string | null>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   /** `refs/vault-sync/devices/<installationId>`, written only by this installation. */
   ledgerRef(): string;
@@ -149,13 +147,13 @@ export interface UnreadableFile {
 /** Only `apply`, `recover` and `acknowledgeRecovery` mutate the vault or its native journal. */
 export interface LocalVault {
   /** Strictly read-only: never replays intents, persists evidence or reclaims hidden files. */
-  capture(scope?: Scope): Promise<Snapshot>;
+  capture(scope: Scope): Promise<Snapshot>;
   /**
    * Strictly read-only capture that reports unreadable visible files instead
    * of throwing; preferred over `capture` when present. An unreadable path is
    * never treated as deleted: the engine leaves it untouched on both sides.
    */
-  scan?(scope?: Scope): Promise<{ files: Snapshot; unreadable: UnreadableFile[] }>;
+  scan?(scope: Scope): Promise<{ files: Snapshot; unreadable: UnreadableFile[] }>;
   /** A pending intent at `path` whose (expected, next) differ from the call returns `blocked` without mutation. */
   apply(
     path: string,

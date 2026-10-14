@@ -8,6 +8,7 @@ import { NativePathPolicy } from "../src/git-sync/native-path-policy";
 import { entryFromBytes } from "../src/git-sync/codec";
 import type { JournalFiles } from "../src/git-sync/store";
 const installation = "12345678-1234-1234-1234-123456789abc";
+const open = async (files: JournalFiles) => NativeTransactionJournal.open(files, installation, await NativePathPolicy.forConfig(".obsidian"));
 async function filesystem() {
   const root = await mkdtemp(join(tmpdir(), "native-txn-fs-"));
   let loseAck = false;
@@ -35,28 +36,28 @@ async function filesystem() {
 test("real filesystem journal reopens a committed intent after lost acknowledgment", async () => {
   const fs = await filesystem();
   try {
-    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const journal = await open(fs.files);
     const expected = await entryFromBytes(new Uint8Array([0, 255, 1]));
     const next = await entryFromBytes(new Uint8Array([2, 254, 3]));
     fs.loseNextRecordAck();
     await assert.rejects(journal.begin("image.png", expected, next, "rename"), /lost acknowledgment/);
     assert.throws(() => journal.pending(), /persistence is uncertain/);
-    const reopened = await NativeTransactionJournal.open(fs.files, installation);
+    const reopened = await open(fs.files);
     const [intent] = reopened.pending();
     assert.equal(intent.path, "image.png");
     assert.equal(intent.expected, expected.oid);
     assert.equal(intent.next, next.oid);
     await reopened.finish("image.png");
-    assert.equal((await NativeTransactionJournal.open(fs.files, installation)).pending().length, 0);
+    assert.equal((await open(fs.files)).pending().length, 0);
   } finally { await fs.close(); }
 });
 test("real filesystem recovery evidence survives restart with exact bytes", async () => {
   const fs = await filesystem();
   try {
-    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const journal = await open(fs.files);
     const original = new Uint8Array([0, 255, 128, 13]);
-    const record = await journal.retainBytes(original, "image.png", "hidden/hold", "displaced", null, null);
-    const reopened = await NativeTransactionJournal.open(fs.files, installation);
+    const record = await journal.retainBytes(original, "image.png", "image.png", "displaced", null, null);
+    const reopened = await open(fs.files);
     const first = reopened.recoveries()[0];
     if (first.kind === "oversize") throw new Error("Expected byte evidence");
     assert.equal(first.kind, "displaced");
@@ -68,7 +69,7 @@ test("real filesystem recovery evidence survives restart with exact bytes", asyn
 test("duplicate native record sequence is rejected on open", async () => {
   const fs = await filesystem();
   try {
-    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const journal = await open(fs.files);
     const before = await entryFromBytes(new Uint8Array([1]));
     const after = await entryFromBytes(new Uint8Array([2]));
     await journal.begin("n.md", before, after, "text-process");
@@ -78,40 +79,21 @@ test("duplicate native record sequence is rejected on open", async () => {
     assert.ok(first);
     const duplicate = first.replace(/-[a-f0-9]{64}\.json$/, `-${"f".repeat(64)}.json`);
     await fs.files.write(duplicate, "{}");
-    await assert.rejects(NativeTransactionJournal.open(fs.files, installation), /Multiple journal writers/);
+    await assert.rejects(open(fs.files), /Multiple journal writers/);
   } finally { await fs.close(); }
 });
 test("lost cancellation acknowledgment reopens as cancelled, never replayable", async () => {
   const fs = await filesystem();
   try {
-    const journal = await NativeTransactionJournal.open(fs.files, installation);
+    const journal = await open(fs.files);
     const before = await entryFromBytes(new Uint8Array([1]));
     await journal.begin("n.md", before, null, "rename");
     fs.loseNextRecordAck();
     await assert.rejects(journal.cancel("n.md"), /lost acknowledgment/);
     assert.throws(() => journal.pending(), /persistence is uncertain/);
-    const reopened = await NativeTransactionJournal.open(fs.files, installation);
+    const reopened = await open(fs.files);
     assert.deepEqual(reopened.pendingIntents(), []);
     await reopened.cancel("n.md");
-    assert.deepEqual((await NativeTransactionJournal.open(fs.files, installation)).pendingIntents(), []);
-  } finally { await fs.close(); }
-});
-
-test("real filesystem policy upgrade preserves historical hold bytes and tracking", async () => {
-  const fs = await filesystem();
-  try {
-    const journal = await NativeTransactionJournal.open(fs.files, installation);
-    const before = await entryFromBytes(new Uint8Array([0, 255]));
-    const after = await entryFromBytes(new Uint8Array([1, 254]));
-    const intent = await journal.begin("note.bin", before, after, "rename");
-    assert.ok(intent.hold);
-    await fs.files.write(intent.hold, "held original");
-    await journal.finish("note.bin");
-    const policy = await NativePathPolicy.forConfig(".obsidian");
-    await journal.upgradePolicy(policy, async () => {});
-    const reopened = await NativeTransactionJournal.open(fs.files, installation, policy);
-    assert.ok(reopened.trackedPaths().includes(intent.hold));
-    assert.equal(await fs.files.read(intent.hold), "held original");
-    await assert.rejects(NativeTransactionJournal.open(fs.files, installation), /policy does not match/);
+    assert.deepEqual((await open(fs.files)).pendingIntents(), []);
   } finally { await fs.close(); }
 });

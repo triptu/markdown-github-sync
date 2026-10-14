@@ -43,7 +43,8 @@ const replayPending = async (vault: Adapter) => vault.recover({
   replay: (await vault.pendingIntents()).map(intent => intent.id), cancel: [],
 });
 async function harness(modes = new Map<string, "100644" | "100755">(),
-  nativePolicy = NativePathPolicy.legacy) {
+  configDir = ".obsidian") {
+  const nativePolicy = await NativePathPolicy.forConfig(configDir);
   const files = new Map<
     string,
     { file: InstanceType<typeof loaded.TFile>; data: Uint8Array }
@@ -172,11 +173,11 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
     policy = nativePolicy) => {
     const journal = await NativeTransactionJournal.open(journalFiles,
       "12345678-1234-1234-1234-123456789abc", policy);
-    const vault = new loaded.GitObsidianVault(app as unknown as App, {
+    const vault = new loaded.GitObsidianVault(app as unknown as App, policy, {
       get: path => modes.get(path) ?? "100644",
       set: (path, mode) => { modes.set(path, mode); },
       remove: path => { modes.delete(path); },
-    }, () => { if (!active) throw new Error("Native owner retired"); }, journal, hostLifetime, policy, () => indexTick());
+    }, () => { if (!active) throw new Error("Native owner retired"); }, journal, hostLifetime, () => indexTick());
     return { vault, journal };
   };
   const { vault } = await open();
@@ -214,9 +215,9 @@ async function harness(modes = new Map<string, "100644" | "100755">(),
 test("atomic process catches an edit between preflight and actual write", async () => {
   const h = await harness();
   h.put("a.md", bytes("base"));
-  const base = await h.vault.capture();
+  const base = await h.vault.capture(await configScope());
   h.put("a.md", bytes("remote"));
-  const remote = await h.vault.capture();
+  const remote = await h.vault.capture(await configScope());
   h.put("a.md", bytes("base"));
   h.setHook(() => h.put("a.md", bytes("new edit")));
   assert.equal(
@@ -239,9 +240,9 @@ test("a newer edit between the hash read and text read is never adopted as the r
 test("UTF8 BOM CRLF bytes preserved by atomic note replacement", async () => {
   const h = await harness();
   h.put("a.md", bytes("before"));
-  const base = await h.vault.capture();
+  const base = await h.vault.capture(await configScope());
   h.put("a.md", bytes("\uFEFFafter\r\n"));
-  const remote = await h.vault.capture();
+  const remote = await h.vault.capture(await configScope());
   h.put("a.md", bytes("before"));
   assert.equal(
     (await h.vault.apply("a.md", base["a.md"], remote["a.md"])).kind,
@@ -252,9 +253,9 @@ test("UTF8 BOM CRLF bytes preserved by atomic note replacement", async () => {
 test("binary replacement and deletion use exact staged rename", async () => {
   const h = await harness();
   h.put("a.png", new Uint8Array([0, 1, 2]));
-  const base = await h.vault.capture();
+  const base = await h.vault.capture(await configScope());
   h.put("a.png", new Uint8Array([3, 4, 5]));
-  const remote = await h.vault.capture();
+  const remote = await h.vault.capture(await configScope());
   h.put("a.png", new Uint8Array([0, 1, 2]));
   assert.equal(
     (await h.vault.apply("a.png", base["a.png"], remote["a.png"])).kind,
@@ -270,11 +271,11 @@ test("binary replacement and deletion use exact staged rename", async () => {
   assert.equal(h.files.has("a.png"), false);
   assert.equal(h.vault.nativeRecoveries().some(record => record.path === "a.png"), false);
 });
-test("creates preserve exact attachment bytes and skip hidden files", async () => {
+test("creates preserve exact attachment bytes and skip hidden files outside configuration", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 255, 128]));
-  h.put(".obsidian/private", bytes("secret"));
-  const captured = await h.vault.capture();
+  h.put(".private/secret", bytes("secret"));
+  const captured = await h.vault.capture(await configScope());
   assert.deepEqual(Object.keys(captured), ["a.bin"]);
   h.files.delete("a.bin");
   assert.equal(
@@ -311,7 +312,7 @@ test("visible create waits for the same TFile in lookup and getFiles before reti
   assert.equal((await h.vault.apply("seed.md", null, next)).kind, "applied");
   assert.equal(ticks, 2);
   assert.equal((await h.vault.pendingIntents()).length, 0);
-  assert.deepEqual((await h.vault.capture())["seed.md"], next);
+  assert.deepEqual((await h.vault.capture(await configScope()))["seed.md"], next);
 });
 
 test("matching path with a different host lookup object does not acknowledge create", async () => {
@@ -333,7 +334,7 @@ test("matching path with a different host lookup object does not acknowledge cre
 test("visible deletion waits for stale host index entry to disappear", async () => {
   const h = await harness();
   h.put("delete.bin", new Uint8Array([0, 255, 1]));
-  const expected = (await h.vault.capture())["delete.bin"];
+  const expected = (await h.vault.capture(await configScope()))["delete.bin"];
   h.setRenameHook((from) => {
     if (from === "delete.bin") h.addIndexGhost(from);
   });
@@ -364,7 +365,7 @@ test("replay also waits for host index before retiring an installed create", asy
   await replayPending(vault);
   assert.equal(ticks, 1);
   assert.equal((await vault.pendingIntents()).length, 0);
-  assert.deepEqual((await vault.capture())["seed.md"], next);
+  assert.deepEqual((await vault.capture(await configScope()))["seed.md"], next);
 });
 
 test("new visible edit during index wait keeps the native intent and edited bytes", async () => {
@@ -397,7 +398,7 @@ test("owner retirement during index wait leaves the attempted intent", async () 
 test("hold view opened during index wait blocks retirement", async () => {
   const h = await harness();
   h.put("image.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["image.bin"];
+  const expected = (await h.vault.capture(await configScope()))["image.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook((from, to) => {
     if (from.includes("/stage/") && to === "image.bin") h.excludeFromIndex(to);
@@ -416,7 +417,7 @@ test("hold view opened during index wait blocks retirement", async () => {
 test("hold edit during index wait cannot retire displaced bytes", async () => {
   const h = await harness();
   h.put("image.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["image.bin"];
+  const expected = (await h.vault.capture(await configScope()))["image.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook((from, to) => {
     if (from.includes("/stage/") && to === "image.bin") h.excludeFromIndex(to);
@@ -438,15 +439,15 @@ test("logical executable mode survives equal bytes and creates", async () => {
   const modes = new Map<string, "100644" | "100755">();
   const h = await harness(modes);
   h.put("tool.sh", bytes("echo ready\n"));
-  const original = (await h.vault.capture())["tool.sh"];
+  const original = (await h.vault.capture(await configScope()))["tool.sh"];
   const executable = { ...original, mode: "100755" as const };
   assert.equal((await h.vault.apply("tool.sh", original, executable)).kind, "applied");
-  assert.equal((await h.vault.capture())["tool.sh"].mode, "100755");
+  assert.equal((await h.vault.capture(await configScope()))["tool.sh"].mode, "100755");
   h.put("tool.sh", bytes("echo edited\n"));
-  assert.equal((await h.vault.capture())["tool.sh"].mode, "100755");
+  assert.equal((await h.vault.capture(await configScope()))["tool.sh"].mode, "100755");
   const restarted = await harness(modes);
   restarted.put("tool.sh", bytes("echo edited\n"));
-  assert.equal((await restarted.vault.capture())["tool.sh"].mode, "100755");
+  assert.equal((await restarted.vault.capture(await configScope()))["tool.sh"].mode, "100755");
   assert.equal((await restarted.vault.apply("new.sh", null, executable)).kind, "applied");
   assert.equal(restarted.files.has("new.sh"), true);
 });
@@ -454,9 +455,9 @@ test("logical executable mode survives equal bytes and creates", async () => {
 test("restart finishes a displace interrupted after rename", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 1, 2]));
-  const original = (await h.vault.capture())["a.bin"];
+  const original = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([3, 4, 5]));
-  const next = (await h.vault.capture())["a.bin"];
+  const next = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([0, 1, 2]));
   h.setRenameHook((from) => { if (from === "a.bin") throw new Error("simulated process death"); });
   await assert.rejects(h.vault.apply("a.bin", original, next), /simulated process death/);
@@ -472,9 +473,9 @@ test("late write through a retargeted TFile is captured from hold", async () => 
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
   const oldFile = h.files.get("a.bin")!.file;
-  const original = (await h.vault.capture())["a.bin"];
+  const original = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([1]));
-  const next = (await h.vault.capture())["a.bin"];
+  const next = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([0]));
   assert.equal((await h.vault.apply("a.bin", original, next)).kind, "applied");
   assert.ok(oldFile.path.includes("/hold/"));
@@ -487,9 +488,9 @@ test("late write through a retargeted TFile is captured from hold", async () => 
 test("restart after install recognizes exact next bytes", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const original = (await h.vault.capture())["a.bin"];
+  const original = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([1]));
-  const next = (await h.vault.capture())["a.bin"];
+  const next = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([0]));
   h.setRenameHook((from) => { if (from.includes("/stage/")) throw new Error("after install crash"); });
   await assert.rejects(h.vault.apply("a.bin", original, next), /after install crash/);
@@ -504,9 +505,9 @@ test("restart after install recognizes exact next bytes", async () => {
 test("recreated destination after displacement is not clobbered", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const original = (await h.vault.capture())["a.bin"];
+  const original = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([1]));
-  const next = (await h.vault.capture())["a.bin"];
+  const next = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([0]));
   h.setRenameHook((from) => { if (from === "a.bin") h.put("a.bin", new Uint8Array([9])); });
   assert.equal((await h.vault.apply("a.bin", original, next)).kind, "interrupted");
@@ -517,9 +518,9 @@ test("recreated destination after displacement is not clobbered", async () => {
 test("write through displaced TFile before install is retained as newer hold bytes", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const original = (await h.vault.capture())["a.bin"];
+  const original = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([1]));
-  const next = (await h.vault.capture())["a.bin"];
+  const next = (await h.vault.capture(await configScope()))["a.bin"];
   h.put("a.bin", new Uint8Array([0]));
   h.setRenameHook((from, to) => { if (from === "a.bin") h.put(to, new Uint8Array([9])); });
   assert.equal((await h.vault.apply("a.bin", original, next)).kind, "displaced");
@@ -546,7 +547,7 @@ test("open binary view blocks rename without retargeting its TFile", async () =>
   const h = await harness();
   h.put("image.bin", new Uint8Array([0, 1, 2]));
   const file = h.files.get("image.bin")!.file;
-  const expected = (await h.vault.capture())["image.bin"];
+  const expected = (await h.vault.capture(await configScope()))["image.bin"];
   const next = await entryFromBytes(new Uint8Array([3, 4, 5]));
   h.openView("image.bin");
   const result = await h.vault.apply("image.bin", expected, next);
@@ -562,7 +563,7 @@ test("open canvas uses process and keeps the original TFile path", async () => {
   const h = await harness();
   h.put("board.canvas", bytes('{"nodes":[]}'));
   const file = h.files.get("board.canvas")!.file;
-  const expected = (await h.vault.capture())["board.canvas"];
+  const expected = (await h.vault.capture(await configScope()))["board.canvas"];
   const next = await entryFromBytes(bytes('{"nodes":[1]}'));
   h.openView("board.canvas");
   assert.equal((await h.vault.apply("board.canvas", expected, next)).kind, "applied");
@@ -573,7 +574,7 @@ test("open canvas uses process and keeps the original TFile path", async () => {
 test("clean hold remains retained across host lifetimes without atomic remove-if-hash", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 1, 2]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([3, 4, 5]));
   assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -589,7 +590,7 @@ test("clean hold remains retained across host lifetimes without atomic remove-if
 test("oversized hidden hold is retained and does not block unrelated files", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 1, 2]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([3, 4, 5]));
   assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -605,7 +606,7 @@ test("oversized hidden hold is retained and does not block unrelated files", asy
 test("unattempted text intent treats a later user edit as changed, without an issue", async () => {
   const h = await harness();
   h.put("n.md", bytes("before"));
-  const expected = (await h.vault.capture())["n.md"];
+  const expected = (await h.vault.capture(await configScope()))["n.md"];
   const next = await entryFromBytes(bytes("after"));
   const { journal } = await h.open();
   await journal.begin("n.md", expected, next, "text-process");
@@ -618,7 +619,7 @@ test("unattempted text intent treats a later user edit as changed, without an is
 test("apply does not rescan old holds and recovery compacts native records", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 1]));
-  let expected = (await h.vault.capture())["a.bin"];
+  let expected = (await h.vault.capture(await configScope()))["a.bin"];
   for (let value = 1; value <= 12; value++) {
     const next = await entryFromBytes(new Uint8Array([value, value + 1]));
     assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
@@ -639,7 +640,7 @@ test("finished holds are not rehashed while unchanged and are reclaimed once the
   const h = await harness();
   h.vault.now = () => 1_000_000;
   h.put("a.bin", new Uint8Array([0, 1]));
-  let expected = (await h.vault.capture())["a.bin"];
+  let expected = (await h.vault.capture(await configScope()))["a.bin"];
   const preimages: string[] = [];
   for (let value = 1; value <= 4; value++) {
     const next = await entryFromBytes(new Uint8Array([value, value + 1]));
@@ -675,7 +676,7 @@ test("finished holds are not rehashed while unchanged and are reclaimed once the
 test("caught failure before text bytes change clears attempted marker", async () => {
   const h = await harness();
   h.put("n.md", bytes("before"));
-  const expected = (await h.vault.capture())["n.md"];
+  const expected = (await h.vault.capture(await configScope()))["n.md"];
   const next = await entryFromBytes(bytes("after"));
   h.setHook(() => { throw new Error("before write"); });
   await assert.rejects(h.vault.apply("n.md", expected, next), /before write/);
@@ -690,7 +691,7 @@ test("displaced write still applies the installed file mode", async () => {
   const modes = new Map<string, "100644" | "100755">();
   const h = await harness(modes);
   h.put("a.bin", new Uint8Array([0, 1]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([2, 3]), "100755");
   h.setRenameHook((from) => {
     if (from.includes("/stage/")) {
@@ -715,12 +716,12 @@ test("unsupported long path is rejected before native journal writes", async () 
 test("capture cannot replay an intent; a durable kept choice cancels it across restarts", async () => {
   const h = await harness();
   h.put("n.md", bytes("draft to keep"));
-  const expected = (await h.vault.capture())["n.md"];
+  const expected = (await h.vault.capture(await configScope()))["n.md"];
   const { journal } = await h.open();
   const intent = await journal.begin("n.md", expected, null, "rename");
   const current = (await h.open()).vault;
   const before = h.strings.size;
-  assert.equal((await current.capture())["n.md"].oid, expected.oid);
+  assert.equal((await current.capture(await configScope()))["n.md"].oid, expected.oid);
   assert.equal(h.strings.size, before, "capture must not persist recovery state");
   assert.deepEqual((await current.pendingIntents()).map(item => item.id), [intent.id]);
   assert.equal((await current.apply("n.md", expected, await entryFromBytes(bytes("different")))).kind, "blocked");
@@ -736,7 +737,7 @@ test("capture cannot replay an intent; a durable kept choice cancels it across r
 test("attempted displacement is cancelled backward after a crash", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0, 1]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([2, 3]));
   h.setRenameHook(from => { if (from === "a.bin") throw new Error("crash after displacement"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after displacement/);
@@ -752,7 +753,7 @@ test("attempted displacement is cancelled backward after a crash", async () => {
 test("cancel after installation retains the selected preimage as an issue", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook(from => { if (from.includes("/stage/")) throw new Error("crash after install"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after install/);
@@ -769,7 +770,7 @@ test("a view opened during marker persistence blocks the rename", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
   const file = h.files.get("a.bin")!.file;
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   let records = 0;
   h.setJournalWriteHook(path => {
     if (path.includes("/native/records/") && ++records === 2) h.openView("a.bin");
@@ -783,7 +784,7 @@ test("a view opened inside the queued rename is restored before installation", a
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
   const file = h.files.get("a.bin")!.file;
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   h.setQueuedRenameHook(async from => { if (from === "a.bin") h.openView("a.bin"); });
   assert.equal((await h.vault.apply("a.bin", expected, null)).kind, "blocked");
   assert.equal(file.path, "a.bin");
@@ -800,7 +801,7 @@ for (const choice of ["replay", "cancel"] as const) {
     const h = await harness();
     h.put("a.bin", new Uint8Array([0]));
     const oldFile = h.files.get("a.bin")!.file;
-    const expected = (await h.vault.capture())["a.bin"];
+    const expected = (await h.vault.capture(await configScope()))["a.bin"];
     const next = await entryFromBytes(new Uint8Array([1]));
     h.setQueuedRenameHook(async from => {
       if (from.includes("/stage/")) h.openView(oldFile.path);
@@ -839,7 +840,7 @@ for (const choice of ["replay", "cancel"] as const) {
 test("replay final fast path waits for an open hold before settling exact bytes", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook(from => { if (from.includes("/stage/")) throw new Error("crash after install"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after install/);
@@ -862,7 +863,7 @@ test("replay final fast path waits for an open hold before settling exact bytes"
 test("cancel rechecks a hold view opened while retaining recovery evidence", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook(from => { if (from.includes("/stage/")) throw new Error("crash after install"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after install/);
@@ -888,7 +889,7 @@ test("cancel rechecks a hold view opened while retaining recovery evidence", asy
 test("a late write during clean-hold inspection is retained and then raised", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -904,7 +905,7 @@ test("a late write during clean-hold inspection is retained and then raised", as
 test("oversize source can be inspected, exported, acknowledged and rediscovered after a new edit", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   await h.vault.apply("a.bin", expected, next);
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -934,7 +935,7 @@ test("oversize source can be inspected, exported, acknowledged and rediscovered 
   assert.deepEqual(await restarted.vault.exportOversize(record.id, output), { path: output, size: large.length });
   assert.deepEqual(h.files.get(output)!.data, large);
   assert.deepEqual(h.files.get(hold)!.data, large);
-  assert.deepEqual(Object.keys(await restarted.vault.capture()), ["a.bin"]);
+  assert.deepEqual(Object.keys(await restarted.vault.capture(await configScope())), ["a.bin"]);
   const storage = await restarted.vault.retainedHiddenSummary();
   assert.equal(storage.holds, 1);
   assert.ok(storage.bytes >= large.length);
@@ -951,7 +952,7 @@ test("oversize source can be inspected, exported, acknowledged and rediscovered 
 test("oversize arising in a pending intent can be acknowledged and cancelled without losing source", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook(from => { if (from === "a.bin") throw new Error("crash after hold"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after hold/);
@@ -982,27 +983,19 @@ test("read-only scan reports a visible oversized file while capturing unrelated 
   h.put("huge.bin", large);
   h.put("other.md", bytes("unrelated"));
   const before = h.strings.size;
-  const survey = await h.vault.scan();
+  const survey = await h.vault.scan(await configScope());
   assert.deepEqual(Object.keys(survey.files), ["other.md"]);
   assert.deepEqual(survey.unreadable.map(item => ({ path: item.path, size: item.size, reason: item.reason })),
     [{ path: "huge.bin", size: large.length, reason: "oversize" }]);
   assert.equal(h.strings.size, before);
   assert.deepEqual(h.files.get("huge.bin")!.data, large);
-  await assert.rejects(h.vault.capture(), /File exceeds 8 MiB/);
-});
-
-test("case-only visible aliases are both captured so the engine can report a collision", async () => {
-  const h = await harness();
-  h.put("Note.md", bytes("upper"));
-  h.put("note.md", bytes("lower"));
-  const survey = await h.vault.scan();
-  assert.deepEqual(Object.keys(survey.files).sort(), ["Note.md", "note.md"]);
+  await assert.rejects(h.vault.capture(await configScope()), /File exceeds 8 MiB/);
 });
 
 test("an oversized source changed before acknowledgement requires a fresh record", async () => {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   await h.vault.apply("a.bin", expected, next);
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -1026,7 +1019,7 @@ test("an oversized source changed before acknowledgement requires a fresh record
 async function interruptedBinaryIntent() {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   h.setRenameHook(from => { if (from === "a.bin") throw new Error("crash after displacement"); });
   await assert.rejects(h.vault.apply("a.bin", expected, next), /crash after displacement/);
@@ -1053,7 +1046,7 @@ for (const authorization of ["replay", "cancel"] as const) {
       assert.equal((await vault.pendingIntents())[0].id, intent.id);
       assert.deepEqual(h.files.get("a.bin")!.data, large);
       assert.deepEqual(h.files.get(hold)!.data, new Uint8Array([0]));
-      assert.equal((await vault.scan()).unreadable[0].path, "a.bin");
+      assert.equal((await vault.scan(await configScope())).unreadable[0].path, "a.bin");
       if (restart === 0) assert.equal((await vault.apply("other.bin", null, next)).kind, "applied");
     }
     h.setReadHook();
@@ -1109,7 +1102,7 @@ for (const authorization of ["replay", "cancel"] as const) {
 async function retainedOversizeSource() {
   const h = await harness();
   h.put("a.bin", new Uint8Array([0]));
-  const expected = (await h.vault.capture())["a.bin"];
+  const expected = (await h.vault.capture(await configScope()))["a.bin"];
   const next = await entryFromBytes(new Uint8Array([1]));
   assert.equal((await h.vault.apply("a.bin", expected, next)).kind, "applied");
   const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
@@ -1220,16 +1213,14 @@ async function configScope(gitignore: string | null = null) {
     gitignore: gitignore === null ? null : await hashBlob(bytes(gitignore)) }, gitignore);
 }
 
-test("scoped capture combines visible and adapter-only configuration while legacy remains visible", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+test("capture combines visible files and adapter-only configuration", async () => {
+  const h = await harness();
   h.put("note.md", bytes("note"));
   h.put(".gitignore", bytes("*.tmp\n"));
   h.put(".obsidian/app.json", bytes('{"theme":"dark"}'));
   h.put(".obsidian/plugins/example/data.json", bytes('{"enabled":true}'));
   h.put(".obsidian/workspace.json", bytes("private workspace"));
   h.put(".obsidian/plugins/github-vault-sync/data.json", bytes("private sync state"));
-  assert.deepEqual(Object.keys(await h.vault.capture()), ["note.md"]);
-  h.adapterReads.length = 0;
   const captured = await h.vault.capture(await configScope());
   assert.deepEqual(Object.keys(captured).sort(), [".gitignore", ".obsidian/app.json",
     ".obsidian/plugins/example/data.json", "note.md"]);
@@ -1238,7 +1229,7 @@ test("scoped capture combines visible and adapter-only configuration while legac
 });
 
 test("hidden configuration and root ignore apply by adapter rename, retain holds, and survive restart", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const path = ".obsidian/app.json";
   const before = await entryFromBytes(bytes("old")), next = await entryFromBytes(bytes("new"));
   h.put(path, bytes("old"));
@@ -1257,7 +1248,7 @@ test("hidden configuration and root ignore apply by adapter rename, retain holds
 });
 
 test("hidden replay resumes after displacement crash without clobber or TFile process", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const path = ".obsidian/app.json";
   const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
   h.put(path, bytes("before"));
@@ -1272,7 +1263,7 @@ test("hidden replay resumes after displacement crash without clobber or TFile pr
 });
 
 test("hidden replay preserves a destination created during the crash window", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const path = ".obsidian/app.json";
   const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
   h.put(path, bytes("before"));
@@ -1288,7 +1279,7 @@ test("hidden replay preserves a destination created during the crash window", as
 
 for (const choice of ["replay", "cancel"] as const) {
   test(`oversized hidden source blocks pending ${choice} locally and keeps its bytes`, async () => {
-    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    const h = await harness();
     const path = ".obsidian/app.json";
     const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
     h.put(path, bytes("before"));
@@ -1310,7 +1301,7 @@ for (const choice of ["replay", "cancel"] as const) {
 }
 
 test("retained oversized hidden hold becoming missing durably replaces stale metadata", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const path = ".obsidian/app.json";
   const before = await entryFromBytes(new Uint8Array([0, 255]));
   const next = await entryFromBytes(new Uint8Array([1, 254]));
@@ -1333,7 +1324,7 @@ test("retained oversized hidden hold becoming missing durably replaces stale met
 });
 
 test("ignored confidential paths are inventoried by name but never read", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   h.put(".obsidian/app.json", bytes("included"));
   h.put(".obsidian/private.txt", bytes("confidential"));
   h.put("content/private.bin", bytes("confidential"));
@@ -1348,7 +1339,7 @@ test("ignored confidential paths are inventoried by name but never read", async 
 
 test("nested ignore in an ordinary content directory blocks before byte reads", async () => {
   for (const control of [".gitignore", ".GITIGNORE", ".ＧＩＴＩＧＮＯＲＥ"]) {
-    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    const h = await harness();
     h.put("note.md", bytes("safe"));
     h.put(`ordinary/deep/${control}`, bytes("*.md\n"));
     await assert.rejects(h.vault.scan(await configScope()), /Nested .gitignore/);
@@ -1357,7 +1348,7 @@ test("nested ignore in an ordinary content directory blocks before byte reads", 
 });
 
 test("hidden and visible bytes share one 128 MiB capture limit", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const chunk = new Uint8Array(8 * 1024 * 1024);
   for (let index = 0; index < 16; index++) h.put(`.obsidian/part-${index}.bin`, chunk);
   h.put("one.md", bytes("x"));
@@ -1371,7 +1362,7 @@ test("case and Unicode aliases across excluded names and path prefixes block sco
     ["Docs/keep.md", "docs/secret.txt", "docs/secret.txt\n"],
     ["Notes/Ａ.md", "Notes/A.md", "Notes/A.md\n"],
   ] as const) {
-    const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+    const h = await harness();
     h.put(pair[0], bytes("included"));
     h.put(pair[1], bytes("excluded"));
     await assert.rejects(h.vault.scan(await configScope(pair[2])), /Case or Unicode path collision/);
@@ -1382,111 +1373,20 @@ test("case and Unicode aliases across excluded names and path prefixes block sco
   }
 });
 
-test("legacy journal refuses config scope and configured journal refuses another binding", async () => {
-  const policy = await NativePathPolicy.forConfig(".obsidian");
-  const legacy = await harness();
-  legacy.put("note.bin", bytes("old"));
-  await legacy.vault.apply("note.bin", await entryFromBytes(bytes("old")),
-    await entryFromBytes(bytes("new")));
-  await assert.rejects(legacy.open(undefined, policy), /policy does not match/);
-  await assert.rejects(legacy.vault.apply(".obsidian/app.json", null,
-    await entryFromBytes(bytes("hidden"))), /Unsupported vault path/);
-  const configured = await harness(undefined, policy);
+test("a configured journal refuses another configuration directory", async () => {
+  const configured = await harness();
   configured.put(".obsidian/app.json", bytes("old"));
   await configured.vault.apply(".obsidian/app.json", await entryFromBytes(bytes("old")),
     await entryFromBytes(bytes("new")));
-  await assert.rejects(configured.open(undefined, NativePathPolicy.legacy), /policy does not match/);
+  await assert.rejects(configured.open(undefined, await NativePathPolicy.forConfig(".settings")), /policy does not match/);
   configured.setConfigDir(".settings");
   await assert.rejects(configured.open(), /configuration directory does not match/);
   await assert.rejects(configured.vault.apply(".obsidian/app.json", null,
     await entryFromBytes(bytes("changed"))), /configuration directory does not match/);
 });
 
-test("reviewed policy upgrade retains the same journal and historical native holds", async () => {
-  const h = await harness();
-  const before = new Uint8Array([0, 255]), next = new Uint8Array([1, 254]);
-  h.put("note.bin", before);
-  assert.equal((await h.vault.apply("note.bin", await entryFromBytes(before),
-    await entryFromBytes(next))).kind, "applied");
-  const hold = [...h.files.keys()].find(path => path.includes("/hold/"));
-  assert.ok(hold);
-  const policy = await NativePathPolicy.forConfig(".obsidian");
-  const { journal } = await h.open();
-  let checked = false;
-  await journal.upgradePolicy(policy, async () => { checked = true; });
-  assert.equal(checked, true);
-  assert.equal(journal.matchesPolicy(policy), true);
-  assert.deepEqual(h.files.get(hold)?.data, before);
-  const configured = await h.open(undefined, policy);
-  assert.ok(configured.journal.trackedPaths().includes(hold));
-  assert.deepEqual(h.files.get(hold)?.data, before);
-  await assert.rejects(h.open(), /policy does not match/);
-  assert.equal((await configured.vault.apply(".obsidian/app.json", null,
-    await entryFromBytes(bytes("ready")))).kind, "applied");
-});
-
-test("policy upgrade requires the durable review gate and no unresolved intent or issue", async () => {
-  const h = await harness();
-  const policy = await NativePathPolicy.forConfig(".obsidian");
-  const { journal } = await h.open();
-  await assert.rejects(journal.upgradePolicy(policy, async () => { throw new Error("review pause absent"); }),
-    /review pause absent/);
-  await assert.rejects(h.open(undefined, policy), /policy does not match/);
-  const before = await entryFromBytes(bytes("old")), next = await entryFromBytes(bytes("new"));
-  await journal.begin("note.bin", before, next, "rename");
-  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /Resolve native intents/);
-  await journal.cancel("note.bin");
-  const issue = await journal.retainBytes(bytes("evidence"), "note.bin", "historical-source", "displaced", null, null);
-  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /Resolve native intents/);
-  await journal.acknowledge([issue.id]);
-  await journal.upgradePolicy(policy, async () => {});
-  assert.equal((await h.open(undefined, policy)).journal.matchesPolicy(policy), true);
-});
-
-test("policy upgrade checks historical paths and physical stage files at commit time", async () => {
-  const h = await harness();
-  const before = new Uint8Array([0, 255]), next = new Uint8Array([1, 254]);
-  h.put("Thumbs.db", before);
-  await h.vault.apply("Thumbs.db", await entryFromBytes(before),
-    await entryFromBytes(next));
-  const { journal } = await h.open();
-  const policy = await NativePathPolicy.forConfig(".obsidian");
-  await assert.rejects(journal.upgradePolicy(policy, async () => {}), /outside configuration policy/);
-  assert.equal(journal.matchesPolicy(NativePathPolicy.legacy), true);
-  const clean = await harness();
-  const opened = await clean.open();
-  const untracked = `${opened.journal.root}/stage/${crypto.randomUUID()}`;
-  clean.put(untracked, bytes("untracked"));
-  await assert.rejects(opened.journal.upgradePolicy(policy, async () => {}), /Untracked native stage/);
-  assert.deepEqual(clean.files.get(untracked)?.data, bytes("untracked"));
-});
-
-for (const boundary of ["before-write", "after-record-rename"] as const) {
-  test(`policy upgrade resolves ${boundary} interruption from durable binding`, async () => {
-    const h = await harness();
-    const policy = await NativePathPolicy.forConfig(".obsidian");
-    const { journal } = await h.open();
-    if (boundary === "before-write") h.setJournalWriteHook(path => {
-      if (path.includes("/native/records/")) throw new Error("upgrade crash before record");
-    });
-    else h.setRenameHook((_from, to) => {
-      if (to.includes("/native/records/")) throw new Error("upgrade crash after record");
-    });
-    await assert.rejects(journal.upgradePolicy(policy, async () => {}), /upgrade crash/);
-    assert.throws(() => journal.pending(), /persistence is uncertain/);
-    h.setJournalWriteHook();
-    h.setRenameHook();
-    if (boundary === "before-write") {
-      await assert.rejects(h.open(undefined, policy), /policy does not match/);
-      const legacy = await h.open();
-      await legacy.journal.upgradePolicy(policy, async () => {});
-    } else await assert.rejects(h.open(), /policy does not match/);
-    assert.equal((await h.open(undefined, policy)).journal.matchesPolicy(policy), true);
-  });
-}
-
 test("a protected directory alias introduced after a hidden crash blocks replay", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const path = ".obsidian/app.json";
   const before = await entryFromBytes(bytes("before")), next = await entryFromBytes(bytes("after"));
   h.put(path, bytes("before"));
@@ -1502,7 +1402,7 @@ test("a protected directory alias introduced after a hidden crash blocks replay"
 });
 
 test("oversized scoped config can export only under a dedicated hidden recovery directory", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const source = ".obsidian/app.json";
   const large = new Uint8Array(8 * 1024 * 1024 + 1);
   h.put(source, large);
@@ -1521,7 +1421,7 @@ test("oversized scoped config can export only under a dedicated hidden recovery 
 });
 
 test("export rejects a relocated root ignore control before copying and leaves scoped scans usable", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   const before = await entryFromBytes(bytes("old-pattern\n"));
   const next = await entryFromBytes(bytes("new-pattern\n"));
   h.put(".gitignore", bytes("old-pattern\n"));
@@ -1547,42 +1447,20 @@ test("export rejects a relocated root ignore control before copying and leaves s
   assert.deepEqual(h.files.get(safeOutput)?.data, large);
 });
 
-test("policy upgrade rechecks the durable review pause after asynchronous inventory", async () => {
+test("capture refuses a visible disk file omitted by the host index", async () => {
   const h = await harness();
-  const { journal } = await h.open();
-  const policy = await NativePathPolicy.forConfig(".obsidian");
-  const gate = new FileJournalStore(h.journalFiles, "12345678-1234-1234-1234-123456789abc");
-  await gate.save({ pause: "reviewed" });
-  let checks = 0;
-  h.setListHook(async path => { if (path === "/") await gate.save({ pause: null }); });
-  await assert.rejects(journal.upgradePolicy(policy, async () => {
-    checks++;
-    const durable = await gate.load();
-    if (!durable || typeof durable !== "object" || !("pause" in durable) || durable.pause !== "reviewed")
-      throw new Error("review pause revoked");
-  }), /review pause revoked/);
-  h.setListHook();
-  assert.equal(checks, 2);
-  assert.equal(journal.matchesPolicy(NativePathPolicy.legacy), true);
-  await assert.rejects(h.open(undefined, policy), /policy does not match/);
+  h.put("note.md", bytes("still on disk"));
+  h.put(".obsidian/private", bytes("excluded confidential bytes"));
+  h.excludeFromIndex("note.md");
+  const scope = await configScope();
+  await assert.rejects(h.vault.scan(scope), /Visible file missing from host index: note.md/);
+  await assert.rejects(h.vault.capture(scope), /Visible file missing from host index: note.md/);
+  assert.deepEqual(h.files.get("note.md")?.data, bytes("still on disk"));
+  assert.deepEqual(h.adapterReads, []);
 });
 
-for (const scoped of [false, true]) {
-  test(`${scoped ? "configured" : "legacy"} capture refuses a visible disk file omitted by the host index`, async () => {
-    const h = await harness(undefined, scoped ? await NativePathPolicy.forConfig(".obsidian") : NativePathPolicy.legacy);
-    h.put("note.md", bytes("still on disk"));
-    h.put(".obsidian/private", bytes("excluded confidential bytes"));
-    h.excludeFromIndex("note.md");
-    const scope = scoped ? await configScope() : undefined;
-    await assert.rejects(h.vault.scan(scope), /Visible file missing from host index: note.md/);
-    await assert.rejects(h.vault.capture(scope), /Visible file missing from host index: note.md/);
-    assert.deepEqual(h.files.get("note.md")?.data, bytes("still on disk"));
-    assert.deepEqual(h.adapterReads, []);
-  });
-}
-
 test("scoped inventory ignores an omitted host-index file excluded by committed rules", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   h.put(".gitignore", bytes("ignored.md\n"));
   h.put("ignored.md", bytes("private bytes"));
   h.excludeFromIndex("ignored.md");
@@ -1595,14 +1473,14 @@ test("scan reuses captured bytes while size and mtime match and rereads after an
   const h = await harness();
   h.put("a.md", bytes("alpha"));
   h.put("b.md", bytes("bravo"));
-  const first = await h.vault.capture();
+  const first = await h.vault.capture(await configScope());
   assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")).sort(), ["a.md", "b.md"]);
   h.adapterReads.length = 0;
-  const second = await h.vault.capture();
+  const second = await h.vault.capture(await configScope());
   assert.deepEqual(h.adapterReads, [], "unchanged files are neither read nor hashed again");
   assert.deepEqual(second, first);
   h.put("a.md", bytes("ALPHA")); // Same size; the fake bumps mtime like a real write.
-  const third = await h.vault.capture();
+  const third = await h.vault.capture(await configScope());
   assert.deepEqual(h.adapterReads, ["a.md"]);
   assert.equal(third["a.md"].oid, (await entryFromBytes(bytes("ALPHA"))).oid);
   assert.equal(third["b.md"].oid, second["b.md"].oid);
@@ -1615,38 +1493,38 @@ test("scan does not cache racily recent or incomplete stats", async () => {
   h.files.get("recent.md")!.file.stat.mtime = 1_000_000;
   h.files.get("nomtime.md")!.file.stat.mtime = Number.NaN;
   h.vault.now = () => 1_000_000 + 1_000;
-  await h.vault.scan();
+  await h.vault.scan(await configScope());
   h.adapterReads.length = 0;
   // A same-size, same-mtime rewrite inside the racy window could otherwise be missed.
-  await h.vault.scan();
+  await h.vault.scan(await configScope());
   assert.deepEqual(h.adapterReads.sort(), ["nomtime.md", "recent.md"]);
   h.vault.now = () => 1_000_000 + 60_000;
-  await h.vault.scan();
+  await h.vault.scan(await configScope());
   h.adapterReads.length = 0;
-  await h.vault.scan();
+  await h.vault.scan(await configScope());
   assert.deepEqual(h.adapterReads, ["nomtime.md"]);
 });
 
 test("a deleted path leaves the scan cache and apply invalidates its path", async () => {
   const h = await harness();
   h.put("a.md", bytes("one"));
-  const base = await h.vault.capture();
+  const base = await h.vault.capture(await configScope());
   h.files.delete("a.md");
-  assert.deepEqual(Object.keys(await h.vault.capture()), []);
+  assert.deepEqual(Object.keys(await h.vault.capture(await configScope())), []);
   h.put("a.md", bytes("one"));
   h.files.get("a.md")!.file.stat.mtime = 1; // Reappears with the exact earlier stat.
   h.adapterReads.length = 0;
-  await h.vault.capture();
+  await h.vault.capture(await configScope());
   assert.deepEqual(h.adapterReads, ["a.md"]);
   const next = await entryFromBytes(bytes("two"));
   assert.equal((await h.vault.apply("a.md", base["a.md"], next)).kind, "applied");
   h.adapterReads.length = 0;
-  assert.equal((await h.vault.capture())["a.md"].oid, next.oid);
+  assert.equal((await h.vault.capture(await configScope()))["a.md"].oid, next.oid);
   assert.ok(h.adapterReads.includes("a.md"));
 });
 
 test("configuration files are cached like visible files and invalidated by size, mtime or apply", async () => {
-  const h = await harness(undefined, await NativePathPolicy.forConfig(".obsidian"));
+  const h = await harness();
   h.put(".obsidian/app.json", bytes("{}"));
   h.put(".obsidian/plugins/big/main.js", bytes("x".repeat(4096)));
   const scope = await configScope();
@@ -1678,7 +1556,7 @@ test("readCandidate serves and fills the scan cache, so a following capture read
   assert.equal(await h.vault.readCandidate("../escape.md", 4), null);
   assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")), ["a.md"]);
   h.adapterReads.length = 0;
-  const captured = await h.vault.capture();
+  const captured = await h.vault.capture(await configScope());
   assert.deepEqual(h.adapterReads.filter(path => path.endsWith(".md")), ["b.md"]);
   assert.equal(captured["a.md"].oid, a?.oid);
   h.adapterReads.length = 0;
@@ -1690,20 +1568,18 @@ test("readCandidate serves and fills the scan cache, so a following capture read
 });
 
 test("inventory lists but never walks .git, .trash or the plugin journal", async () => {
-  for (const policy of [NativePathPolicy.legacy, await NativePathPolicy.forConfig(".obsidian")]) {
-    const h = await harness(undefined, policy);
-    h.put("note.md", bytes("note"));
-    h.put(".obsidian/app.json", bytes("{}"));
-    h.put(".git/objects/ab/cdef", bytes("packed"));
-    h.put(".trash/old.md", bytes("old"));
-    h.put(".git-vault-sync/previous-git/x/dot-git/HEAD", bytes("ref"));
-    const listed: string[] = [];
-    h.setListHook(async path => { listed.push(path); });
-    const scanned = await h.vault.scan(policy.binding.rules === "config/1" ? await configScope() : undefined);
-    h.setListHook();
-    assert.ok(Object.hasOwn(scanned.files, "note.md"));
-    assert.equal(Object.hasOwn(scanned.files, ".obsidian/app.json"), policy.binding.rules === "config/1");
-    assert.ok(listed.includes("/"));
-    assert.deepEqual(listed.filter(path => /^(\.git|\.trash|\.git-vault-sync)(\/|$)/.test(path)), []);
-  }
+  const h = await harness();
+  h.put("note.md", bytes("note"));
+  h.put(".obsidian/app.json", bytes("{}"));
+  h.put(".git/objects/ab/cdef", bytes("packed"));
+  h.put(".trash/old.md", bytes("old"));
+  h.put(".git-vault-sync/x/HEAD", bytes("ref"));
+  const listed: string[] = [];
+  h.setListHook(async path => { listed.push(path); });
+  const scanned = await h.vault.scan(await configScope());
+  h.setListHook();
+  assert.ok(Object.hasOwn(scanned.files, "note.md"));
+  assert.ok(Object.hasOwn(scanned.files, ".obsidian/app.json"));
+  assert.ok(listed.includes("/"));
+  assert.deepEqual(listed.filter(path => /^(\.git|\.trash|\.git-vault-sync)(\/|$)/.test(path)), []);
 });

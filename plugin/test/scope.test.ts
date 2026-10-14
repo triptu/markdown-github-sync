@@ -116,30 +116,27 @@ test("built-in privacy denies dominate an empty or negating .gitignore", async (
 test("allowed config paths classify live versus inert and all new hidden files need consent", async () => {
   const compiled = await scope();
   const examples = [
-    ["note.md", "content", "auto"],
-    [".gitignore", "config-inert", "auto"],
-    [".obsidian/app.json", "config-live", "consent"],
-    [".obsidian/core-plugins.json", "config-live", "consent"],
-    [".obsidian/plugins/unknown/data.json", "config-live", "consent"],
-    [".obsidian/plugins/unknown/main.js", "config-inert", "consent"],
-    [".obsidian/plugins/unknown/rules/.builtin-rules.json", "config-inert", "consent"],
-    [".obsidian/themes/custom/theme.css", "config-inert", "consent"],
-    [".obsidian/snippets/ui.css", "config-inert", "consent"],
+    ["note.md", "content"],
+    [".gitignore", "config-inert"],
+    [".obsidian/app.json", "config-live"],
+    [".obsidian/core-plugins.json", "config-live"],
+    [".obsidian/plugins/unknown/data.json", "config-live"],
+    [".obsidian/plugins/unknown/main.js", "config-inert"],
+    [".obsidian/plugins/unknown/rules/.builtin-rules.json", "config-inert"],
+    [".obsidian/themes/custom/theme.css", "config-inert"],
+    [".obsidian/snippets/ui.css", "config-inert"],
   ] as const;
-  for (const [path, classification, policy] of examples) {
+  for (const [path, classification] of examples) {
     assert.equal(compiled.classify(path), classification, path);
     assert.equal(compiled.includes(path), true, path);
     assert.equal(compiled.isLive(path), classification === "config-live", path);
-    assert.equal(compiled.newHiddenPolicy(path), policy, path);
   }
-  assert.equal(compiled.newHiddenPolicy(".obsidian/plugins/unknown/secrets.json"), "consent");
 });
 
 test("root .gitignore is a control file even when its own rules match it", async () => {
   for (const text of [".gitignore\n", "*\n", ".*\n"]) {
     const compiled = await scope(text);
     assert.equal(compiled.classify(".gitignore"), "config-inert", text);
-    assert.equal(compiled.newHiddenPolicy(".gitignore"), "auto", text);
   }
 });
 
@@ -150,14 +147,14 @@ test("canonical aliases of root and nested ignore controls fail closed", async (
     assert.throws(() => compiled.classify(path), UnsupportedNestedGitignoreError);
     await assert.rejects(scopeForTree([{ path, type: "blob", sha: "0".repeat(40) }], async () => {
       throw new Error("nested control bytes must not be read");
-    }, ".obsidian", "config/1"), UnsupportedNestedGitignoreError);
+    }, ".obsidian"), UnsupportedNestedGitignoreError);
   }
   for (const path of [".GITIGNORE", ".GitIgnore", ".ＧＩＴＩＧＮＯＲＥ"]) {
     assert.throws(() => assertNoNestedGitignore([path]), ScopeError);
     assert.throws(() => compiled.classify(path), ScopeError);
     await assert.rejects(scopeForTree([{ path, type: "blob", sha: "0".repeat(40) }], async () => {
       throw new Error("root alias bytes must not be read");
-    }, ".obsidian", "config/1"), ScopeError);
+    }, ".obsidian"), ScopeError);
   }
   assert.equal(compiled.classify(".gitignore"), "config-inert");
 });
@@ -182,9 +179,9 @@ test("nested .gitignore blocks activation, including a file under a denied direc
   assert.throws(() => compiled.classify(".obsidian/cache/.gitignore"), UnsupportedNestedGitignoreError);
   await assert.rejects(scopeForTree(
     [{ path: ".obsidian/cache/.gitignore", type: "blob", sha: "0".repeat(40) }],
-    async () => new Uint8Array(), ".obsidian", "config/1",
+    async () => new Uint8Array(), ".obsidian",
   ), UnsupportedNestedGitignoreError);
-  assert.equal((await scopeForTree([], async () => new Uint8Array(), ".obsidian", "config/1")).includes("note.md"), true);
+  assert.equal((await scopeForTree([], async () => new Uint8Array(), ".obsidian")).includes("note.md"), true);
 });
 
 test("tree resolution validates bytes, object ID, UTF-8 and the 64 KiB limit", async () => {
@@ -192,16 +189,16 @@ test("tree resolution validates bytes, object ID, UTF-8 and the 64 KiB limit", a
   const bytes = new TextEncoder().encode(text);
   const oid = await hashBlob(bytes);
   const item = { path: ".gitignore", type: "blob", sha: oid };
-  const resolved = await scopeForTree([item], async () => bytes, ".obsidian", "config/1");
+  const resolved = await scopeForTree([item], async () => bytes, ".obsidian");
   assert.equal(resolved.classify("draft.tmp"), "ignored");
   assert.equal(resolved.rules.gitignore, oid);
-  await assert.rejects(scopeForTree([item], async () => Uint8Array.of(0xff), ".obsidian", "config/1"), ScopeError);
+  await assert.rejects(scopeForTree([item], async () => Uint8Array.of(0xff), ".obsidian"), ScopeError);
   const invalid = Uint8Array.of(0xff);
   await assert.rejects(scopeForTree(
-    [{ ...item, sha: await hashBlob(invalid) }], async () => invalid, ".obsidian", "config/1",
+    [{ ...item, sha: await hashBlob(invalid) }], async () => invalid, ".obsidian",
   ), /valid UTF-8/);
-  await assert.rejects(scopeForTree([item], async () => new Uint8Array(65537), ".obsidian", "config/1"), ScopeError);
-  await assert.rejects(scopeForTree([{ ...item, type: "tree" }], async () => bytes, ".obsidian", "config/1"), ScopeError);
+  await assert.rejects(scopeForTree([item], async () => new Uint8Array(65537), ".obsidian"), ScopeError);
+  await assert.rejects(scopeForTree([{ ...item, type: "tree" }], async () => bytes, ".obsidian"), ScopeError);
   await assert.rejects(() => compileScope({ rules: "config/1", configDir: ".obsidian", gitignore: oid }, "other\n"), ScopeError);
 });
 
@@ -213,9 +210,6 @@ test("digest is SHA-1 of canonical rules and policy version, independent of obje
   assert.equal((await compileScope(rules, text)).digest, expected);
   assert.equal((await compileScope({ ...rules }, text)).digest, expected);
   assert.notEqual((await scope("!*.tmp\n")).digest, expected);
-  const legacy = await compileScope({ rules: "visible-only", configDir: ".obsidian", gitignore: null }, null);
-  assert.equal(legacy.classify(".obsidian/app.json"), "outside");
-  assert.equal(legacy.classify("note.md"), "content");
   const maximumText = `#${"x".repeat(65534)}\n`;
   const maximumRules: ScopeRules = {
     rules: "config/1", configDir: ".obsidian",

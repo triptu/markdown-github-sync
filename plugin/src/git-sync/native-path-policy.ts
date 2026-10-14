@@ -1,26 +1,22 @@
 import type { DataAdapter } from "obsidian";
-import { isSyncablePath, isValidPath } from "./codec";
+import { isValidPath } from "./codec";
 import { assertNoNestedGitignore, assertValidConfigDir, canonicalFilesystemPath,
   compileScope, type Scope } from "./scope";
 
-export type NativePolicyBinding =
-  | { readonly rules: "visible-only" }
-  | { readonly rules: "config/1"; readonly configDir: string };
+export interface NativePolicyBinding { readonly rules: "config/1"; readonly configDir: string }
 
 /** Built-in path admission only. Commit-specific ignore and consent belong to the engine. */
 export class NativePathPolicy {
-  static readonly legacy = new NativePathPolicy({ rules: "visible-only" });
-
   static async forConfig(configDir: string): Promise<NativePathPolicy> {
     assertValidConfigDir(configDir);
     const scope = await compileScope({ rules: "config/1", configDir, gitignore: null }, null);
     return new NativePathPolicy({ rules: "config/1", configDir }, scope);
   }
 
-  private constructor(readonly binding: NativePolicyBinding, private readonly builtinScope?: Scope) {}
+  private constructor(readonly binding: NativePolicyBinding, private readonly builtinScope: Scope) {}
 
   allows(path: string): boolean {
-    return this.builtinScope ? this.builtinScope.includes(path) : isSyncablePath(path);
+    return this.builtinScope.includes(path);
   }
 
   includes(path: string): boolean { return this.allows(path); }
@@ -42,7 +38,7 @@ export function isOpaqueFolder(path: string): boolean {
 /**
  * Adapter names, including ignored and denied entries; never reads file bytes.
  * With `pruneOpaque`, folders matching `isOpaqueFolder` are listed by name
- * but not walked (the plugin journal, previous `.git` directories and trash).
+ * but not walked (the plugin journal, `.git` directories and trash).
  */
 export async function inventoryLocal(files: Pick<DataAdapter, "list">, assertActive: () => void,
   options: { pruneOpaque?: boolean } = {}): Promise<LocalInventory> {

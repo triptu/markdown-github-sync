@@ -6,6 +6,16 @@ export function failure(error: unknown): string {
     ? error.message
     : "Sync failed. Your local files have been retained.";
 }
+/** GitHub's fine-grained token form, prefilled with this plugin's name and the permissions it needs. */
+export function tokenCreationUrl(owner: string): string {
+  const url = new URL("https://github.com/settings/personal-access-tokens/new");
+  url.searchParams.set("name", "Obsidian GitHub Vault Sync");
+  url.searchParams.set("description", "Sync my Obsidian vault with GitHub");
+  url.searchParams.set("contents", "write");
+  url.searchParams.set("metadata", "read");
+  if (owner) url.searchParams.set("target_name", owner);
+  return url.href;
+}
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -37,8 +47,6 @@ export function describeOutcome(outcome: SyncOutcome): string {
       return `${plural(outcome.conflicts.length, "file needs", "files need")} your choice`;
     case "blocked":
       return `${plural(outcome.steps.length, "update")} waiting · open Sync status`;
-    case "publication-unknown":
-      return "Couldn't confirm the last upload · open Sync status";
     case "settling":
       return "Waiting for GitHub to confirm the upload…";
     case "contended":
@@ -58,8 +66,6 @@ export function outcomeAttention(outcome: SyncOutcome): { key: string; text: str
       const reason = outcome.steps.length === 1 && outcome.steps[0]?.reason ? ` ${outcome.steps[0].reason}` : "";
       return { key: `blocked:${outcome.steps.map(step => step.path).join()}`, text: `${plural(outcome.steps.length, "update")} from GitHub couldn't be saved here, so sync is waiting.${reason}` };
     }
-    case "publication-unknown":
-      return { key: "publication", text: "GitHub didn't confirm the last upload, so uploads are on hold." };
     case "native-error":
       return { key: "native", text: "A file couldn't be saved, so sync stopped." };
     case "corrupt":
@@ -145,8 +151,6 @@ export const conflictLabels: Record<string, string> = {
   "add-add": "Different here and on GitHub",
   "local-deleted-remote-edited": "Deleted here, edited on GitHub",
   "local-edited-remote-deleted": "Edited here, deleted on GitHub",
-  "local-deletion": "Deleted here",
-  "remote-deletion": "Deleted on GitHub",
   "interrupted-write": "A save was interrupted",
   "displaced-write": "Changed while sync was saving it",
   "oversize-write": "Too large to compare",

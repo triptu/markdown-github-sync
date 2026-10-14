@@ -58,7 +58,7 @@ The desktop vault is `~/vault`. Desktop Obsidian reads plugin files only on load
   - Never add success notices or busy toasts.
 - **Copy must sound human:** short and plain, with no internal codes, IDs or jargon. Keep it in `ui/copy.ts`.
 - **Stay within Obsidian's design system:** use `Setting` rows and CSS variables, and make sure layouts work on a phone. In the conflict view, most of the space goes to the diff.
-- **Prefer less machinery.** The user removed a "local recovery" feature as overengineered. Don't bring back recovery browsers or similar features.
+- **Prefer less machinery.** Don't add recovery browsers or similar features.
 - **Performance matters on the phone.**
   - A no-change sync takes about 3 s, mostly waiting on the network.
   - Avoid reading or hashing the whole vault, avoid synchronous base64 on large data, and avoid serial GitHub round trips.

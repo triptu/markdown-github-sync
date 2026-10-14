@@ -4,7 +4,7 @@ import { digestText, hashBlob, isOid, isValidPath } from "./codec";
 export type HiddenClass = "content" | "config-inert" | "config-live" | "ignored" | "denied" | "outside";
 
 export interface ScopeRules {
-  rules: "visible-only" | "config/1";
+  rules: "config/1";
   configDir: string;
   /** Object ID of the committed root .gitignore, or null when absent. */
   gitignore: string | null;
@@ -17,8 +17,6 @@ export interface Scope {
   classify(path: string): HiddenClass;
   includes(path: string): boolean;
   isLive(path: string): boolean;
-  /** Applies only to a local hidden file absent from the remote checkpoint. */
-  newHiddenPolicy(path: string): "auto" | "consent";
 }
 
 export interface TransactionScope {
@@ -105,22 +103,18 @@ function denied(path: string, configDir: string): boolean {
 }
 
 async function validateRules(rules: ScopeRules, text: string | null): Promise<Readonly<ScopeRules>> {
-  if (rules.rules !== "visible-only" && rules.rules !== "config/1") throw new ScopeError("Unknown scope rule version");
+  if (rules.rules !== "config/1") throw new ScopeError("Unknown scope rule version");
   assertValidConfigDir(rules.configDir);
-  if (rules.rules === "visible-only") {
-    if (rules.gitignore !== null || text !== null) throw new ScopeError("Legacy visible-only scope cannot use .gitignore");
-  } else {
-    if (rules.gitignore !== null && !isOid(rules.gitignore)) throw new ScopeError("Invalid .gitignore object ID");
-    if ((rules.gitignore === null) !== (text === null)) throw new ScopeError(".gitignore object ID and text disagree");
-    if (text !== null) {
-      const bytes = new TextEncoder().encode(text);
-      if (bytes.length > MAX_GITIGNORE_BYTES) throw new ScopeError(".gitignore exceeds 64 KiB");
-      if (await hashBlob(bytes) !== rules.gitignore) throw new ScopeError(".gitignore bytes do not match the object ID");
-      // ignore@7 strips a BOM from every pattern, unlike Git. Git also stops
-      // matching at NUL. Accept neither ambiguity until the parser agrees.
-      if (text.includes("\0") || text.indexOf("\ufeff", text.startsWith("\ufeff") ? 1 : 0) !== -1)
-        throw new ScopeError("Unsupported .gitignore encoding");
-    }
+  if (rules.gitignore !== null && !isOid(rules.gitignore)) throw new ScopeError("Invalid .gitignore object ID");
+  if ((rules.gitignore === null) !== (text === null)) throw new ScopeError(".gitignore object ID and text disagree");
+  if (text !== null) {
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.length > MAX_GITIGNORE_BYTES) throw new ScopeError(".gitignore exceeds 64 KiB");
+    if (await hashBlob(bytes) !== rules.gitignore) throw new ScopeError(".gitignore bytes do not match the object ID");
+    // ignore@7 strips a BOM from every pattern, unlike Git. Git also stops
+    // matching at NUL. Accept neither ambiguity until the parser agrees.
+    if (text.includes("\0") || text.indexOf("\ufeff", text.startsWith("\ufeff") ? 1 : 0) !== -1)
+      throw new ScopeError("Unsupported .gitignore encoding");
   }
   return Object.freeze({ rules: rules.rules, configDir: rules.configDir, gitignore: rules.gitignore });
 }
@@ -133,11 +127,8 @@ export async function compileScope(rules: ScopeRules, gitignoreText: string | nu
   const digest = await digestText(JSON.stringify([BUILTIN_VERSION, frozenRules]));
   const classify = (path: string): HiddenClass => {
     if (!isValidPath(path)) return "denied";
-    if (frozenRules.rules === "config/1") assertSupportedGitignorePath(path);
+    assertSupportedGitignorePath(path);
     if (denied(path, frozenRules.configDir)) return "denied";
-    if (frozenRules.rules === "visible-only") {
-      return path.split("/").some((segment) => segment.startsWith(".")) ? "outside" : "content";
-    }
     const inConfig = path.startsWith(`${frozenRules.configDir}/`);
     const hidden = path.split("/").some((segment) => segment.startsWith("."));
     if (hidden && path !== ".gitignore" && !inConfig) return "outside";
@@ -156,8 +147,6 @@ export async function compileScope(rules: ScopeRules, gitignoreText: string | nu
     classify,
     includes: (path) => ["content", "config-inert", "config-live"].includes(classify(path)),
     isLive: (path) => classify(path) === "config-live",
-    newHiddenPolicy: (path) => path === ".gitignore" && classify(path) === "config-inert" ? "auto" :
-      classify(path) === "content" ? "auto" : "consent",
   };
   return Object.freeze(scope);
 }
@@ -167,14 +156,12 @@ export async function scopeForTree(
   items: readonly { path: string; type: string; sha: string }[],
   readBlob: (oid: string) => Promise<Uint8Array>,
   configDir: string,
-  ruleVersion: ScopeRules["rules"],
 ): Promise<Scope> {
-  if (ruleVersion === "config/1") assertNoNestedGitignore(items.map((item) => item.path));
-  if (ruleVersion === "visible-only") return compileScope({ rules: ruleVersion, configDir, gitignore: null }, null);
+  assertNoNestedGitignore(items.map((item) => item.path));
   const matches = items.filter((item) => item.path === ".gitignore");
   if (matches.length > 1) throw new ScopeError("Duplicate root .gitignore entry");
   const entry = matches[0];
-  if (!entry) return compileScope({ rules: ruleVersion, configDir, gitignore: null }, null);
+  if (!entry) return compileScope({ rules: "config/1", configDir, gitignore: null }, null);
   if (entry.type !== "blob" || !isOid(entry.sha)) throw new ScopeError("Invalid root .gitignore tree entry");
   const bytes = await readBlob(entry.sha);
   if (!(bytes instanceof Uint8Array) || bytes.length > MAX_GITIGNORE_BYTES) throw new ScopeError("Unreadable root .gitignore");
@@ -182,12 +169,12 @@ export async function scopeForTree(
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
   catch { throw new ScopeError("Root .gitignore is not valid UTF-8"); }
-  return compileScope({ rules: ruleVersion, configDir, gitignore: entry.sha }, text);
+  return compileScope({ rules: "config/1", configDir, gitignore: entry.sha }, text);
 }
 
 /** Local text is compiled separately so a new ignore rule blocks its own transaction's upload. */
 export async function freezeTransactionScope(parent: Scope, remote: Scope, localGitignoreText: string | null): Promise<TransactionScope> {
-  if (parent.rules.rules !== remote.rules.rules || parent.rules.configDir !== remote.rules.configDir)
+  if (parent.rules.configDir !== remote.rules.configDir)
     throw new ScopeError("Transaction scope versions do not agree");
   const localOid = localGitignoreText === null ? null : await hashBlob(new TextEncoder().encode(localGitignoreText));
   const local = await compileScope({ ...parent.rules, gitignore: localOid }, localGitignoreText);
