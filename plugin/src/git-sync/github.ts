@@ -344,7 +344,10 @@ export class GitHubRepository implements Repository {
     let response: GitHubResponse;
     try {
       response = await this.options.transport.request({ url, method, headers: { ...this.headers(token), "Content-Type": "application/json", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    } catch { throw new GitHubError("GitHub transport failed; request outcome may be unknown"); }
+    } catch (cause) {
+      // Keep the platform's reason (DNS, TLS, timeout) for debugging; the message stays stable for callers.
+      throw Object.assign(new GitHubError("GitHub transport failed; request outcome may be unknown"), { cause });
+    }
     this.check(response);
     return response;
   }

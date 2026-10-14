@@ -125,10 +125,11 @@ export default class GitVaultSync extends Plugin {
       (error) => this.fail(error),
     );
     const schedule = () => this.scheduler?.schedule();
+    const edited = () => this.scheduler?.edited();
     const changed = (path: string) => {
       if (this.unloaded) return;
       if (path.split("/").some(part => part.startsWith("."))) return;
-      void this.notifyLocalChange().then(schedule).catch(error => this.fail(error));
+      void this.notifyLocalChange().then(edited).catch(error => this.fail(error));
     };
     this.registerEvent(
       this.app.vault.on("create", (file) => {
@@ -149,10 +150,11 @@ export default class GitVaultSync extends Plugin {
       if (this.unloaded) return;
       if ([oldPath, file.path].some(path => path === ".git-vault-sync" || path.startsWith(".git-vault-sync/"))) { schedule(); return; }
       if ([oldPath, file.path].every(path => path.split("/").some(part => part.startsWith(".")))) return;
-      void this.recordRename(oldPath, file.path).then(schedule).catch(error => this.fail(error));
+      void this.recordRename(oldPath, file.path).then(edited).catch(error => this.fail(error));
     }));
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (!document.hidden) schedule();
+      if (document.hidden) this.scheduler?.flush();
+      else schedule();
     });
     this.app.workspace.onLayoutReady(() => {
       if (this.unloaded) return;
@@ -752,7 +754,7 @@ function offline(error: unknown): boolean {
   if (typeof error === "object" && error !== null && typeof Reflect.get(error, "retryAt") === "number") return true;
   const status = httpStatus(error);
   if (typeof status === "number") return status === 0 || status === 429 || status >= 500;
-  return /net::|network|timed? ?out|ECONN|ENOTFOUND|EAI_AGAIN|Failed to fetch|offline/i.test(failure(error));
+  return /transport failed|net::|network|timed? ?out|ECONN|ENOTFOUND|EAI_AGAIN|UnknownHost|Unable to resolve|Failed to fetch|offline/i.test(failure(error));
 }
 interface AccessTarget { owner: string; repository: string; branch: string; token?: string }
 /** Per-vault, per-device record of the last working GitHub access, for the settings page. */
@@ -1119,7 +1121,7 @@ class GitSettings extends PluginSettingTab {
     if (!checkedAt || Date.now() - checkedAt > 5 * 60_000) void plugin.verifyAccess();
 
     new Setting(el).setName("Sync automatically")
-      .setDesc("Syncs a few seconds after you edit, and checks GitHub every 5 minutes while Obsidian is open.")
+      .setDesc("Syncs once you pause typing for 30 seconds and when you leave Obsidian. Checks GitHub for changes every 5 minutes.")
       .addToggle(toggle => toggle.setValue(draft.automatic).onChange(value => { draft.automatic = value; save(); }));
     const configuration = new Setting(el).setName("Obsidian settings").setDesc("Checking…");
     void this.describeConfiguration(configuration, generation);

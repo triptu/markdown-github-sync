@@ -139,3 +139,23 @@ test("idle foreground checks wait five minutes while saved edits still sync afte
   assert.equal(runs, 3);
   scheduler.stop();
 });
+
+test("edits wait for a pause in typing, are capped, and flush when the app is hidden", async () => {
+  const time = fakeClock();
+  let runs = 0;
+  const scheduler = new ForegroundScheduler(async () => { runs++; }, () => true, () => true, error => { throw error; }, time.clock);
+  scheduler.edited();
+  await time.advance(20_000);
+  scheduler.edited();
+  await time.advance(20_000);
+  assert.equal(runs, 0, "typing again restarts the pause");
+  await time.advance(10_000);
+  assert.equal(runs, 1);
+  for (let at = 0; at < 6; at++) { scheduler.edited(); await time.advance(25_000); }
+  assert.equal(runs, 2, "continuous typing still syncs within the cap");
+  scheduler.edited();
+  scheduler.flush();
+  await Promise.resolve();
+  assert.equal(runs, 3);
+  scheduler.stop();
+});

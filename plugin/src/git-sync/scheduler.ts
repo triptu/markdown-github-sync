@@ -21,6 +21,8 @@ export class ForegroundScheduler {
   private retryAfter = 0;
   private current: Promise<void> | null = null;
   private followUp: Promise<void> | null = null;
+  /** When the oldest edit not yet picked up by a sync was made. */
+  private editedSince: number | null = null;
   constructor(
     private run: () => Promise<void>,
     private enabled: () => boolean,
@@ -40,6 +42,19 @@ export class ForegroundScheduler {
       this.timer = null;
       void this.execute(false);
     }, wait);
+  }
+  /**
+   * Edits wait for a pause in typing so one sync carries a burst of changes,
+   * but never longer than `maxWait` after the first unsynced edit.
+   */
+  edited(quiet = 30_000, maxWait = 120_000): void {
+    const now = this.time.now();
+    this.editedSince ??= now;
+    this.schedule(Math.max(0, Math.min(quiet, this.editedSince + maxWait - now)));
+  }
+  /** Leaving the app: send waiting edits now, before the system may suspend it. */
+  flush(): void {
+    if (this.editedSince !== null && !this.stopped && this.enabled()) void this.now();
   }
   /**
    * Runs a sync now. During a running sync it waits for that one and then
@@ -76,6 +91,7 @@ export class ForegroundScheduler {
     }
     this.running = true;
     this.pending = false;
+    this.editedSince = null;
     let finished = () => {};
     this.current = new Promise<void>(resolve => { finished = resolve; });
     try {
@@ -100,7 +116,9 @@ export class ForegroundScheduler {
       this.running = false;
       this.current = null;
       finished();
-      this.schedule(this.pending ? 3000 : 300000);
+      // Edits made during the run keep their typing pause rather than syncing right after.
+      if (this.editedSince !== null) this.edited();
+      else this.schedule(this.pending ? 3000 : 300000);
     }
   }
   stop(): void {

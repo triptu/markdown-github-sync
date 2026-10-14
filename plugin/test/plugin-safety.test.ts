@@ -261,7 +261,7 @@ test("native notifications schedule sync without retiring exact-content decision
       const id = conflict.conflicts[0].id;
       assert.equal((await plugin.session!.resolve({ conflictId: id, choice: { kind: "mine" } })).kind, "recorded");
       let scheduled = 0;
-      Reflect.set(plugin, "scheduler", { stop() {}, schedule() { scheduled++; } });
+      Reflect.set(plugin, "scheduler", { stop() {}, schedule() { scheduled++; }, edited() { scheduled++; } });
       // A complete edit/revert or recreate cycle can end at the same manifest.
       host.emit(kind, "a.md", "a.md");
       const outcome = await plugin.session!.sync();
