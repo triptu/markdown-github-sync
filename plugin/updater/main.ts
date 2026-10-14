@@ -1,0 +1,137 @@
+import { Notice, Plugin, apiVersion, normalizePath, requestUrl } from "obsidian";
+import { checkForUpdate, type PluginFile, type UpdateHost, type UpdateResult } from "./core";
+
+const TARGET = "github-vault-sync";
+const REPOSITORY = "triptu/cloud-vault-sync";
+const BRANCH = "updates";
+const EVERY = 6 * 60 * 60 * 1000;
+
+interface UpdaterData { rejected: string[] }
+
+/** Obsidian's plugin manager. Unofficial API, so every use is guarded. */
+interface PluginManager {
+  plugins: Record<string, { syncing?: boolean; manifest?: { version?: string } } | undefined>;
+  enabledPlugins: Set<string>;
+  disablePlugin(id: string): Promise<void>;
+  enablePlugin(id: string): Promise<boolean | void>;
+  loadManifests?(): Promise<void>;
+}
+
+/** Keeps GitHub Vault Sync current from its release branch, using the same GitHub token. */
+export default class SyncUpdater extends Plugin {
+  private data: UpdaterData = { rejected: [] };
+  private checking = false;
+
+  async onload(): Promise<void> {
+    const saved: unknown = await this.loadData();
+    const rejected: unknown = saved && Reflect.get(saved, "rejected");
+    if (Array.isArray(rejected)) this.data.rejected = rejected.filter((item): item is string => typeof item === "string");
+    this.addCommand({ id: "check", name: "Check for GitHub Vault Sync update", callback: () => { void this.check(true); } });
+    this.app.workspace.onLayoutReady(() => {
+      // Let startup and the first sync settle before looking for updates.
+      this.registerInterval(window.setTimeout(() => { void this.check(false); }, 20_000));
+      this.registerInterval(window.setInterval(() => { void this.check(false); }, EVERY));
+    });
+  }
+
+  private get dir(): string { return normalizePath(`${this.app.vault.configDir}/plugins/${TARGET}`); }
+
+  private manager(): PluginManager | null {
+    const plugins: unknown = Reflect.get(this.app, "plugins");
+    return plugins && typeof Reflect.get(plugins, "enablePlugin") === "function" ? plugins as PluginManager : null;
+  }
+
+  async check(manual: boolean): Promise<void> {
+    if (this.checking) return;
+    this.checking = true;
+    try {
+      const result = await checkForUpdate(this.host(), new Set(this.data.rejected));
+      await this.report(result, manual);
+    } catch (error) {
+      // Background checks stay quiet on failure (often just offline); a manual check says why.
+      if (manual) new Notice(`Couldn't check for a GitHub Vault Sync update. ${error instanceof Error ? error.message : ""}`, 8000);
+      else console.warn("GitHub Vault Sync updater:", error);
+    } finally {
+      this.checking = false;
+    }
+  }
+
+  private async report(result: UpdateResult, manual: boolean): Promise<void> {
+    switch (result.kind) {
+      case "updated":
+        new Notice(`GitHub Vault Sync updated to ${result.to}.`, 4000);
+        return;
+      case "rolled-back":
+        this.data.rejected = [...new Set([...this.data.rejected, result.version])];
+        await this.saveData(this.data);
+        new Notice(`GitHub Vault Sync ${result.version} didn't load on this device, so the previous version was restored.`, 0);
+        return;
+      case "no-token":
+        if (manual) new Notice("Connect GitHub Vault Sync to GitHub first; the updater uses its token.", 8000);
+        return;
+      case "skipped":
+        if (manual) new Notice(`GitHub Vault Sync ${result.version} is available but wasn't installed. ${result.reason}`, 8000);
+        return;
+      case "busy":
+        if (manual) new Notice("A sync is running. The update will be tried again later.", 6000);
+        return;
+      case "up-to-date":
+        if (manual) new Notice(`GitHub Vault Sync is up to date (${result.version}).`, 4000);
+    }
+  }
+
+  private host(): UpdateHost {
+    const adapter = this.app.vault.adapter;
+    const path = (name: PluginFile) => `${this.dir}/${name}`;
+    const manager = this.manager();
+    return {
+      token: async () => {
+        // Read the sync plugin's saved settings directly so this works even if it failed to load.
+        const settings = `${this.dir}/data.json`;
+        if (!(await adapter.exists(settings))) return null;
+        const secretId: unknown = Reflect.get(JSON.parse(await adapter.read(settings)) ?? {}, "secretId");
+        return typeof secretId === "string" && secretId ? this.app.secretStorage?.getSecret(secretId) ?? null : null;
+      },
+      installedVersion: async () => {
+        if (!(await adapter.exists(path("manifest.json")))) return null;
+        const version: unknown = Reflect.get(JSON.parse(await adapter.read(path("manifest.json"))) ?? {}, "version");
+        return typeof version === "string" ? version : null;
+      },
+      appVersion: () => apiVersion,
+      download: async (name, token) => {
+        const response = await requestUrl({
+          url: `https://api.github.com/repos/${REPOSITORY}/contents/${name}?ref=${BRANCH}`,
+          headers: { Accept: "application/vnd.github.raw", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" },
+          throw: false,
+        });
+        if (response.status === 401 || response.status === 403 || response.status === 404)
+          throw new Error(`GitHub refused access to ${REPOSITORY}. Make sure the token includes that repository.`);
+        if (response.status !== 200) throw new Error(`GitHub answered ${response.status}.`);
+        return response.arrayBuffer;
+      },
+      read: async name => (await adapter.exists(path(name))) ? adapter.readBinary(path(name)) : null,
+      write: async (name, data) => {
+        if (!(await adapter.exists(this.dir))) await adapter.mkdir(this.dir);
+        await adapter.writeBinary(path(name), data);
+      },
+      remove: async name => { if (await adapter.exists(path(name))) await adapter.remove(path(name)); },
+      idle: async () => {
+        for (let waited = 0; waited < 120_000; waited += 2000) {
+          if (!manager?.plugins[TARGET]?.syncing) return true;
+          await new Promise(resolve => window.setTimeout(resolve, 2000));
+        }
+        return false;
+      },
+      reload: async version => {
+        // Without the plugin manager, the new files load on the next start.
+        if (!manager) return true;
+        if (!manager.enabledPlugins.has(TARGET)) return true;
+        await manager.disablePlugin(TARGET);
+        // Obsidian caches manifests at startup; re-read them so the new version is the one loaded.
+        await manager.loadManifests?.();
+        await manager.enablePlugin(TARGET);
+        return manager.plugins[TARGET]?.manifest?.version === version;
+      },
+    };
+  }
+}
