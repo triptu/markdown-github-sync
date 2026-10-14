@@ -34,6 +34,8 @@ import { NativePathPolicy } from "./git-sync/native-path-policy";
 import { NativeModeStore, parseModes } from "./git-sync/native-modes";
 import { defaultSettings, parseSettings, type Settings } from "./settings";
 import { formatCommitMessage } from "./commit-message";
+import { diffRows } from "./conflict-view";
+import { diff, splitLines } from "./git-sync/reconcile";
 
 const installationKey = "github-vault-sync-installation-v2";
 const activityKey = "github-vault-sync-activity";
@@ -1038,11 +1040,41 @@ class GitSettings extends PluginSettingTab {
         }));
     const current = status.descEl.createDiv();
     const activity = status.descEl.createDiv({ cls: "git-sync-line" });
+    const attention = el.createDiv();
+    let shown = "";
+    const refreshAttention = async () => {
+      const state = await plugin.session?.status().catch(() => null);
+      if (generation !== this.generation) return;
+      const conflicts = state?.kind === "enrolled" ? state.conflicts : [];
+      const key = conflicts.map(conflict => conflict.id).join();
+      if (key === shown) return;
+      shown = key;
+      attention.empty();
+      if (!conflicts.length) return;
+      // Each file that needs a decision gets its own button right here.
+      const heading = new Setting(attention).setName(`${plural(conflicts.length, "file needs", "files need")} your choice`)
+        .setDesc("Changed on this device and on GitHub. Pick which version to keep.");
+      heading.settingEl.addClass("git-sync-attention");
+      renderBulkChoice(attention, this.app, plugin, conflicts, () => { shown = ""; void refreshAttention(); });
+      for (const conflict of conflicts) {
+        const row = new Setting(attention);
+        if (conflict.kind === "collision" || conflict.kind === "bulk-deletion") {
+          row.setName(conflict.kind === "collision" ? "Names differ only by capitals" : `${conflict.paths.length} files deleted`)
+            .addButton(b => b.setButtonText("Review").setCta().onClick(() => new ChangesModal(this.app, plugin).open()));
+          continue;
+        }
+        row.setName(conflict.path.split("/").pop() ?? conflict.path)
+          .setDesc(conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " "))
+          .addButton(b => b.setButtonText("Resolve").setCta().onClick(() =>
+            new ConflictModal(this.app, plugin, conflict, () => { shown = ""; void refreshAttention(); }).open()));
+      }
+    };
     const refresh = () => {
       current.setText(plugin.statusText);
       const described = describeActivity(plugin.activity);
       activity.setText(described.text);
       activity.toggleClass("mod-warning", described.problem);
+      void refreshAttention();
     };
     refresh();
     const unsubscribe = plugin.subscribe(refresh);
@@ -1402,7 +1434,8 @@ class ChangesModal extends Modal {
         }),
       );
     try {
-      const status = await this.plugin.session?.inspect();
+      // The cheap status lists decisions right away; the slower local scan fills in unsynced files below.
+      const status = await this.plugin.session?.status();
       if (!status || status.kind === "unenrolled") {
         el.createEl("p", {
           text: "Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.",
@@ -1422,10 +1455,6 @@ class ChangesModal extends Modal {
         new Setting(el).setName(error.path ?? "Sync can't continue")
           .setDesc(error.detail);
       }
-      for (const file of status.unreadable ?? []) {
-        new Setting(el).setName(file.path)
-          .setDesc(`Too large to sync (${file.size.toLocaleString()} bytes). Left as is; other files keep syncing.`);
-      }
       if (status.phase === "publication-unknown")
         new Setting(el)
           .setName("Last upload wasn't confirmed")
@@ -1440,6 +1469,7 @@ class ChangesModal extends Modal {
             } catch (error) { new Notice(failure(error), 12000); }
             finally { b.setDisabled(false); }
           }));
+      renderBulkChoice(el, this.app, this.plugin, status.conflicts, () => { void this.render(); });
       for (const conflict of status.conflicts) {
         if (conflict.kind === "collision") {
           el.createEl("p", {
@@ -1489,13 +1519,23 @@ class ChangesModal extends Modal {
               ).open();
             }),
           );
-      const pending = status.pending ?? [];
-      el.createEl("h3", { text: pending.length ? `Not synced yet · ${pending.length}` : "Everything on this device is synced." });
-      if (pending.length) {
-        const list = el.createDiv({ cls: "git-sync-list" });
-        for (const change of pending)
-          list.createEl("p", { text: `${change.change} · ${change.path}` });
-      }
+      const scanned = el.createDiv();
+      scanned.createEl("p", { text: "Checking this device for unsynced changes…", cls: "git-sync-muted" });
+      void this.plugin.session?.inspect().then(inspected => {
+        scanned.empty();
+        if (inspected.kind !== "enrolled") return;
+        for (const file of inspected.unreadable ?? []) {
+          new Setting(scanned).setName(file.path)
+            .setDesc(`Too large to sync (${file.size.toLocaleString()} bytes). Left as is; other files keep syncing.`);
+        }
+        const pending = inspected.pending ?? [];
+        scanned.createEl("h3", { text: pending.length ? `Not synced yet · ${pending.length}` : "Everything on this device is synced." });
+        if (pending.length) {
+          const list = scanned.createDiv({ cls: "git-sync-list" });
+          for (const change of pending)
+            list.createEl("p", { text: `${change.change} · ${change.path}` });
+        }
+      }, error => scanned.setText(failure(error)));
       const configuration = await this.plugin.session?.listConfiguration().catch(() => null);
       const waiting = configuration?.kind === "configuration" && configuration.rules === "config/1"
         ? configuration.deferred.length + configuration.guarded.length + configuration.unpublished.length : 0;
@@ -1541,135 +1581,142 @@ class ConflictModal extends Modal {
   }
   onOpen(): void {
     const el = this.contentEl;
+    const conflict = this.conflict;
     el.addClass("git-sync-panel");
-    el.createEl("h2", { text: this.conflict.path });
-    el.createEl("p", {
-      text: "expected" in this.conflict
-        ? "A file write was interrupted or an edit was found in recovery. This file will not merge or publish automatically. Compare the saved versions and choose what to keep."
-        : "Both reviewed versions remain recoverable. Your decision is rechecked if either version changes.",
-    });
-    for (const [label, value] of [
-      ["Common version", this.conflict.base],
-      ["This device", this.conflict.local],
-      ["GitHub", this.conflict.remote],
-    ] as const) {
-      el.createEl("h3", { text: label });
-      el.createEl("pre", {
-        text: entryPreview(value),
-        cls: "git-sync-preview",
-      });
-    }
-    if ("oversize" in this.conflict && this.conflict.oversize.length) {
-      el.createEl("h3", { text: "Large recovery files" });
-      el.createEl("p", { text: "These originals remain in local recovery. Inspect or export them before choosing a version below. Confirming a decision does not delete the originals." });
-      for (const source of this.conflict.oversize) {
-        new Setting(el).setName(`${source.size.toLocaleString()} bytes`)
-          .setDesc(source.sourcePath)
-          .addButton(button => button.setButtonText("Inspect and export").onClick(() =>
-            new RecoveryModal(this.app, this.plugin).open()));
+    this.setTitle(conflict.path.split("/").pop() ?? conflict.path);
+    el.createEl("p", { text: `${conflictLabels[conflict.kind] ?? conflict.kind.replaceAll("-", " ")} · ${conflict.path}`, cls: "git-sync-muted" });
+    if ("expected" in conflict) {
+      el.createEl("p", { text: "A file write was interrupted or an edit was found in recovery. Compare the saved versions and choose what to keep." });
+      const versions: Array<readonly [string, Entry | null]> = [["Before the interrupted operation", conflict.expected], ["Intended update", conflict.next]];
+      if (conflict.kind !== "oversize-write") versions.push(["Recovered bytes", conflict.found]);
+      versions.push(["This device", conflict.local], ["GitHub", conflict.remote]);
+      for (const [label, value] of versions) collapsible(el, label, value);
+      for (const source of conflict.oversize) {
+        new Setting(el).setName(`Large original · ${source.size.toLocaleString()} bytes`)
+          .setDesc(`${source.sourcePath}. Kept in local recovery; choosing below doesn't delete it.`)
+          .addButton(button => button.setButtonText("Inspect").onClick(() => new RecoveryModal(this.app, this.plugin).open()));
       }
+    } else {
+      renderComparison(el, conflict.local, conflict.remote);
+      if (conflict.base) collapsible(el, "Version before either change", conflict.base);
     }
-    if ("expected" in this.conflict) {
-      const versions: Array<readonly [string, Entry | null]> = [["Before the interrupted operation", this.conflict.expected], ["Intended update", this.conflict.next]];
-      if (this.conflict.kind !== "oversize-write") versions.push(["Recovered bytes", this.conflict.found]);
-      for (const [label, value] of versions) {
-        el.createEl("h3", { text: label });
-        el.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
-      }
+    el.createEl("p", { text: "Whatever you don't keep stays in Local recovery.", cls: "git-sync-muted" });
+
+    const actions = el.createDiv({ cls: "git-sync-actions" });
+    const editable = /\.md$/i.test(conflict.path) && (conflict.local ?? conflict.remote) && entryText((conflict.local ?? conflict.remote)!) !== null;
+    const labels: Record<string, string> = {
+      mine: conflict.local ? "Keep this device's version" : "Delete it (as on this device)",
+      remote: conflict.remote ? "Keep GitHub's version" : "Delete it (as on GitHub)",
+      both: `Keep both · yours becomes ${"sibling" in conflict && conflict.sibling ? conflict.sibling.split("/").pop() : "a copy"}`,
+      edit: "Edit and combine…",
+      expected: "Restore before the operation",
+      next: "Use the intended update",
+      found: "Use recovered bytes",
+    };
+    for (const kind of conflict.choices) {
+      if (kind === "edit" && !editable) continue;
+      const button = actions.createEl("button", { text: labels[kind] ?? kind });
+      if (kind === "mine" || kind === "remote") button.addClass("mod-cta");
+      button.onclick = () => {
+        if (kind === "edit") { this.edit(actions); return; }
+        void this.resolve({ kind } as ChoiceInput, button);
+      };
     }
-    let choice: ChoiceInput | null = null;
-    const result = el.createEl("pre", {
-      text: "Choose a version to preview the result.",
-      cls: "git-sync-preview",
-    });
-    const buttons = new Setting(el);
-    for (const kind of this.conflict.choices) {
-      if (
-        kind === "edit" &&
-        (!/\.md$/i.test(this.conflict.path) ||
-          (this.conflict.local && entryText(this.conflict.local) === null))
-      )
-        continue;
-      buttons.addButton((b) =>
-        b
-          .setButtonText(
-            {
-              mine: this.conflict.local ? "Use mine" : "Accept local deletion",
-              remote: this.conflict.remote
-                ? "Use GitHub"
-                : "Accept GitHub deletion",
-              both: "Keep both",
-              edit: "Write merged note",
-              expected: "Restore before the operation",
-              next: "Use the intended update",
-              found: "Use recovered bytes",
-            }[kind],
-          )
-          .onClick(() => {
-            if (kind === "edit") {
-              const editor = el.createEl("textarea", {
-                cls: "git-sync-editor",
-              });
-              editor.value =
-                entryText(this.conflict.local ?? this.conflict.remote!) ?? "";
-              choice = {
-                kind: "edit",
-                data: encodeBase64(new TextEncoder().encode(editor.value)),
-              };
-              editor.oninput = () => {
-                choice = {
-                  kind: "edit",
-                  data: encodeBase64(new TextEncoder().encode(editor.value)),
-                };
-                result.setText(editor.value);
-              };
-              result.setText(editor.value);
-            } else {
-              choice = { kind };
-              result.setText(
-                kind === "both"
-                  ? `GitHub version: ${this.conflict.path}\nYour version: ${"sibling" in this.conflict ? this.conflict.sibling : ""}`
-                  : entryPreview(
-                      kind === "mine"
-                        ? this.conflict.local
-                        : (kind === "expected" || kind === "next" || kind === "found") && "expected" in this.conflict
-                          ? this.conflict[kind]
-                          : this.conflict.remote,
-                    ),
-              );
-            }
-          }),
-      );
-    }
-    new Setting(el).addButton((b) =>
-      b
-        .setButtonText("Confirm decision")
-        .setCta()
-        .onClick(async () => {
-          if (!choice) {
-            new Notice("Choose a version first.");
-            return;
-          }
-          b.setDisabled(true);
-          try {
-            const resolution = await this.plugin.session?.resolve({
-              conflictId: this.conflict.id,
-              choice,
-            });
-            if (resolution?.kind !== "recorded")
-              throw new Error(
-                "This conflict changed. Refresh Changes and review the new versions.",
-              );
-            this.close();
-            await this.plugin.syncNow();
-            this.done();
-          } catch (error) {
-            new Notice(failure(error), 12000);
-            b.setDisabled(false);
-          }
-        }),
-    );
   }
+  private edit(actions: HTMLElement): void {
+    actions.empty();
+    const source = (this.conflict.local ?? this.conflict.remote)!;
+    const editor = actions.createEl("textarea", { cls: "git-sync-editor" });
+    editor.value = combinedDraft(this.conflict.local, this.conflict.remote) ?? entryText(source) ?? "";
+    actions.createEl("p", { text: "Both versions are combined below where they differ. Tidy it up, then save.", cls: "git-sync-muted" });
+    const save = actions.createEl("button", { text: "Save combined note", cls: "mod-cta" });
+    save.onclick = () => void this.resolve({ kind: "edit", data: encodeBase64(new TextEncoder().encode(editor.value)) }, save);
+    editor.focus();
+  }
+  private async resolve(choice: ChoiceInput, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    try {
+      const resolution = await this.plugin.session?.resolve({ conflictId: this.conflict.id, choice });
+      if (resolution?.kind !== "recorded") throw new Error("This file changed again. Close and review the new versions.");
+      this.close();
+      await this.plugin.syncNow();
+      this.done();
+    } catch (error) {
+      new Notice(failure(error), 12000);
+      button.disabled = false;
+    }
+  }
+}
+/** "Keep GitHub's / this device's for all" when several files share one decision. */
+function renderBulkChoice(container: HTMLElement, app: App, plugin: GitVaultSync, conflicts: readonly (VersionConflict | NativeConflict | BulkDeletionConflict | { kind: "collision" })[], done: () => void): void {
+  const files = conflicts.filter((conflict): conflict is VersionConflict =>
+    conflict.kind !== "collision" && conflict.kind !== "bulk-deletion" && !("expected" in conflict));
+  if (files.length < 2) return;
+  const setting = new Setting(container).setName(`Same choice for all ${files.length}`);
+  for (const kind of ["remote", "mine"] as const) {
+    setting.addButton(button => button.setButtonText(kind === "remote" ? "Keep GitHub's for all" : "Keep this device's for all")
+      .onClick(() => new ConfirmModal(app,
+        kind === "remote" ? `Keep GitHub's version of ${files.length} files?` : `Keep this device's version of ${files.length} files?`,
+        `${files.map(file => file.path).join("\n")}\n\nThe other versions stay in Local recovery.`,
+        async () => {
+          for (const file of files) {
+            if (!file.choices.includes(kind)) continue;
+            const result = await plugin.session?.resolve({ conflictId: file.id, choice: { kind } });
+            if (result?.kind !== "recorded") throw new Error(`${file.path} changed again. Review it on its own.`);
+          }
+          await plugin.syncNow();
+          done();
+        }).open()));
+  }
+}
+function collapsible(container: HTMLElement, label: string, value: Entry | null): void {
+  const details = container.createEl("details", { cls: "git-sync-group" });
+  details.createEl("summary").createSpan({ text: label });
+  details.createEl("pre", { text: entryPreview(value), cls: "git-sync-preview" });
+}
+/** Line diff between this device and GitHub, or a short note when either side isn't text. */
+function renderComparison(container: HTMLElement, local: Entry | null, remote: Entry | null): void {
+  const legend = container.createDiv({ cls: "git-sync-legend" });
+  legend.createSpan({ text: "This device", cls: "git-sync-mine" });
+  legend.createSpan({ text: "GitHub", cls: "git-sync-theirs" });
+  const mine = local ? entryText(local) : null;
+  const theirs = remote ? entryText(remote) : null;
+  const rows = mine !== null && theirs !== null ? diffRows(mine, theirs) : null;
+  if (!rows) {
+    const box = container.createDiv({ cls: "git-sync-diff" });
+    for (const [kind, value, where] of [["mine", local, "this device"], ["theirs", remote, "GitHub"]] as const) {
+      const text = value === null ? `Deleted on ${where}` : entryPreview(value);
+      box.createDiv({ text, cls: `git-sync-row git-sync-${kind}` });
+    }
+    return;
+  }
+  const box = container.createDiv({ cls: "git-sync-diff" });
+  for (const row of rows) {
+    if (row.kind === "skip") box.createDiv({ text: `⋯ ${plural(row.count, "unchanged line")}`, cls: "git-sync-row git-sync-skip" });
+    else box.createDiv({ text: row.text.replace(/\r?\n$/, "") || " ", cls: `git-sync-row git-sync-${row.kind}` });
+  }
+}
+/** Markdown with each differing block from both sides, labelled, for "Edit and combine". */
+function combinedDraft(local: Entry | null, remote: Entry | null): string | null {
+  const mine = local ? entryText(local) : null;
+  const theirs = remote ? entryText(remote) : null;
+  if (mine === null || theirs === null) return null;
+  const a = splitLines(theirs);
+  const hunks = diff(a, splitLines(mine));
+  if (!hunks) return null;
+  const out: string[] = [];
+  let position = 0;
+  for (const hunk of hunks) {
+    out.push(...a.slice(position, hunk.start));
+    const gh = a.slice(hunk.start, hunk.end);
+    if (!gh.length) out.push(...hunk.lines);
+    else if (!hunk.lines.length) out.push(...gh);
+    else out.push(...hunk.lines, ...gh);
+    position = hunk.end;
+  }
+  out.push(...a.slice(position));
+  // A side's last line may lack a newline; keep lines from running together.
+  return out.map((line, at) => at < out.length - 1 && !line.endsWith("\n") ? `${line}\n` : line).join("");
 }
 class PublicationRecoveryModal extends Modal {
   constructor(app: App, private plugin: GitVaultSync, private preview: PublicationRecoveryPreview) { super(app); }
@@ -1716,7 +1763,7 @@ class ConfirmModal extends Modal {
   }
   onOpen(): void {
     this.contentEl.createEl("h2", { text: this.titleText });
-    this.contentEl.createEl("p", { text: this.detail });
+    this.contentEl.createEl("p", { text: this.detail, cls: "git-sync-detail" });
     new Setting(this.contentEl)
       .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
       .addButton((b) =>

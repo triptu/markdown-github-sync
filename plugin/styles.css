@@ -22,3 +22,14 @@
 .git-sync-panel .git-sync-line:empty { display: none; }
 .git-sync-panel .git-sync-line.mod-success { color: var(--text-success); }
 .git-sync-panel .git-sync-line.mod-warning { color: var(--text-error); }
+.git-sync-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.git-sync-actions button { width: 100%; height: auto; min-height: 40px; white-space: normal; padding-block: 8px; }
+.git-sync-legend { display: flex; gap: 8px; margin-bottom: 6px; font-size: var(--font-ui-smaller); }
+.git-sync-legend span { padding: 2px 8px; border-radius: var(--radius-s); }
+.git-sync-diff { max-height: 50vh; overflow: auto; border-radius: var(--radius-m); background: var(--background-secondary); padding-block: 6px; font: var(--font-ui-small) var(--font-monospace); }
+.git-sync-row { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px 10px; border-left: 3px solid transparent; }
+.git-sync-mine { background: rgba(var(--color-green-rgb), 0.15); border-left-color: rgb(var(--color-green-rgb)); }
+.git-sync-theirs { background: rgba(var(--color-blue-rgb), 0.15); border-left-color: rgb(var(--color-blue-rgb)); }
+.git-sync-skip { color: var(--text-faint); font-style: italic; }
+.git-sync-attention { border: 1px solid var(--text-accent); border-radius: var(--radius-m); padding-inline: 12px !important; }
+.git-sync-detail { white-space: pre-line; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
