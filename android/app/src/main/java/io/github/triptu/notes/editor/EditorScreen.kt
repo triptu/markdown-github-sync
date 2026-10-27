@@ -77,7 +77,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.relocation.BringIntoViewModifierNode
 import androidx.compose.ui.layout.positionInParent
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
@@ -143,10 +142,13 @@ fun EditorScreen(
 
     val scroll = rememberScrollState()
 
-    // Back closes the link popover before it closes the note.
+    // Back closes the link suggestions before it closes the note.
     BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
 
     val typing = WindowInsets.isImeVisible
+    val linkQuery = session.linkQuery.takeIf { typing }
+    val linkChoices = remember(linkQuery?.query, session.path) { linkQuery?.let(session::linkChoices).orEmpty() }
+    val linking = linkChoices.isNotEmpty()
     Box(
         Modifier
             .fillMaxSize()
@@ -155,10 +157,16 @@ fun EditorScreen(
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
             .clipToBounds(),
     ) {
-        // Keeps the line being typed below the top bar and above the floating mic.
+        // Keeps the line being typed below the top bar and above the floating mic or the link suggestions.
         val density = LocalDensity.current
         val top = with(density) { if (typing) 0f else TopBarHeight.toPx() }
-        val bottom = with(density) { if (speech != null) (MicSize + MicMargin * 2).toPx() else 0f }
+        val bottom = with(density) {
+            when {
+                linking -> (LinkSuggestionsHeight + 8.dp).toPx()
+                speech != null -> (MicSize + MicMargin * 2).toPx()
+                else -> 0f
+            }
+        }
         val keepClear = remember(top, bottom) { KeepClearBringIntoView(top, bottom) }
         val defaultSpec = LocalBringIntoViewSpec.current
         CompositionLocalProvider(LocalBringIntoViewSpec provides keepClear) {
@@ -197,7 +205,25 @@ fun EditorScreen(
             TopBar(session, isPinned, onBack, onTogglePin, onDelete)
         }
         if (speech != null) {
-            FloatingMic(speech, Modifier.align(Alignment.BottomEnd).padding(end = MicMargin, bottom = MicMargin))
+            AnimatedVisibility(
+                visible = !linking,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(90)),
+                modifier = Modifier.align(Alignment.BottomEnd),
+            ) {
+                FloatingMic(speech, Modifier.padding(end = MicMargin, bottom = MicMargin))
+            }
+        }
+        // Keeps the last rows while fading out, so they don't empty first.
+        val shownChoices = remember { arrayOf(emptyList<LinkChoice>()) }
+        if (linking) shownChoices[0] = linkChoices
+        AnimatedVisibility(
+            visible = linking,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(90)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            LinkSuggestions(shownChoices[0], onPick = session::completeLink)
         }
     }
 }
@@ -408,7 +434,6 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     val imageSpace = boxes.mapValues { (_, box) -> with(density) { (box.second.height + gap * 2).toSp() } }
     val labelStyle = NotesType.rowMeta.copy(color = colors.muted)
 
-    var fieldTop by remember { mutableStateOf(0) }
     var fieldTopInContent by remember { mutableStateOf(0) }
     // Opened from a Recents card: scroll so that card's text sits near the top.
     val revealAt = session.revealAt
@@ -432,7 +457,6 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     Box(
         Modifier
             .onGloballyPositioned {
-                fieldTop = it.positionInWindow().y.toInt()
                 fieldTopInContent = it.positionInParent().y.toInt()
             }
             .bringIntoViewRequester(cursorInView)
@@ -506,9 +530,6 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
                 }
             },
     )
-    val query = session.linkQuery
-    val l = layout
-    if (query != null && l != null && focused) LinkPopover(session, query, l, fieldTop)
     }
 }
 

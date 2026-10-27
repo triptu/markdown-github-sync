@@ -29,6 +29,14 @@ class LinkTrackingTest {
     }
 
     @Test
+    fun `closes when the cursor is moved without typing, even within the same line`() {
+        assertNull(EditOps.trackLink(v("see [[ran on", 9), v("see [[ran on", 12), 4))
+        assertNull(EditOps.trackLink(v("see [[ran", 9), v("see [[ran", 7), 4))
+        val composing = TextFieldValue("see [[ran", TextRange(9), composition = TextRange(6, 9))
+        assertEquals(4, EditOps.trackLink(composing, v("see [[ran"), 4)) // the keyboard finishing a word
+    }
+
+    @Test
     fun `completion reuses a closing pair that is already there`() {
         val value = v("see [[ra]] now", 8)
         val done = EditOps.completeLink(value, LinkQuery(4, "ra"), "2026030820 Rent is a vote for a life")

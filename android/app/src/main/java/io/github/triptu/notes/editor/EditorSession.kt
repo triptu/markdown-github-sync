@@ -10,7 +10,6 @@ import io.github.triptu.notes.capture.ZettelName
 import io.github.triptu.notes.syncing.BothVersions
 import io.github.triptu.notes.vault.DeletedNote
 import io.github.triptu.notes.vault.FolderPath
-import io.github.triptu.notes.vault.LinkSuggestion
 import io.github.triptu.notes.vault.NoteNames
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultChange
@@ -80,7 +79,7 @@ class EditorSession(
     var canRedo by mutableStateOf(false)
         private set
 
-    /** Where the `[[` of the link being typed starts, while the suggestion popover is open. */
+    /** Where the `[[` of the link being typed starts, while its suggestions are open. */
     var linkStart: Int? by mutableStateOf(null)
         private set
     var parsed by mutableStateOf(MarkdownParser.parse(""))
@@ -253,18 +252,24 @@ class EditorSession(
         canRedo = undo.canRedo
     }
 
-    /** Closes the link popover until another `[[` is typed. */
+    /** Closes the link suggestions until another `[[` is typed. */
     fun dismissLink() {
         linkStart = null
     }
 
     val linkQuery: LinkQuery? get() = linkStart?.let { EditOps.linkQuery(value, it) }
 
-    fun linkSuggestions(query: LinkQuery): List<LinkSuggestion> =
-        VaultQueries.linkSuggestions(index.snapshot.value, query.query, exclude = path)
+    /** The suggestion rows for [query]: matching notes best first, or one row to link a new note when none match. */
+    fun linkChoices(query: LinkQuery): List<LinkChoice> {
+        val typed = query.query.trim()
+        val notes = VaultQueries.linkSuggestions(index.snapshot.value, query.query, exclude = path, limit = LinkRows)
+        if (notes.isEmpty()) return if (typed.isEmpty()) emptyList() else listOf(LinkChoice("Create “$typed”", null, typed))
+        return notes.map { s -> LinkChoice(s.path.displayName, s.path.folder.value.takeIf { s.showFolder && it.isNotEmpty() }, s.path.name) }
+    }
 
-    /** Finishes the link being typed as `[[name]]` and closes the popover. */
-    fun completeLink(query: LinkQuery, name: String) {
+    /** Finishes the link being typed as `[[name]]` and closes the suggestions. */
+    fun completeLink(name: String) {
+        val query = linkQuery ?: return
         onValueChange(EditOps.completeLink(value, query, name), newUndoStep = true)
         linkStart = null
     }

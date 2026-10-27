@@ -24,9 +24,9 @@ object EditOps {
     }
 
     /**
-     * Where the open link popover's `[[` is after an edit, or null when it should close.
-     * It opens only when `[[` was just typed before the cursor, and closes when the cursor leaves
-     * the `[[...` span, the `[[` is deleted, or `]]` or a line break is typed.
+     * Where the open link's `[[` is after an edit, or null when its suggestions should close.
+     * It opens only when `[[` was just typed before the cursor, and closes when the cursor is moved
+     * without typing, the `[[` is deleted, or `]]` or a line break is typed.
      */
     fun trackLink(old: TextFieldValue, new: TextFieldValue, openAt: Int?): Int? {
         if (!new.selection.collapsed) return null
@@ -37,6 +37,7 @@ object EditOps {
             new.text.removeRange(caret - typed, caret) == old.text
         if (justOpened) return caret - 2
         val start = openAt ?: return null
+        if (new.text == old.text && new.selection != old.selection) return null
         if (caret < start + 2 || !new.text.startsWith("[[", start)) return null
         val query = new.text.substring(start + 2, caret)
         if (query.contains("]]") || query.contains("[[") || query.contains('\n')) return null
