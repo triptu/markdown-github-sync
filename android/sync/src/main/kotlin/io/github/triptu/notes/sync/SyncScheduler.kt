@@ -88,6 +88,23 @@ class SyncScheduler internal constructor(
         if (follow != null) follow.await() else execute(manual = true)
     }
 
+    /** True when edits are waiting for a sync. */
+    val hasWaitingEdits: Boolean
+        @Synchronized get() = editedSince != null
+
+    /**
+     * Makes sure edits made so far are synced, for background work: waits for a
+     * running sync, then runs one more only if it failed or edits arrived since.
+     */
+    suspend fun flush() {
+        val active = synchronized(this) { current }
+        if (active != null) {
+            active.await()
+            if (synchronized(this) { editedSince == null && failures == 0 }) return
+        }
+        now()
+    }
+
     fun stop() = synchronized(this) {
         stopped = true
         timer?.cancel()

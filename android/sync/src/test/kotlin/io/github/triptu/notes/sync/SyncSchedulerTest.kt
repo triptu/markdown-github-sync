@@ -86,4 +86,52 @@ class SyncSchedulerTest {
         h.at(500_000)
         assertEquals(listOf(1_000L, 32_000L, 35_000L, 500_000L), h.runs)
     }
+
+    @Test
+    fun flushWaitsForARunningSyncAndRunsAgainOnlyForNewerEdits() = runTest {
+        var release: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        val runs = mutableListOf<Long>()
+        val scheduler = SyncScheduler(backgroundScope, run = {
+            runs.add(testScheduler.currentTime)
+            release?.await()
+        }, onError = {}, clock = { testScheduler.currentTime })
+        fun at(time: Long) { advanceTimeBy(time - testScheduler.currentTime); runCurrent() }
+
+        // Nothing running (a fresh process): flush syncs.
+        backgroundScope.launch { scheduler.flush() }
+        at(0)
+        assertEquals(listOf(0L), runs)
+
+        // Leaving the app starts a sync; the background job waits for it and stops there.
+        at(1_000)
+        scheduler.foreground()
+        scheduler.edited()
+        assertEquals(true, scheduler.hasWaitingEdits)
+        release = kotlinx.coroutines.CompletableDeferred()
+        scheduler.background()
+        at(1_000)
+        assertEquals(false, scheduler.hasWaitingEdits)
+        var flushed = false
+        backgroundScope.launch { scheduler.flush(); flushed = true }
+        at(2_000)
+        release!!.complete(Unit)
+        at(3_000)
+        assertEquals(true, flushed)
+        assertEquals(listOf(0L, 1_000L), runs)
+
+        // An edit lands while that sync runs: flush runs once more.
+        release = kotlinx.coroutines.CompletableDeferred()
+        backgroundScope.launch { scheduler.now() }
+        at(4_000)
+        scheduler.edited()
+        flushed = false
+        backgroundScope.launch { scheduler.flush(); flushed = true }
+        at(5_000)
+        val second = release!!
+        release = null
+        second.complete(Unit)
+        at(6_000)
+        assertEquals(true, flushed)
+        assertEquals(listOf(0L, 1_000L, 3_000L, 5_000L), runs)
+    }
 }

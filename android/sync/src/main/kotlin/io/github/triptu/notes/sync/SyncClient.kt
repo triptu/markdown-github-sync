@@ -36,15 +36,25 @@ import java.util.UUID
 class SyncClient(
     /** App-private folder for this vault's journal, attachment cache and device id. */
     storageDir: File,
-    /** The app's private copy of the vault. */
-    vaultDir: File,
+    /**
+     * The app's private copy of the vault. Share one instance between the app
+     * and the client, so the app's writes and sync's take the same lock.
+     */
+    val vault: VaultFiles,
     private val config: SyncConfig,
     private val tokens: TokenProvider,
     /** The bundled engine: `context.assets.open("sync-engine.js")`, see [readEngineScript]. */
     engineScript: String,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : Closeable {
-    val vault = VaultFiles(vaultDir)
+    constructor(
+        storageDir: File,
+        vaultDir: File,
+        config: SyncConfig,
+        tokens: TokenProvider,
+        engineScript: String,
+        clock: () -> Long = System::currentTimeMillis,
+    ) : this(storageDir, VaultFiles(vaultDir), config, tokens, engineScript, clock)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val http = GitHubHttp()
@@ -88,8 +98,10 @@ class SyncClient(
 
     val scheduler = SyncScheduler(scope, run = { runSync() }, onError = { report(it) }, clock = clock)
 
+    private val onLocalChange: () -> Unit = { if (enrolled) scheduler.edited() }
+
     init {
-        vault.onLocalChange = { if (enrolled) scheduler.edited() }
+        vault.onLocalChange = onLocalChange
         scope.launch {
             try { refresh() } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (error: Throwable) { report(error) }
         }
@@ -105,6 +117,19 @@ class SyncClient(
 
     /** Call after edits made outside [vault]'s write methods (normally not needed). */
     fun onEdited() = scheduler.edited()
+
+    /** True when app edits are waiting for their sync. */
+    val hasWaitingEdits: Boolean get() = scheduler.hasWaitingEdits
+
+    /**
+     * For background work: makes sure edits made so far reach GitHub. Waits for
+     * a running sync and runs another only if it failed or edits arrived since.
+     * Returns the resulting status.
+     */
+    suspend fun sendWaitingEdits(): SyncStatus {
+        scheduler.flush()
+        return status.value
+    }
 
     // ---- Setup ----------------------------------------------------------------
 
@@ -205,6 +230,7 @@ class SyncClient(
     }
 
     override fun close() {
+        if (vault.onLocalChange === onLocalChange) vault.onLocalChange = null
         scheduler.stop()
         scope.cancel()
         engine.close()
@@ -347,8 +373,10 @@ class SyncClient(
             kind = value.str("kind")!!,
             path = value.str("path") ?: paths.firstOrNull().orEmpty(),
             paths = paths,
-            choices = value["choices"]?.list()?.map { it as String }.orEmpty(),
+            choices = value["choices"]?.list()?.map { it as String }
+                ?: if (value["kind"] == "bulk-deletion") listOf("mine", "remote") else emptyList(),
             sibling = value.str("sibling"),
+            direction = value.str("direction"),
             base = version("base"),
             local = version("local"),
             remote = version("remote"),

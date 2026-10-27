@@ -77,7 +77,10 @@ data class FileVersion(val oid: String, val text: String?)
 
 data class SyncConflict(
     val id: String,
-    /** `modify-modify`, `add-add`, `delete-modify`, `collision`, `bulk-deletion`, ... */
+    /**
+     * `content` (both edited the same lines), `add-add`, `local-deleted-remote-edited`,
+     * `local-edited-remote-deleted`, `collision` (names differing only in case) or `bulk-deletion`.
+     */
     val kind: String,
     /** The file, or the first of `paths` for collisions and bulk deletions. */
     val path: String,
@@ -86,6 +89,11 @@ data class SyncConflict(
     val choices: List<String>,
     /** Where "both" keeps this device's copy. */
     val sibling: String?,
+    /**
+     * For `bulk-deletion`: `local` when this device deleted the files, `remote`
+     * when GitHub did. `mine` keeps this device's side, `remote` GitHub's.
+     */
+    val direction: String? = null,
     val base: FileVersion?,
     val local: FileVersion?,
     val remote: FileVersion?,
