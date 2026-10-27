@@ -11,7 +11,7 @@ data class LinkMark(val start: Int, val end: Int, val labelStart: Int, val label
 
 data class HeadingMark(val lineStart: Int, val lineEnd: Int, val level: Int, val markerEnd: Int)
 
-data class BulletMark(val index: Int)
+data class BulletMark(val index: Int, val lineEnd: Int)
 
 enum class InlineKind { Bold, Italic, BoldItalic, Code }
 
@@ -92,7 +92,7 @@ object MarkdownParser {
             return
         }
         Bullet.find(line)?.let {
-            bullets += BulletMark(start + it.groupValues[1].length)
+            bullets += BulletMark(start + it.groupValues[1].length, end)
             return
         }
         if (Quote.containsMatchIn(line)) quotes += LineRange(start, end)

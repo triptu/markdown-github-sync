@@ -2,7 +2,6 @@ package io.github.triptu.notes.editor
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
@@ -18,10 +17,13 @@ import io.github.triptu.notes.ui.theme.NotesColors
  * Styles markdown in place, like Obsidian's live preview. Markup is hidden (drawn tiny and
  * transparent) except where the cursor is, so the text and its offsets never change.
  * Hidden task markers keep their width: the editor draws a checkbox over them.
+ * Only span styles: a ParagraphStyle per line makes Compose add an empty line at its edges.
  */
 class LivePreview(
     private val parsed: ParsedMarkdown,
     private val selection: TextRange,
+    /** Markup shows around the cursor only while the field has focus. */
+    private val focused: Boolean,
     private val colors: NotesColors,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
@@ -30,7 +32,6 @@ class LivePreview(
         val chars = raw.toCharArray()
         val b = AnnotatedString.Builder()
         val spans = ArrayList<Triple<SpanStyle, Int, Int>>()
-        val paragraphs = ArrayList<Triple<ParagraphStyle, Int, Int>>()
         fun span(style: SpanStyle, start: Int, end: Int) {
             if (start < end) spans += Triple(style, start, end.coerceAtMost(raw.length))
         }
@@ -40,7 +41,6 @@ class LivePreview(
 
         for (h in parsed.headings) {
             span(SpanStyle(fontSize = HeadingSizes[h.level - 1], fontWeight = FontWeight.SemiBold), h.lineStart, h.lineEnd)
-            paragraphs += Triple(ParagraphStyle(lineHeight = HeadingLineHeights[h.level - 1]), h.lineStart, h.lineEnd)
             if (!touches(h.lineStart, h.lineEnd)) hide(h.lineStart, h.markerEnd)
             else span(SpanStyle(color = colors.muted), h.lineStart, h.markerEnd)
         }
@@ -48,6 +48,8 @@ class LivePreview(
             if (touches(t.markerStart, t.markerEnd - 1)) {
                 span(SpanStyle(color = colors.muted), t.markerStart, t.markerEnd)
             } else {
+                // Same width ticked or not: the editor draws the box over this.
+                chars[t.stateIndex] = ' '
                 span(SpanStyle(color = Color.Transparent), t.markerStart, t.markerEnd)
             }
             if (t.checked) span(SpanStyle(color = colors.muted, textDecoration = TextDecoration.LineThrough), t.markerEnd, t.lineEnd)
@@ -85,22 +87,20 @@ class LivePreview(
         }
 
         b.append(String(chars))
-        paragraphs.forEach { (style, s, e) -> b.addStyle(style, s, e) }
         spans.forEach { (style, s, e) -> b.addStyle(style, s, e) }
         return TransformedText(b.toAnnotatedString(), OffsetMapping.Identity)
     }
 
     /** True if the cursor or selection touches [start]..[end], edges included. */
-    private fun touches(start: Int, end: Int): Boolean = selection.min <= end && selection.max >= start
+    private fun touches(start: Int, end: Int): Boolean = focused && selection.min <= end && selection.max >= start
 
     override fun equals(other: Any?): Boolean =
-        other is LivePreview && other.parsed == parsed && other.selection == selection && other.colors == colors
+        other is LivePreview && other.parsed == parsed && other.selection == selection && other.focused == focused && other.colors == colors
 
-    override fun hashCode(): Int = 31 * (31 * parsed.hashCode() + selection.hashCode()) + colors.hashCode()
+    override fun hashCode(): Int = 31 * (31 * (31 * parsed.hashCode() + selection.hashCode()) + focused.hashCode()) + colors.hashCode()
 
     companion object {
         private val Hidden = SpanStyle(color = Color.Transparent, fontSize = 1.sp, letterSpacing = 0.sp)
         private val HeadingSizes = listOf(24.sp, 21.sp, 19.sp, 17.sp, 17.sp, 17.sp)
-        private val HeadingLineHeights = listOf(34.sp, 30.sp, 28.sp, 26.sp, 26.sp, 26.sp)
     }
 }

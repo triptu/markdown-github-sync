@@ -115,6 +115,12 @@ class RecentSnippetTest {
     }
 
     @Test
+    fun `new note prefers prose over a trailing list`() {
+        assertEquals("went well", RecentSnippet.of(null, "## Notes\n\nwent well\n\n## Done\n- 1-1\n"))
+        assertEquals("- [ ] eggs", RecentSnippet.of(null, "- [ ] milk\n- [ ] eggs\n"))
+    }
+
+    @Test
     fun `edit in the middle shows that paragraph, not the last`() {
         val old = "one\n\ntwo\n\nthree"
         val new = "one\n\ntwo, now longer\nand wrapped\n\nthree"

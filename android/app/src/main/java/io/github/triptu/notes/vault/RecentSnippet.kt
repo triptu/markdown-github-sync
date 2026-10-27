@@ -5,7 +5,7 @@ package io.github.triptu.notes.vault
  *
  * Lines are compared between the old and new text. The last changed line wins. If it sits in a
  * list, the line alone is the snippet (a ticked checkbox, not the whole list); otherwise its whole
- * paragraph is. Without an old text, the last paragraph that has words is used.
+ * paragraph is. Without an old text, the last prose paragraph is used, else the last list line.
  */
 object RecentSnippet {
     private const val MaxLength = 400
@@ -55,8 +55,10 @@ object RecentSnippet {
         return lines.subList(start, end + 1).filter(::isContent).joinToString(" ") { it.trim() }
     }
 
+    /** Prefers prose: a list at the end (a "Done" section) says less than the paragraph above it. */
     private fun lastParagraph(lines: List<String>): String {
-        val last = lines.indexOfLast(::isContent)
+        val prose = lines.indexOfLast { isContent(it) && !ListLine.containsMatchIn(it) }
+        val last = if (prose >= 0) prose else lines.indexOfLast(::isContent)
         return if (last < 0) "" else snippetAround(lines, last)
     }
 }

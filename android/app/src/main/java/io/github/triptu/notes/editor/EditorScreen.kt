@@ -68,6 +68,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.triptu.notes.R
 import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.ui.IconButton48
@@ -215,7 +216,10 @@ private fun DestinationChip(destination: CaptureDestination, onPick: (CaptureDes
         DropdownMenu(open, { open = false }, containerColor = colors.raised, shape = RoundedCornerShape(14.dp)) {
             for (d in CaptureDestination.entries) {
                 DropdownMenuItem(
-                    text = { Text(d.label, style = NotesType.row, color = colors.ink) },
+                    text = {
+                        val current = d == destination
+                        Text(d.label, style = NotesType.row.copy(fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal), color = colors.ink)
+                    },
                     leadingIcon = { PhIcon(if (d == CaptureDestination.NewNote) R.drawable.ph_file_text else R.drawable.ph_calendar_blank, null, 20.dp, colors.ink2) },
                     onClick = { open = false; onPick(d) },
                 )
@@ -268,32 +272,36 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     val colors = NotesTheme.colors
     val density = LocalDensity.current
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var focused by remember { mutableStateOf(false) }
     val current by rememberUpdatedState(session.value)
     val parsed by rememberUpdatedState(session.parsed)
     val openLink by rememberUpdatedState(onOpenLink)
     val boxSide = with(density) { TaskBoxSize.toPx() }
     val slop = with(density) { 14.dp.toPx() }
+    val xHeightCenter = with(density) { 6.sp.toPx() }
 
     fun boxTopLeft(l: TextLayoutResult, task: TaskMark): Offset {
         val line = l.getLineForOffset(task.markerStart)
         val x = l.getHorizontalPosition(task.markerStart, usePrimaryDirection = true)
-        val centerY = (l.getLineTop(line) + l.getLineBottom(line)) / 2f
+        // Centre on the lowercase letters, which sit just above the baseline.
+        val centerY = l.getLineBaseline(line) - xHeightCenter
         return Offset(x, centerY - boxSide / 2f)
     }
 
-    fun revealed(task: TaskMark) = current.selection.min <= task.markerEnd - 1 && current.selection.max >= task.markerStart
+    fun revealed(task: TaskMark) = focused && current.selection.min <= task.markerEnd - 1 && current.selection.max >= task.markerStart
 
     BasicTextField(
         value = session.value,
         onValueChange = { session.onValueChange(it) },
         textStyle = NotesType.noteBody.copy(color = colors.ink),
         cursorBrush = SolidColor(colors.ink),
-        visualTransformation = LivePreview(session.parsed, session.value.selection, colors),
+        visualTransformation = LivePreview(session.parsed, session.value.selection, focused, colors),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(focus)
+            .onFocusChanged { focused = it.isFocused }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -306,7 +314,7 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
                     }
                     val offset = l.getOffsetForPosition(p)
                     val link = if (task == null) parsed.links.firstOrNull { k ->
-                        offset in k.labelStart until k.labelEnd && !(current.selection.min <= k.end && current.selection.max >= k.start)
+                        offset in k.labelStart until k.labelEnd && !(focused && current.selection.min <= k.end && current.selection.max >= k.start)
                     } else null
                     if (task == null && link == null) return@awaitEachGesture
                     down.consume()
