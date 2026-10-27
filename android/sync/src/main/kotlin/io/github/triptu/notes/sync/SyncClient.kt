@@ -46,6 +46,8 @@ class SyncClient(
     /** The bundled engine: `context.assets.open("sync-engine.js")`, see [readEngineScript]. */
     engineScript: String,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Diagnostics: one line per engine call and GitHub request. Never shown to the user. */
+    private val log: (String) -> Unit = {},
 ) : Closeable {
     constructor(
         storageDir: File,
@@ -82,6 +84,7 @@ class SyncClient(
         http = http,
         token = { token() },
         progress = { done, total -> _status.value = SyncStatus.Syncing(done, total) },
+        log = log,
     )
     private val attachments = Attachments(File(storageDir, "attachments"), http, config.owner, config.repository, config.branch, { token() })
 

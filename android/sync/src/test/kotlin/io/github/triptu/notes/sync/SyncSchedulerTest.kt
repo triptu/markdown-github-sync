@@ -15,9 +15,13 @@ class SyncSchedulerTest {
         val backgroundScope get() = test.backgroundScope
         val runs = mutableListOf<Long>()
         var fail: Throwable? = null
+        val finished = mutableListOf<Long>()
         val scheduler = SyncScheduler(test.backgroundScope, run = {
             runs.add(test.testScheduler.currentTime)
+            // A real sync suspends: an automatic run must survive its own timer being cleared.
+            kotlinx.coroutines.yield()
             fail?.let { throw it }
+            finished.add(test.testScheduler.currentTime)
         }, onError = {}, clock = { test.testScheduler.currentTime })
 
         fun at(time: Long) {
@@ -34,6 +38,7 @@ class SyncSchedulerTest {
         h.at(301_000)
         h.at(601_000)
         assertEquals(listOf(1_000L, 301_000L, 601_000L), h.runs)
+        assertEquals(h.runs, h.finished)
     }
 
     @Test

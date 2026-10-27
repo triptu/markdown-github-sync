@@ -3,6 +3,7 @@ package io.github.triptu.notes.syncing
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.sync.EnrollResult
 import io.github.triptu.notes.sync.EnrollmentPreview
@@ -142,6 +143,7 @@ class GitHubSync(
     }
 
     fun onForeground() {
+        Log.i(Tag, "foreground, client=${_client.value != null}")
         foreground = true
         _client.value?.onForeground()
     }
@@ -151,6 +153,7 @@ class GitHubSync(
         foreground = false
         val client = _client.value ?: return
         val waiting = client.hasWaitingEdits
+        Log.i(Tag, "background, waiting edits=$waiting")
         client.onBackground()
         if (waiting) SendEditsWorker.enqueue(context)
     }
@@ -314,6 +317,7 @@ class GitHubSync(
         config = SyncConfig(owner = target.owner, repository = target.repository, branch = target.branch, deviceName = deviceName()),
         tokens = { trialToken ?: tokens.read() },
         engineScript = engine,
+        log = { Log.d(Tag, it) },
     )
 
     private fun activate(client: SyncClient) {
@@ -328,6 +332,7 @@ class GitHubSync(
     }
 
     private suspend fun onStatus(client: SyncClient, status: SyncStatus) {
+        Log.i(Tag, if (status is SyncStatus.Error) "status: Error(${status.error.kind}, ${status.error.detail})" else "status: $status")
         if (status is SyncStatus.Conflict) settle(client, status.conflicts)
         if (status is SyncStatus.Idle) {
             _deletion.value = null
@@ -419,6 +424,8 @@ class GitHubSync(
         Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() } ?: Build.MODEL
 
     companion object {
+        private const val Tag = "NotesSync"
+
         fun message(error: SyncError): String = when (error.kind) {
             SyncError.Kind.Offline -> SyncCopy.Offline
             else -> error.message ?: SyncCopy.Stopped
