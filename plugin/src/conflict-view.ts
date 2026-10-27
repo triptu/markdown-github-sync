@@ -23,19 +23,19 @@ export function diffRows(mine: string, theirs: string): DiffRow[] | null {
     const head = first ? 0 : CONTEXT;
     const tail = last ? 0 : CONTEXT;
     if (to - from <= head + tail + 1) {
-      for (let at = from; at < to; at++) rows.push({ kind: "same", text: a[at]! });
+      for (let at = from; at < to; at++) rows.push({ kind: "same", text: a[at] });
       return;
     }
-    for (let at = from; at < from + head; at++) rows.push({ kind: "same", text: a[at]! });
+    for (let at = from; at < from + head; at++) rows.push({ kind: "same", text: a[at] });
     rows.push({ kind: "skip", count: to - from - head - tail });
-    for (let at = to - tail; at < to; at++) rows.push({ kind: "same", text: a[at]! });
+    for (let at = to - tail; at < to; at++) rows.push({ kind: "same", text: a[at] });
   };
   let position = 0;
   hunks.forEach((hunk, index) => {
     same(position, hunk.start, index === 0, false);
     // This device first, matching the legend and the order of the choices.
     for (const line of hunk.lines) rows.push({ kind: "mine", text: line });
-    for (let at = hunk.start; at < hunk.end; at++) rows.push({ kind: "theirs", text: a[at]! });
+    for (let at = hunk.start; at < hunk.end; at++) rows.push({ kind: "theirs", text: a[at] });
     position = hunk.end;
   });
   same(position, a.length, hunks.length === 0, true);

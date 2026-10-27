@@ -15,7 +15,7 @@ export class IntegrityError extends Error {
 
 /** File dictionaries must never consult Object.prototype, including at port boundaries. */
 export function dictionary<T>(entries: Iterable<readonly [string, T]> = []): Record<string, T> {
-  const result: Record<string, T> = Object.create(null);
+  const result = Object.create(null) as Record<string, T>;
   for (const [key, value] of entries) result[key] = value;
   return result;
 }
@@ -31,9 +31,9 @@ const BASE64_SHAPE = /^[A-Za-z0-9+/]*={0,2}$/;
 
 // Native one-call conversions (recent Chromium/Android WebView); feature-detected.
 const nativeToBase64: ((this: Uint8Array) => string) | undefined =
-  typeof Reflect.get(Uint8Array.prototype, "toBase64") === "function" ? Reflect.get(Uint8Array.prototype, "toBase64") : undefined;
+  typeof Reflect.get(Uint8Array.prototype, "toBase64") === "function" ? Reflect.get(Uint8Array.prototype, "toBase64") as (this: Uint8Array) => string : undefined;
 const nativeFromBase64: ((text: string) => Uint8Array<ArrayBuffer>) | undefined =
-  typeof Reflect.get(Uint8Array, "fromBase64") === "function" ? Reflect.get(Uint8Array, "fromBase64") : undefined;
+  typeof Reflect.get(Uint8Array, "fromBase64") === "function" ? Reflect.get(Uint8Array, "fromBase64") as (text: string) => Uint8Array<ArrayBuffer> : undefined;
 
 /** Portable encoder: bounded `apply` chunks avoid both argument-spread overhead and stack limits. */
 export function encodeBase64Portable(bytes: Uint8Array): string {
@@ -178,8 +178,17 @@ export function entryText(entry: Entry): string | null {
  */
 export function isValidPath(path: unknown): path is string {
   if (typeof path !== "string" || path.length === 0 || path.length > 4096) return false;
-  if (/[\u0000-\u001f\u007f\\]/.test(path)) return false;
+  if (hasControlCharacter(path) || path.includes("\\")) return false;
   return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+/** U+0000 to U+001F or U+007F, except those listed in `allowed`. */
+export function hasControlCharacter(text: string, allowed = ""): boolean {
+  for (let at = 0; at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    if ((code < 0x20 || code === 0x7f) && !allowed.includes(text[at])) return true;
+  }
+  return false;
 }
 
 /** A hidden path: some segment starts with a dot (`.git`, `.obsidian`, `.trash`, ...). */

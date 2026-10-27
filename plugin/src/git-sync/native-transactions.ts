@@ -91,7 +91,7 @@ async function parseState(value: unknown, root: string, policy: NativePathPolicy
   const storedPolicy = value.policy;
   if (!object(storedPolicy) || storedPolicy.rules !== "config/1" || storedPolicy.configDir !== policy.binding.configDir)
     throw new Error("Native transaction journal policy does not match this vault.");
-  const intents: Record<string, FileIntent> = Object.create(null);
+  const intents = Object.create(null) as Record<string, FileIntent>;
   for (const [path, raw] of Object.entries(value.intents)) {
     if (!object(raw) || !policy.allows(path) || raw.path !== path || typeof raw.id !== "string"
       || !uuid.test(raw.id) || !optionalEntry(raw.expectedEntry) || !optionalEntry(raw.nextEntry)
@@ -115,7 +115,7 @@ async function parseState(value: unknown, root: string, policy: NativePathPolicy
       attempted: raw.attempted, hostLifetime: raw.hostLifetime,
     };
   }
-  const tracked: Record<string, TrackedHidden> = Object.create(null);
+  const tracked = Object.create(null) as Record<string, TrackedHidden>;
   for (const [hidden, raw] of Object.entries(value.tracked)) {
     if (!object(raw) || typeof raw.path !== "string" || !policy.allows(raw.path)
       || !optionalEntry(raw.expected) || !optionalEntry(raw.next)
@@ -161,8 +161,8 @@ async function parseState(value: unknown, root: string, policy: NativePathPolicy
       throw new Error("Native oversize acknowledgement is corrupt.");
     acknowledgedOversize.push({ sourcePath: raw.sourcePath, size: raw.size, mtime: raw.mtime });
   }
-  const supersededRecoveryIds = value.supersededRecoveryIds ?? [];
-  if (!supersededRecoveryIds.every((id: unknown) => typeof id === "string" && uuid.test(id)))
+  const supersededRecoveryIds: unknown[] = value.supersededRecoveryIds ?? [];
+  if (!supersededRecoveryIds.every((id): id is string => typeof id === "string" && uuid.test(id)))
     throw new Error("Native superseded recovery IDs are corrupt.");
   return { format: 3, policy: policy.binding, intents, tracked, recoveries, acknowledgedOversize, supersededRecoveryIds };
 }
@@ -175,7 +175,8 @@ export class NativeTransactionJournal {
   private constructor(private files: JournalFiles, private store: FileJournalStore, installationId: string,
     private readonly policy: NativePathPolicy) {
     this.root = `.git-vault-sync/${installationId}`;
-    this.state = { format: 3, policy: policy.binding, intents: Object.create(null), tracked: Object.create(null),
+    this.state = { format: 3, policy: policy.binding, intents: Object.create(null) as Record<string, FileIntent>,
+      tracked: Object.create(null) as Record<string, TrackedHidden>,
       recoveries: [], acknowledgedOversize: [], supersededRecoveryIds: [] };
   }
   static async open(files: JournalFiles, installationId: string, policy: NativePathPolicy): Promise<NativeTransactionJournal> {

@@ -126,7 +126,7 @@ export function ago(at: number, now = Date.now()): string {
 }
 export function parseRepository(value: string): { owner: string; repository: string } | null {
   const match = /^(?:(?:https?:\/\/)?github\.com\/|git@github\.com:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(value.trim());
-  return match ? { owner: match[1]!, repository: match[2]! } : null;
+  return match ? { owner: match[1], repository: match[2] } : null;
 }
 /** Last sync and last verified access, or the reason access failed. */
 export function describeActivity(activity: Activity): { text: string; problem: boolean } {

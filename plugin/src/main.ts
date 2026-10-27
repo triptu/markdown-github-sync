@@ -164,7 +164,7 @@ export default class GitVaultSync extends Plugin {
     this.alerted = key;
     this.alertNotice?.hide();
     const notice = this.alertNotice = new Notice(`${text} ${fix === "settings" ? "Tap to open settings." : "Tap for details."}`, 0);
-    notice.noticeEl?.addEventListener("click", () => fix === "settings" ? this.openSettings() : new ChangesModal(this.app, this).open());
+    notice.messageEl?.addEventListener("click", () => fix === "settings" ? this.openSettings() : new ChangesModal(this.app, this).open());
   }
   /** A sync that finished cleanly takes down any problem notice still on screen. */
   private settled(): void {
@@ -227,7 +227,7 @@ export default class GitVaultSync extends Plugin {
     const state = raw === null ? null : await parseState(raw);
     const nativePolicy = await NativePathPolicy.forConfig(this.app.vault.configDir);
     const repository = this.createRepository(installation);
-    const modes: Record<string, FileMode> = Object.create(null);
+    const modes = Object.create(null) as Record<string, FileMode>;
     if (state !== null) {
       for (const [path, ref] of Object.entries(state.base.files)) modes[path] = ref.mode;
     }

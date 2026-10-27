@@ -2,7 +2,7 @@ import type { Changes, CommitSnapshot, Entry, LedgerRead, PreparedPublication, R
 import { ArchiveError, selectArchiveFiles } from "./archive";
 import { assertNoNestedGitignore, canonicalFilesystemPath, compileScope, scopeForTree } from "./scope";
 import type { Scope } from "./scope";
-import { base64Length, decodeCheckedBase64, encodeBase64, isTrustedPair, trustVerifiedEntry, yieldToHost } from "./codec";
+import { base64Length, decodeCheckedBase64, encodeBase64, hasControlCharacter, isTrustedPair, trustVerifiedEntry, yieldToHost } from "./codec";
 
 export interface GitHubRequest {
   url: string;
@@ -114,7 +114,7 @@ function size(value: unknown): number {
 }
 function pathParts(path: string): string[] {
   const parts = path.split("/");
-  if (path.length > 4096 || parts.some(p => !p || p === "." || p === ".." || /[\\\u0000-\u001f\u007f:<>"|?*]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p) || /[\ud800-\udfff]/u.test(p))) {
+  if (path.length > 4096 || parts.some(p => !p || p === "." || p === ".." || hasControlCharacter(p) || /[\\:<>"|?*]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p) || /[\ud800-\udfff]/u.test(p))) {
     throw new GitHubError("Unsafe repository path");
   }
   for (const part of parts) {
@@ -177,7 +177,7 @@ async function objectOid(type: "blob" | "tree", bytes: Uint8Array): Promise<stri
   const header = encoder.encode(`${type} ${bytes.length}\0`);
   const framed = new Uint8Array(header.length + bytes.length);
   framed.set(header); framed.set(bytes, header.length);
-  return Array.from(new Uint8Array(await globalThis.crypto.subtle.digest("SHA-1", framed)), n => n.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-1", framed)), n => n.toString(16).padStart(2, "0")).join("");
 }
 export function gitBlobOid(bytes: Uint8Array): Promise<string> { return objectOid("blob", bytes); }
 function checkLfs(bytes: Uint8Array): void {
@@ -304,7 +304,7 @@ export class GitHubRepository implements Repository {
   private readonly uploaded = new Set<string>();
   constructor(private readonly options: GitHubRepositoryOptions) {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(options.owner) || !/^[A-Za-z0-9_.-]+$/.test(options.name) || options.name === "." || options.name === "..") throw new GitHubError("Invalid repository coordinates");
-    if (!options.branch || options.branch === "@" || /[\s~^:?*\[\\\u0000-\u001f\u007f]/.test(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
+    if (!options.branch || options.branch === "@" || /[\s~^:?*[\\]/.test(options.branch) || hasControlCharacter(options.branch) || options.branch.includes("..") || options.branch.includes("@{") || options.branch.split("/").some(p => !p || p.startsWith(".") || p.endsWith(".lock") || p.endsWith("."))) throw new GitHubError("Invalid branch name");
     if (typeof options.installation !== "string" || !INSTALLATION.test(options.installation)) throw new GitHubError("Invalid installation identity");
     this.configDir = options.configDir ?? ".obsidian";
     this.ledger = `refs/vault-sync/devices/${options.installation}`;
@@ -354,7 +354,8 @@ export class GitHubRepository implements Repository {
     const headers = new Map(Object.entries(record(response.headers)).map(([key, value]) => [key.toLowerCase(), string(value)]));
     const retry = headers.get("retry-after");
     const reset = headers.get("x-ratelimit-reset");
-    const graphqlRateLimited = typeof response.json === "object" && response.json !== null && "errors" in response.json && Array.isArray(response.json.errors) && response.json.errors.some(error => typeof error === "object" && error !== null && "type" in error && error.type === "RATE_LIMITED");
+    const errors: unknown = typeof response.json === "object" && response.json !== null ? Reflect.get(response.json, "errors") : undefined;
+    const graphqlRateLimited = Array.isArray(errors) && errors.some((error: unknown) => typeof error === "object" && error !== null && "type" in error && error.type === "RATE_LIMITED");
     if (response.status === 429 || ((response.status === 403 || graphqlRateLimited) && (retry !== undefined || headers.get("x-ratelimit-remaining") === "0" || graphqlRateLimited))) {
       const dates = [this.now() + 60_000];
       if (retry !== undefined) {
@@ -465,7 +466,7 @@ export class GitHubRepository implements Repository {
   /** The branch head commit id, read fresh (no snapshot). */
   async headOid(): Promise<string> {
     let ref: Record<string, unknown>;
-    const url = `${this.base}/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}?fresh=${globalThis.crypto.randomUUID()}`;
+    const url = `${this.base}/git/ref/heads/${this.options.branch.split("/").map(encodeURIComponent).join("/")}?fresh=${crypto.randomUUID()}`;
     try { ref = record((await this.request(url, "GET", undefined, { "Cache-Control": "no-cache", Pragma: "no-cache" })).json); }
     catch (error) {
       if (error instanceof GitHubError && (error.status === 404 || error.status === 409)) throw new GitHubError("Unsupported enrollment: branch missing or repository empty/unborn", error.status);
@@ -595,7 +596,7 @@ export class GitHubRepository implements Repository {
     const unknown = await this.reuseOffered(missing, blobs);
     const remote = await this.reuseLocal(unknown, paths, blobs);
     await this.download(value.oid, items, remote, paths, blobs);
-    const files: Snapshot = Object.create(null);
+    const files = Object.create(null) as Snapshot;
     for (const item of included) {
       if (item.mode !== "100644" && item.mode !== "100755") throw new GitHubError("Unsupported file mode");
       const data = blobs.get(item.sha);
@@ -767,7 +768,7 @@ export class GitHubRepository implements Repository {
     if (!sameFiles(actual.files, parent.files)) throw new GitHubError("Parent snapshot mismatch");
     const parentScope = await this.scopeForItems(value.treeOid, items);
     const checked = new Map<string, Entry | null>();
-    const files: Snapshot = Object.assign(Object.create(null), actual.files);
+    const files: Snapshot = Object.assign(Object.create(null) as Snapshot, actual.files);
     for (const [path, next] of Object.entries(changes)) {
       pathParts(path);
       if (!parentScope.includes(path)) throw new GitHubError("Change outside parent commit scope");
@@ -915,7 +916,7 @@ export class GitHubRepository implements Repository {
    * the ledger CAS (receipt or seal) decides. Malformed answers throw.
    */
   async readLedger(): Promise<LedgerRead> {
-    const url = `${this.base}/git/ref/${this.ledger.slice("refs/".length).split("/").map(encodeURIComponent).join("/")}?fresh=${globalThis.crypto.randomUUID()}`;
+    const url = `${this.base}/git/ref/${this.ledger.slice("refs/".length).split("/").map(encodeURIComponent).join("/")}?fresh=${crypto.randomUUID()}`;
     let response: GitHubResponse;
     try { response = await this.request(url, "GET", undefined, { "Cache-Control": "no-cache", Pragma: "no-cache" }); }
     catch (error) {

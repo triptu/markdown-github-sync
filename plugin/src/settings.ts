@@ -44,7 +44,7 @@ export function parseSettings(value: unknown): Settings {
   for (const key of ["commitMessageTemplate", "commitDateFormat"] as const) {
     const field: unknown = Reflect.get(value, key);
     if (field === undefined) continue;
-    if (typeof field !== "string" || !field.trim() || field.length > 256 || /[\r\n\x00]/.test(field))
+    if (typeof field !== "string" || !field.trim() || field.length > 256 || /[\r\n\0]/.test(field))
       throw new Error("Commit message and date format must be a single line, 1–256 characters.");
     defaults[key] = field;
   }
