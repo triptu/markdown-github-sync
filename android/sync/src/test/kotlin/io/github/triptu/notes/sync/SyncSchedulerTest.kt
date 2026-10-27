@@ -75,12 +75,15 @@ class SyncSchedulerTest {
         h.at(2_000)
         h.scheduler.edited() // Runs after the typing pause, at 32 s, and fails again: 10 s backoff.
         h.at(35_000)
-        h.backgroundScope.launch { h.scheduler.now() } // Too early: deferred to 42 s.
+        // Inside the backoff, but the user asked: it runs at once.
         h.fail = SyncError(SyncError.Kind.Offline, "rate limited", retryAt = 500_000)
+        h.backgroundScope.launch { h.scheduler.now() }
+        h.at(35_000)
+        h.scheduler.edited() // Automatic runs wait for the rate-limit reset.
         h.at(499_000)
-        assertEquals(listOf(1_000L, 32_000L, 42_000L), h.runs)
+        assertEquals(listOf(1_000L, 32_000L, 35_000L), h.runs)
         h.fail = null
         h.at(500_000)
-        assertEquals(listOf(1_000L, 32_000L, 42_000L, 500_000L), h.runs)
+        assertEquals(listOf(1_000L, 32_000L, 35_000L, 500_000L), h.runs)
     }
 }

@@ -13,7 +13,14 @@ data class SyncConfig(
      */
     val onDemandExtensions: Set<String> = DEFAULT_ON_DEMAND,
 ) {
+    init {
+        for (extension in onDemandExtensions)
+            require(EXTENSION.matches(extension)) { "Invalid on-demand extension \"$extension\": use lowercase letters and digits, without the dot" }
+    }
+
     companion object {
+        private val EXTENSION = Regex("^[a-z0-9]{1,16}$")
+
         val DEFAULT_ON_DEMAND: Set<String> = setOf(
             "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "heic", "heif", "tif", "tiff", "ico",
             "pdf",
@@ -45,7 +52,13 @@ sealed interface SyncStatus {
 }
 
 /** A failure in a category the UI can act on. `message` is plain and human. */
-class SyncError(val kind: Kind, message: String, val retryAt: Long? = null) : Exception(message) {
+class SyncError(
+    val kind: Kind,
+    message: String,
+    val retryAt: Long? = null,
+    /** Technical cause for logs and bug reports; never shown to the user. */
+    val detail: String? = null,
+) : Exception(message) {
     enum class Kind {
         /** No connection, or GitHub is down or rate limiting. Retries automatically. */
         Offline,

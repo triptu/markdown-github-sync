@@ -98,8 +98,8 @@ class SyncScheduler internal constructor(
         val done: CompletableDeferred<Unit>
         synchronized(this) {
             if (stopped || running || (!manual && !visible)) return
-            if (clock() < retryAfter) {
-                if (manual) onError(SyncError(SyncError.Kind.Offline, "Sync is waiting after a network error. It will retry shortly.", retryAfter))
+            // A sync the user asked for tries now; only automatic ones wait out the backoff.
+            if (!manual && clock() < retryAfter) {
                 schedule()
                 return
             }

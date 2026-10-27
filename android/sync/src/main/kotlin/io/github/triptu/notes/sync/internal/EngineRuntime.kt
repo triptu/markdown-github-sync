@@ -9,6 +9,7 @@ import io.github.triptu.notes.sync.VaultFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -26,6 +27,8 @@ internal class EngineException(
     override val message: String,
     val status: Int?,
     val retryAt: Long?,
+    /** The engine's own wording, for logs only. */
+    val detail: String?,
 ) : Exception(message)
 
 /**
@@ -46,10 +49,12 @@ internal class EngineRuntime(
     private val dispatcher = executor.asCoroutineDispatcher()
     private val mutex = Mutex()
     private var js: QuickJs? = null
+    private var closed = false
     private val random = SecureRandom()
 
     /** Calls `__api.call(method, args)`; returns the `ok` value or throws [EngineException]. */
     suspend fun call(method: String, args: Map<String, Any?> = emptyMap()): Any? = mutex.withLock {
+        check(!closed) { "Sync engine is closed" }
         withContext(dispatcher) {
             val runtime = js ?: start().also { js = it }
             val raw = runtime.evaluate<String>("await __api.call(${Json.quote(method)}, ${Json.quote(Json.write(args))})")
@@ -61,6 +66,7 @@ internal class EngineRuntime(
                     message = error.str("message") ?: "Sync failed",
                     status = (error["status"] as Double?)?.toInt(),
                     retryAt = (error["retryAt"] as Double?)?.toLong(),
+                    detail = error.str("detail"),
                 )
             }
             reply["ok"]
@@ -69,6 +75,7 @@ internal class EngineRuntime(
 
     /** Evaluates raw JavaScript in the engine's runtime (tests and diagnostics); returns its string result. */
     suspend fun evaluate(code: String): String? = mutex.withLock {
+        check(!closed) { "Sync engine is closed" }
         withContext(dispatcher) { (js ?: start().also { js = it }).evaluate<String?>(code) }
     }
 
@@ -111,13 +118,30 @@ internal class EngineRuntime(
             })
             asyncFunction("token", async { token() })
         }
-        runtime.evaluate<Any?>(bundle, "sync-engine.js", false)
+        try {
+            runtime.evaluate<Any?>(bundle, "sync-engine.js", false)
+        } catch (error: Throwable) {
+            runtime.close()
+            throw error
+        }
         return runtime
     }
 
+    /**
+     * Waits for the call in progress (callers cancel theirs first), then
+     * releases QuickJS on the engine thread that owns it.
+     */
     override fun close() {
-        js?.close()
-        js = null
+        runBlocking {
+            mutex.withLock {
+                if (closed) return@withLock
+                closed = true
+                withContext(dispatcher) {
+                    js?.close()
+                    js = null
+                }
+            }
+        }
         executor.shutdown()
     }
 

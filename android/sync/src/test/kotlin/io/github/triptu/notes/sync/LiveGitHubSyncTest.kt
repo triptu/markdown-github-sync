@@ -182,6 +182,26 @@ class LiveGitHubSyncTest {
     }
 
     @Test
+    fun keepsTheEnrolledOnDemandListUntilSetUpAgain() = runBlocking {
+        val first = device("a")
+        first.join()
+        first.close()
+        // The app now asks for a different list: sync must keep working with the enrolled one.
+        val storage = File(dir, "a/sync")
+        val reopened = SyncClient(storage, File(dir, "a/vault"),
+            SyncConfig(owner = repo[0], repository = repo[1], branch = branch, deviceName = "Test a", onDemandExtensions = setOf("pdf")),
+            tokens = { token }, engineScript = script)
+        clients.add(reopened to storage)
+        val status = reopened.syncNow()
+        assertTrue("$status", status is SyncStatus.Idle)
+        assertTrue(reopened.onDemandChangePending)
+        assertTrue("png" in reopened.onDemandExtensions)
+        assertEquals(null, reopened.text("media/photo.png"))
+        val refused = runCatching { reopened.previewEnrollment() }.exceptionOrNull()
+        assertEquals("Sync is already set up on this device.", refused?.message)
+    }
+
+    @Test
     fun reportsAccessProblems() = runBlocking {
         val client = SyncClient(File(dir, "bad/sync"), File(dir, "bad/vault"),
             SyncConfig(owner = repo[0], repository = repo[1], branch = branch, deviceName = "Bad"),

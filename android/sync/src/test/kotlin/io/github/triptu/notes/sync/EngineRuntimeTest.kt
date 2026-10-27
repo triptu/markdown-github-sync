@@ -64,6 +64,8 @@ class EngineRuntimeTest {
         assertEquals("cancelled", js("""let fired = false; const id = setTimeout(() => { fired = true; }, 5); clearTimeout(id); await new Promise(r => setTimeout(r, 30)); fired ? "fired" : "cancelled""""))
         assertTrue(js("crypto.randomUUID()")!!.matches(Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")))
         assertEquals("https://codeload.github.com/o/r/zip/abc codeload.github.com", js("""const u = new URL("https://codeload.github.com/o/r/zip/abc", "https://api.github.com/x"); u.href + " " + u.hostname"""))
+        assertEquals("user", js("""new URL("https://user:pw@codeload.github.com/x").username"""))
+        assertEquals("TypeError", js("""try { new URL("/relative", "https://api.github.com/"); "ok" } catch (e) { e.name }"""))
         assertEquals("1,true", js("""const c = structuredClone({ a: [1, { b: true }] }); [c.a[0], c.a[1].b].join()"""))
     }
 
@@ -74,7 +76,8 @@ class EngineRuntimeTest {
             fail("expected an error")
         } catch (error: EngineException) {
             assertEquals("other", error.category)
-            assertEquals("Sync is not set up on this device.", error.message)
+            assertEquals("Sync stopped. Your files are safe.", error.message)
+            assertEquals("Sync is not set up on this device.", error.detail)
         }
     }
 }

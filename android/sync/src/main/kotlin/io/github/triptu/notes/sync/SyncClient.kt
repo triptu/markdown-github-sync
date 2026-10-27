@@ -50,7 +50,20 @@ class SyncClient(
     private val http = GitHubHttp()
     private val lastSyncedFile = File(storageDir, "last-synced")
     private val installationId: String = installationId(storageDir)
-    private val onDemand = config.onDemandExtensions.map { it.lowercase().removePrefix(".") }.toSortedSet()
+    /**
+     * The on-demand list is part of the engine's scope, so it may change only
+     * at (re-)enrollment: the list enrollment used is stored and kept until then.
+     */
+    private val onDemandFile = File(storageDir, "on-demand-extensions")
+    private val requestedOnDemand = config.onDemandExtensions.sorted()
+    @Volatile private var onDemand: List<String> =
+        onDemandFile.takeIf { it.isFile }?.readLines()?.filter { it.isNotBlank() }?.sorted() ?: requestedOnDemand
+
+    /** Extensions this device currently leaves on GitHub. */
+    val onDemandExtensions: List<String> get() = onDemand
+
+    /** True when [SyncConfig.onDemandExtensions] differs from the enrolled list; set up sync again to adopt it. */
+    val onDemandChangePending: Boolean get() = onDemand != requestedOnDemand
 
     private val engine = EngineRuntime(
         bundle = engineScript,
@@ -78,7 +91,7 @@ class SyncClient(
     init {
         vault.onLocalChange = { if (enrolled) scheduler.edited() }
         scope.launch {
-            try { refresh() } catch (error: SyncError) { report(error) }
+            try { refresh() } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (error: Throwable) { report(error) }
         }
     }
 
@@ -99,6 +112,7 @@ class SyncClient(
     suspend fun refresh(): SyncStatus = guard {
         val value = engine.call("status").obj()
         enrolled = value["kind"] == "enrolled"
+        if (enrolled && !onDemandFile.isFile) persistOnDemand()
         statusFrom(value).also { _status.value = it }
     }
 
@@ -107,7 +121,14 @@ class SyncClient(
 
     /** What enrolling would do to this device's files. Changes nothing. */
     suspend fun previewEnrollment(): EnrollmentPreview = guard {
-        val value = engine.call("previewEnrollment").obj()
+        var value = engine.call("previewEnrollment").obj()
+        if (value["kind"] == "preview" && onDemand != requestedOnDemand) {
+            // Setting up (again) is when a new on-demand list takes effect.
+            onDemand = requestedOnDemand
+            opened = false
+            ensureOpen()
+            value = engine.call("previewEnrollment").obj()
+        }
         if (value["kind"] != "preview") throw unavailable(value)
         preview(value)
     }
@@ -116,7 +137,7 @@ class SyncClient(
     suspend fun enroll(previewToken: String): EnrollResult = guard {
         val value = engine.call("enroll", mapOf("token" to previewToken)).obj()
         when (value["kind"]) {
-            "enrolled" -> { enrolled = true; EnrollResult.Enrolled }
+            "enrolled" -> { enrolled = true; persistOnDemand(); EnrollResult.Enrolled }
             "already-enrolled" -> { enrolled = true; EnrollResult.AlreadyEnrolled }
             "stale" -> EnrollResult.Stale(preview(value["preview"].obj()))
             else -> throw unavailable(value)
@@ -199,7 +220,7 @@ class SyncClient(
             "branch" to config.branch,
             "deviceName" to config.deviceName,
             "installationId" to installationId,
-            "excludedExtensions" to onDemand.toList(),
+            "excludedExtensions" to onDemand,
         ))
         opened = true
     }
@@ -211,8 +232,19 @@ class SyncClient(
             ensureOpen()
             return body()
         } catch (error: EngineException) {
-            throw SyncError(kind(error.category), error.message, error.retryAt)
+            throw SyncError(kind(error.category), error.message, error.retryAt, error.detail)
+        } catch (error: SyncError) {
+            throw error
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // A broken bundle, a QuickJS failure or malformed engine output.
+            throw SyncError(SyncError.Kind.Other, STOPPED, detail = error.toString())
         }
+    }
+
+    private fun persistOnDemand() {
+        try { atomicWrite(onDemandFile, onDemand.joinToString("\n").toByteArray()) } catch (_: Exception) { /* Retried at the next refresh. */ }
     }
 
     private suspend fun runSync() {
@@ -225,6 +257,7 @@ class SyncClient(
         }
         val attention = outcome.str("attention")
         _status.value = when (outcome["kind"]) {
+            "paused", "corrupt", "blocked", "native-error" -> SyncStatus.Error(problem(outcome))
             "unenrolled" -> { enrolled = false; SyncStatus.NotSetUp }
             "up-to-date", "synced" -> {
                 enrolled = true
@@ -237,12 +270,12 @@ class SyncClient(
                 scheduler.requestFollowUp()
                 SyncStatus.Idle(lastSyncedAt)
             }
-            else -> SyncStatus.Error(SyncError(SyncError.Kind.Other, attention ?: "Sync stopped. Your files are safe."))
+            else -> SyncStatus.Error(SyncError(SyncError.Kind.Other, STOPPED, detail = outcome.str("kind")))
         }
     }
 
     private fun report(error: Throwable) {
-        val problem = error as? SyncError ?: SyncError(SyncError.Kind.Other, error.message ?: "Sync failed. Your files are safe.")
+        val problem = error as? SyncError ?: SyncError(SyncError.Kind.Other, STOPPED, detail = error.toString())
         _status.value = when (problem.kind) {
             SyncError.Kind.Offline -> SyncStatus.Offline(lastSyncedAt)
             else -> SyncStatus.Error(problem)
@@ -258,19 +291,38 @@ class SyncClient(
     private fun statusFrom(value: Map<String, Any?>): SyncStatus = when (value["kind"]) {
         "enrolled" -> {
             val conflicts = value["conflicts"]?.list().orEmpty().map { conflict(it.obj()) }
-            if (conflicts.isNotEmpty()) SyncStatus.Conflict(conflicts, "Some files changed both here and on GitHub. Choose which version to keep.")
+            if (value["pause"] != null) SyncStatus.Error(problem(value))
+            else if (conflicts.isNotEmpty()) SyncStatus.Conflict(conflicts, "Some files changed both here and on GitHub. Choose which version to keep.")
             else SyncStatus.Idle(lastSyncedAt)
         }
-        "corrupt" -> SyncStatus.Error(SyncError(SyncError.Kind.Other, "Sync needs repair: ${value.str("detail")}"))
+        "corrupt" -> SyncStatus.Error(problem(value))
         else -> SyncStatus.NotSetUp
     }
 
     private fun unavailable(value: Map<String, Any?>): SyncError = when (value["kind"]) {
         "unenrolled" -> SyncError(SyncError.Kind.Other, "Sync isn't set up on this device yet.")
-        "corrupt" -> SyncError(SyncError.Kind.Other, "Sync needs repair: ${value.str("detail")}")
-        "paused" -> SyncError(SyncError.Kind.Other, "Sync is paused: ${value["pause"]?.obj()?.str("detail")}")
+        "already-enrolled" -> SyncError(SyncError.Kind.Other, "Sync is already set up on this device.")
         "busy" -> SyncError(SyncError.Kind.Other, "Sync is busy. Try again in a moment.")
-        else -> SyncError(SyncError.Kind.Other, "Sync can't do that right now (${value["kind"]}).")
+        "corrupt", "paused" -> problem(value)
+        else -> SyncError(SyncError.Kind.Other, "Sync can't do that right now.", detail = value.str("kind"))
+    }
+
+    /** Plain wording for states that stop sync; the engine's own words go to `detail`. */
+    private fun problem(value: Map<String, Any?>): SyncError {
+        val pause = value["pause"]?.obj()
+        val message = when {
+            value["kind"] == "corrupt" -> "Sync's records on this device are damaged. Set up sync again to continue."
+            value["kind"] == "blocked" -> "Some updates from GitHub couldn't be saved because those files changed here. Sync will try again."
+            value["kind"] == "native-error" -> "A file couldn't be saved, so sync stopped."
+            else -> when (pause?.str("reason")) {
+                "repository-changed" -> "The GitHub repository was replaced. Set up sync again to continue."
+                "history-rewritten" -> "The history on GitHub was rewritten. Set up sync again to continue."
+                "duplicate-installation", "ledger-diverged" -> "Another copy of this app is syncing as this device. Set up sync again to continue."
+                "scope-unreadable" -> "The repository's ignore file can't be used. Fix it on GitHub, then sync again."
+                else -> "Sync is paused. Set up sync again to continue."
+            }
+        }
+        return SyncError(SyncError.Kind.Other, message, detail = pause?.str("detail") ?: value.str("detail") ?: value.str("kind"))
     }
 
     private fun kind(category: String) = when (category) {
@@ -313,6 +365,7 @@ class SyncClient(
             return id
         }
 
+        private const val STOPPED = "Sync stopped. Your files are safe."
         private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     }
 }

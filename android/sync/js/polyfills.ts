@@ -19,7 +19,6 @@ define(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, millis
   return id;
 });
 define(globalThis, "clearTimeout", (id: number): void => { if (typeof id === "number" && id < nextTimer) cancelled.add(id); });
-define(globalThis, "queueMicrotask", (callback: () => void): void => { void Promise.resolve().then(callback); });
 
 // ---- Text ------------------------------------------------------------------
 class TextEncoderPolyfill {
@@ -72,11 +71,6 @@ define(globalThis, "atob", (text: string): string => {
 // ---- Crypto ----------------------------------------------------------------
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const cryptoPolyfill = {
-  getRandomValues<T extends ArrayBufferView>(array: T): T {
-    const target = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
-    target.set(host.randomBytes(target.length));
-    return array;
-  },
   randomUUID(): string {
     const bytes = host.randomBytes(16);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -114,57 +108,30 @@ function clone(value: unknown, seen = new Map<object, unknown>()): unknown {
 }
 define(globalThis, "structuredClone", (value: unknown) => clone(value));
 
-// ---- URL (absolute http(s) URLs only: archive redirects and history queries) -
+// ---- URL: only what github.ts reads. Absolute URLs only; anything else throws,
+// which the engine treats as an unusable archive redirect. ----------------------
 class URLSearchParamsPolyfill {
-  private entries: [string, string][] = [];
-  constructor(init?: string | Record<string, string>) {
-    if (typeof init === "string") {
-      for (const part of init.replace(/^\?/, "").split("&")) {
-        if (!part) continue;
-        const [key, value = ""] = part.split("=");
-        this.entries.push([decodeURIComponent(key.replace(/\+/g, " ")), decodeURIComponent(value.replace(/\+/g, " "))]);
-      }
-    } else if (init) for (const [key, value] of Object.entries(init)) this.entries.push([key, String(value)]);
-  }
-  get(key: string): string | null { return this.entries.find(([k]) => k === key)?.[1] ?? null; }
+  private entries: [string, string][];
+  constructor(init: Record<string, string> = {}) { this.entries = Object.entries(init).map(([k, v]) => [k, String(v)]); }
   set(key: string, value: string): void {
-    const index = this.entries.findIndex(([k]) => k === key);
-    this.entries = this.entries.filter(([k], i) => k !== key || i === index);
-    if (index >= 0) this.entries[index] = [key, String(value)]; else this.entries.push([key, String(value)]);
+    this.entries = this.entries.filter(([k]) => k !== key);
+    this.entries.push([key, String(value)]);
   }
-  append(key: string, value: string): void { this.entries.push([key, String(value)]); }
   toString(): string { return this.entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&"); }
 }
 class URLPolyfill {
-  protocol!: string; username!: string; password!: string; hostname!: string; port!: string; pathname!: string; search!: string; hash!: string;
-  constructor(input: string, base?: string) {
-    const text = String(input);
-    const absolute = /^[a-z][a-z0-9+.-]*:/i.test(text);
-    if (!absolute) {
-      if (base === undefined) throw new TypeError(`Invalid URL: ${text}`);
-      const root = new URLPolyfill(base);
-      const path = text.startsWith("/") ? text : root.pathname.replace(/[^/]*$/, "") + text;
-      return new URLPolyfill(`${root.protocol}//${root.host}${path}`);
-    }
-    const match = /^([a-z][a-z0-9+.-]*:)\/\/(?:([^:@/]*)(?::([^@/]*))?@)?([^:/?#]*)(?::(\d+))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(text);
-    if (!match) throw new TypeError(`Invalid URL: ${text}`);
+  readonly protocol: string; readonly username: string; readonly password: string; readonly hostname: string; readonly href: string;
+  constructor(input: string) {
+    const href = String(input);
+    const match = /^([a-z][a-z0-9+.-]*:)\/\/(?:([^:@/]*)(?::([^@/]*))?@)?([^:/?#]*)(?::\d+)?(?:[/?#].*)?$/i.exec(href);
+    if (!match) throw new TypeError(`Invalid URL: ${href}`);
     this.protocol = match[1].toLowerCase();
     this.username = match[2] ?? "";
     this.password = match[3] ?? "";
     this.hostname = match[4].toLowerCase();
-    this.port = match[5] ?? "";
-    this.pathname = match[6] || "/";
-    this.search = match[7] && match[7] !== "?" ? match[7] : "";
-    this.hash = match[8] ?? "";
+    this.href = href;
   }
-  get host(): string { return this.port ? `${this.hostname}:${this.port}` : this.hostname; }
-  get origin(): string { return `${this.protocol}//${this.host}`; }
-  get searchParams(): URLSearchParamsPolyfill { return new URLSearchParamsPolyfill(this.search); }
-  get href(): string {
-    const auth = this.username ? `${this.username}${this.password ? `:${this.password}` : ""}@` : "";
-    return `${this.protocol}//${auth}${this.host}${this.pathname}${this.search}${this.hash}`;
-  }
-  toString(): string { return this.href; }
 }
 define(globalThis, "URL", URLPolyfill);
 define(globalThis, "URLSearchParams", URLSearchParamsPolyfill);
+

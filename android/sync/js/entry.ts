@@ -223,10 +223,15 @@ function describe(error: unknown) {
   const retryAt = typeof error === "object" && error !== null ? Reflect.get(error, "retryAt") : undefined;
   const target = opened ? { owner: opened.config.owner, repository: opened.config.name, branch: opened.config.branch } : null;
   const category = rejectedAccess(error) ? "access" : offline(error) ? "offline" : "other";
-  const message = category === "access" && target ? accessProblem(error, target) : failure(error);
+  const detail = failure(error);
+  // Only the plugin's human access wording reaches the UI; engine messages stay in `detail`.
+  const access = category === "access" && target ? accessProblem(error, target) : detail;
+  const message = category === "access"
+    ? (access !== detail ? access : "GitHub refused access. Check the token and repository in settings.")
+    : category === "offline" ? "Can't reach GitHub. Sync will retry." : "Sync stopped. Your files are safe.";
   const cause = typeof error === "object" && error !== null ? Reflect.get(error, "cause") : undefined;
   return {
-    category, message,
+    category, message, detail,
     ...(typeof status === "number" ? { status } : {}),
     ...(typeof retryAt === "number" ? { retryAt } : {}),
     ...(cause instanceof Error ? { cause: cause.message } : {}),
