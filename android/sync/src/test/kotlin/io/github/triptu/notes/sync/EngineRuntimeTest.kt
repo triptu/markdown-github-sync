@@ -17,7 +17,7 @@ import java.nio.file.Files
 class EngineRuntimeTest {
     private val dir = Files.createTempDirectory("engine-runtime").toFile()
     private val runtime = EngineRuntime(
-        bundle = File(System.getProperty("syncEngineBundle")).readText(),
+        bundle = File(System.getProperty("syncEngineBundle")!!).readText(),
         vault = VaultFiles(File(dir, "vault")),
         journal = JournalFiles(File(dir, "journal")),
         http = GitHubHttp(),
