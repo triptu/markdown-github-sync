@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Notes</string>
+    <!-- Labels the system shows for the widgets, the tile and the share target. The rest is in quick/QuickCopy.kt. -->
+    <string name="voice_tile_label">Voice note</string>
 </resources>
