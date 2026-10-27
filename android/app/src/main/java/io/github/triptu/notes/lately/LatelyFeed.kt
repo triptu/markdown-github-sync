@@ -3,6 +3,7 @@ package io.github.triptu.notes.lately
 import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.IndexedNote
 import io.github.triptu.notes.vault.NotePath
+import io.github.triptu.notes.vault.SnippetText
 import io.github.triptu.notes.vault.VaultSnapshot
 import java.time.Instant
 import java.time.LocalDate
@@ -100,23 +101,4 @@ object LatelyFeedBuilder {
         }
         return Instant.ofEpochMilli(note.modifiedAt).atZone(zone).toLocalDate()
     }
-}
-
-/** Turns a markdown snippet into display text. */
-object SnippetText {
-    private val Task = Regex("""^\s*[-*+] \[([ xX])\]\s*""")
-    private val Prefix = Regex("""^\s*([-*+]|\d+[.)]|>|#{1,6})\s+""")
-    private val AliasLink = Regex("""\[\[[^\]|]*\|([^\]]*)]]""")
-    private val Link = Regex("""\[\[([^\]]*)]]""")
-    private val Emphasis = Regex("""\*\*|__|(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)|`|==""")
-
-    fun taskState(snippet: String): Boolean? = Task.find(snippet)?.let { it.groupValues[1] != " " }
-
-    fun plain(snippet: String): String = snippet
-        .replace(Task, "")
-        .replace(Prefix, "")
-        .replace(AliasLink, "$1")
-        .replace(Link, "$1")
-        .replace(Emphasis, "")
-        .trim()
 }

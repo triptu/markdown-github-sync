@@ -33,6 +33,7 @@ import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import io.github.triptu.notes.vault.FolderContents
+import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.SearchHit
 
@@ -46,7 +47,7 @@ fun LibraryScreen(
     onQuery: (String) -> Unit,
     onUp: () -> Unit,
     onHome: () -> Unit,
-    onOpenFolder: (io.github.triptu.notes.vault.FolderPath) -> Unit,
+    onOpenFolder: (FolderPath) -> Unit,
     onOpenNote: (NotePath) -> Unit,
     onTogglePin: (Pin) -> Unit,
     onSettings: () -> Unit,
@@ -83,6 +84,7 @@ fun LibraryScreen(
                         icon = R.drawable.ph_file_text,
                         text = hit.path.name,
                         subtitle = hit.excerpt.ifBlank { hit.path.folder.value.ifEmpty { null } },
+                        highlight = query,
                         onClick = { onOpenNote(hit.path) },
                         onLongClick = { onTogglePin(Pin.Note(hit.path)) },
                         trailing = if (Pin.Note(hit.path) in pins) R.drawable.ph_push_pin else null,

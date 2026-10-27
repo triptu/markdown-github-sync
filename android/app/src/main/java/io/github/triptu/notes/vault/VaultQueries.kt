@@ -6,7 +6,8 @@ data class SearchHit(val path: NotePath, val excerpt: String)
 
 /** Read-only questions about a [VaultSnapshot]. Pure, so they run off the main thread and test easily. */
 object VaultQueries {
-    private const val ExcerptRadius = 60
+    private const val ExcerptLead = 24
+    private const val ExcerptLength = 160
     private const val MaxHits = 100
 
     fun contents(snapshot: VaultSnapshot, folder: FolderPath): FolderContents {
@@ -29,7 +30,7 @@ object VaultQueries {
                 if (at >= 0) textHits += note to at
             }
         }
-        val titles = titleHits.sortedByDescending { it.modifiedAt }.map { SearchHit(it.path, firstLine(it.text)) }
+        val titles = titleHits.sortedByDescending { it.modifiedAt }.map { SearchHit(it.path, SnippetText.plain(firstLine(it.text))) }
         val texts = textHits.sortedByDescending { it.first.modifiedAt }.map { (note, at) -> SearchHit(note.path, excerpt(note.text, at)) }
         return (titles + texts).take(MaxHits)
     }
@@ -60,10 +61,13 @@ object VaultQueries {
     private fun firstLine(text: String): String =
         text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() && it != "---" && !it.startsWith("#") }.orEmpty()
 
+    /** A one-line excerpt that starts just before the match, so the match is visible. */
     private fun excerpt(text: String, at: Int): String {
-        val start = (at - ExcerptRadius).coerceAtLeast(0)
-        val end = (at + ExcerptRadius * 2).coerceAtMost(text.length)
-        val body = text.substring(start, end).replace(Regex("\\s+"), " ").trim()
-        return (if (start > 0) "…" else "") + body
+        val lineStart = text.lastIndexOf('\n', at - 1) + 1
+        var start = maxOf(lineStart, at - ExcerptLead)
+        if (start > lineStart) start = text.indexOf(' ', start).let { if (it in start until at) it + 1 else start }
+        val end = (at + ExcerptLength).coerceAtMost(text.length)
+        val body = SnippetText.plain(text.substring(start, end).replace(Regex("\\s+"), " "))
+        return (if (start > lineStart) "…" else "") + body
     }
 }

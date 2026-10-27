@@ -30,7 +30,11 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -109,6 +113,8 @@ fun ListRow(
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     subtitle: String? = null,
+    /** Text inside [subtitle] to emphasise, such as a search match. */
+    highlight: String? = null,
     @DrawableRes trailing: Int? = null,
     trailingDescription: String? = null,
     height: Dp = 56.dp,
@@ -130,7 +136,7 @@ fun ListRow(
         Column(Modifier.weight(1f).padding(vertical = if (subtitle != null) 10.dp else 0.dp)) {
             Text(text, style = textStyle, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle != null) {
-                Text(subtitle, style = NotesType.rowMeta, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+                Text(emphasise(subtitle, highlight, colors.ink), style = NotesType.rowMeta, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
             }
         }
         if (trailing != null) {
@@ -149,5 +155,15 @@ fun IconButton48(@DrawableRes icon: Int, description: String, onClick: () -> Uni
         contentAlignment = Alignment.Center,
     ) {
         PhIcon(icon, description, 22.dp, if (enabled) tint else tint.copy(alpha = 0.35f))
+    }
+}
+
+private fun emphasise(text: String, part: String?, color: Color): AnnotatedString {
+    val q = part?.trim().orEmpty()
+    val at = if (q.isEmpty()) -1 else text.indexOf(q, ignoreCase = true)
+    if (at < 0) return AnnotatedString(text)
+    return buildAnnotatedString {
+        append(text)
+        addStyle(SpanStyle(color = color, fontWeight = FontWeight.Medium), at, at + q.length)
     }
 }
