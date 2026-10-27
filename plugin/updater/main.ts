@@ -2,7 +2,7 @@ import { Notice, Plugin, apiVersion, normalizePath, requestUrl } from "obsidian"
 import { checkForUpdate, type PluginFile, type UpdateHost, type UpdateResult } from "./core";
 
 const TARGET = "github-vault-sync";
-const REPOSITORY = "triptu/cloud-vault-sync";
+const REPOSITORY = "triptu/markdown-github-sync";
 const BRANCH = "updates";
 const EVERY = 6 * 60 * 60 * 1000;
 /** After a failed check (often a phone waking without network), try again this soon. */

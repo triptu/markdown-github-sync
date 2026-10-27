@@ -92,3 +92,7 @@ npm run package   # build both plugins and their zips into dist/
 The built plugins are in `dist/github-vault-sync/` and `dist/github-vault-sync-updater/`. Copy each folder into `<vault>/.obsidian/plugins/` and reload Obsidian.
 
 Maintainer notes, release steps and design rules are in [AGENTS.md](AGENTS.md). Release notes are in [docs/releases](docs/releases/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

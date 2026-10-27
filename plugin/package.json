@@ -2,6 +2,7 @@
   "name": "github-vault-sync",
   "version": "0.3.0-beta.8",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
