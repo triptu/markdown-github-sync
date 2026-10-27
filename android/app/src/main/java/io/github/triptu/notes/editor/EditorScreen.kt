@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
@@ -105,7 +106,7 @@ import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EditorScreen(
     session: EditorSession,
@@ -149,9 +150,13 @@ fun EditorScreen(
             val margin = with(LocalDensity.current) { (MicSize + MicMargin * 2).toPx() }
             val keepClearOfMic = remember(margin) { KeepClearBringIntoView(margin) }
             CompositionLocalProvider(LocalBringIntoViewSpec provides keepClearOfMic) {
+                // While typing, the text ends above the mic instead of scrolling under it, so the
+                // mic never covers the lines around the cursor.
+                val typing = WindowInsets.isImeVisible && speech != null
                 Column(
                     Modifier
                         .fillMaxSize()
+                        .padding(bottom = if (typing) MicSize + MicMargin * 2 else 0.dp)
                         .verticalScroll(scroll)
                         .padding(horizontal = PagePadding),
                 ) {

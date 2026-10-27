@@ -44,8 +44,7 @@ object RecentsFeedBuilder {
     private const val MaxCards = 40
     private const val WindowDays = 60L
     private const val YearAgoWindowDays = 3L
-    private val ShortDay = DateTimeFormatter.ofPattern("EEE", Locale.ENGLISH)
-    private val ShortDate = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+    private val TimeOfDay = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)
     private val DayFormat = DateTimeFormatter.ofPattern("EEEE", Locale.ENGLISH)
     private val DateFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
     private val DateWithYear = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH)
@@ -74,15 +73,17 @@ object RecentsFeedBuilder {
         return RecentsFeed(sections)
     }
 
-    /** "now", "24m", "2h" today; "Mon" within the week; "12 Oct" before that. */
+    /**
+     * "now", "24m", "2h" today; before today the section heading already names the day, so the
+     * row shows the time of day ("18:20").
+     */
     fun relativeTime(at: LocalDateTime, now: LocalDateTime): String {
         val minutes = ChronoUnit.MINUTES.between(at, now).coerceAtLeast(0)
         return when {
             at.toLocalDate() == now.toLocalDate() && minutes < 1 -> "now"
             at.toLocalDate() == now.toLocalDate() && minutes < 60 -> "${minutes}m"
             at.toLocalDate() == now.toLocalDate() -> "${minutes / 60}h"
-            ChronoUnit.DAYS.between(at.toLocalDate(), now.toLocalDate()) < 7 -> ShortDay.format(at)
-            else -> ShortDate.format(at)
+            else -> TimeOfDay.format(at)
         }
     }
 
