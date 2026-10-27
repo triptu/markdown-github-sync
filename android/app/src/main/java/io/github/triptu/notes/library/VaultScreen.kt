@@ -1,6 +1,9 @@
 package io.github.triptu.notes.library
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +41,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.DpOffset
 import io.github.triptu.notes.ui.NameDialog
 import androidx.compose.runtime.Composable
@@ -74,7 +78,12 @@ private val IndentPerLevel = 20.dp
 private val SearchHeight = 48.dp
 private val SearchGap = 8.dp
 private val ChevronSlot = 20.dp
-private const val ExpandMs = 150
+private const val ChevronMs = 150
+private const val FadeInMs = 120
+private const val FadeOutMs = 90
+
+/** Settles in about 200ms with no bounce. */
+private const val SlideStiffness = 400f
 
 /** Items above the tree rows in the list: the title and the search field. */
 private const val HeaderItems = 1
@@ -205,10 +214,12 @@ private fun LazyListScope.tree(
         }
     }
     items(rows, key = { it.key }) { row ->
+        // Each row is its own item, so opening a folder animates rows, not a block: rows below slide
+        // on a critically damped spring, children fade in under them, and off-screen rows just appear.
         val itemModifier = Modifier.animateItem(
-            fadeInSpec = tween(ExpandMs),
-            placementSpec = tween(ExpandMs),
-            fadeOutSpec = tween(ExpandMs / 2),
+            fadeInSpec = tween(FadeInMs),
+            placementSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = SlideStiffness, visibilityThreshold = IntOffset.VisibilityThreshold),
+            fadeOutSpec = tween(FadeOutMs),
         )
         when (row) {
             is TreeRow.Folder -> {
@@ -283,7 +294,8 @@ private fun TreeItem(
     onMenuClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier) {
+    // Opaque, so rows sliding down reveal the new children underneath instead of overlapping them.
+    Box(modifier.background(NotesTheme.colors.bg)) {
         TreeRowContent(depth, folderExpanded, icon, text, pinned, onClick, onLongClick, selected = menuOpen)
         RowMenu(menuOpen, menuItems, onMenuClose, offsetX = IndentPerLevel * depth + ChevronSlot + PagePadding)
     }
@@ -301,7 +313,7 @@ private fun TreeRowContent(
     selected: Boolean,
 ) {
     val colors = NotesTheme.colors
-    val turn by animateFloatAsState(if (folderExpanded == true) 90f else 0f, tween(ExpandMs), label = "chevron")
+    val turn by animateFloatAsState(if (folderExpanded == true) 90f else 0f, tween(ChevronMs), label = "chevron")
     Row(
         Modifier
             .fillMaxWidth()
