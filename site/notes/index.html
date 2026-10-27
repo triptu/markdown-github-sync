@@ -22,7 +22,6 @@
     --muted: #64635f;
     --faint: #9b9993;
     --line: rgba(20, 20, 20, 0.09);
-    --bezel: #151515;
     --shadow: 0 40px 80px -36px rgba(30, 28, 24, 0.38), 0 14px 30px -18px rgba(30, 28, 24, 0.22);
     --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
     --sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -31,25 +30,17 @@
   @media (prefers-color-scheme: dark) {
     :root:not(.light) {
       --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
-      --line: rgba(255, 255, 255, 0.09); --bezel: #262626;
+      --line: rgba(255, 255, 255, 0.09);
       --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
       color-scheme: dark;
     }
   }
   :root.dark {
     --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
-    --line: rgba(255, 255, 255, 0.09); --bezel: #262626;
+    --line: rgba(255, 255, 255, 0.09);
     --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
     color-scheme: dark;
   }
-
-  .shot-d { display: none; }
-  @media (prefers-color-scheme: dark) {
-    :root:not(.light) .shot-l { display: none; }
-    :root:not(.light) .shot-d { display: block; }
-  }
-  :root.dark .shot-l { display: none; }
-  :root.dark .shot-d { display: block; }
 
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -79,8 +70,35 @@
   :root.dark .theme .sun { display: none; }
   :root.dark .theme .moon { display: block; }
 
+  .hero { text-align: center; padding: 72px 0 56px; }
+  .eyebrow { font-size: 13px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); margin: 0 0 22px; }
+  h1, h2 { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; margin: 0; }
+  h1 { font-size: clamp(56px, 9vw, 112px); line-height: 0.98; }
+  .lede { max-width: 620px; margin: 28px auto 0; font-size: 20px; color: var(--muted); }
+  .actions { display: flex; gap: 12px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px; padding: 12px 20px; border-radius: 999px;
+    font-size: 16px; font-weight: 500; text-decoration: none; border: 1px solid var(--line);
+  }
+  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn svg { width: 18px; height: 18px; }
+
+  .film { margin: 24px auto 0; max-width: 1040px; }
+  .film video {
+    display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 20px; background: var(--card);
+    box-shadow: var(--shadow);
+  }
+  .film p { text-align: center; font-size: 14px; color: var(--faint); margin: 16px 0 0; }
+
+  .beats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px;
+    margin-top: 96px; padding: 64px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .beats h2 { font-size: clamp(30px, 3vw, 38px); line-height: 1.1; }
+  .beats p { color: var(--muted); margin: 14px 0 0; font-size: 17px; }
+
   .pair {
-    display: flex; align-items: center; gap: 22px; max-width: 760px; margin: 72px auto 0; padding: 22px 26px;
+    display: flex; align-items: center; gap: 22px; max-width: 760px; margin: 64px auto 0; padding: 22px 26px;
     border-radius: 18px; background: var(--card); border: 1px solid var(--line); text-decoration: none;
     transition: border-color 0.2s ease, transform 0.2s ease;
   }
@@ -93,70 +111,10 @@
   .pair .arrow { flex: none; margin-left: auto; font-size: 22px; color: var(--faint); }
   .pair:hover .arrow { color: var(--ink); }
 
-  .hero { text-align: center; padding: 72px 0 56px; }
-  .eyebrow { font-size: 13px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); margin: 0 0 22px; }
-  h1, h2 { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; margin: 0; }
-  h1 { font-size: clamp(56px, 9vw, 112px); line-height: 0.98; }
-  .lede { max-width: 640px; margin: 28px auto 0; font-size: 20px; color: var(--muted); }
-  .actions { display: flex; gap: 12px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 9px; padding: 12px 20px; border-radius: 999px;
-    font-size: 16px; font-weight: 500; text-decoration: none; border: 1px solid var(--line);
-  }
-  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-  .btn svg { width: 18px; height: 18px; }
-
-  .film { margin: 24px auto 0; max-width: 1040px; }
-  .film video {
-    display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 20px; background: #f3f2ee;
-    box-shadow: var(--shadow);
-  }
-  .film p { text-align: center; font-size: 14px; color: var(--faint); margin: 16px 0 0; }
-
-  .why { max-width: 700px; margin: 120px auto 40px; text-align: center; }
-  .why h2 { font-size: clamp(36px, 5vw, 56px); line-height: 1.05; }
-  .why p { color: var(--muted); font-size: 19px; margin: 22px 0 0; }
-
-  .feature {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: center;
-    padding: 96px 0; border-top: 1px solid var(--line);
-  }
-  .feature:nth-of-type(even) .phone-col { order: 2; }
-  .feature h2 { font-size: clamp(38px, 4.6vw, 58px); line-height: 1.04; }
-  .feature .text p { color: var(--muted); margin: 20px 0 0; }
-  .feature ul { list-style: none; padding: 0; margin: 26px 0 0; display: grid; gap: 12px; }
-  .feature li { position: relative; padding-left: 22px; }
-  .feature li::before {
-    content: ''; position: absolute; left: 2px; top: 0.72em; width: 7px; height: 7px;
-    border-radius: 50%; border: 1.5px solid var(--faint);
-  }
-  .phone-col { display: flex; justify-content: center; gap: 28px; }
-
-  .phone {
-    position: relative; width: 300px; flex: none; aspect-ratio: 1080 / 2400; border-radius: 44px;
-    padding: 9px; background: var(--bezel); box-shadow: var(--shadow);
-  }
-  .phone img { width: 100%; height: 100%; object-fit: cover; border-radius: 36px; }
-  .phone::after {
-    content: ''; position: absolute; top: 19px; left: 50%; width: 14px; height: 14px; margin-left: -7px;
-    border-radius: 50%; background: #0a0a0a;
-  }
-  .phone.small { width: 250px; border-radius: 38px; }
-  .phone.small img { border-radius: 30px; }
-
-  .sync-note {
-    margin-top: 26px; padding: 18px 20px; border-radius: 14px; background: var(--card);
-    border: 1px solid var(--line); font-size: 15px; color: var(--muted);
-  }
-  .sync-note code { font: 500 13.5px/1.5 ui-monospace, 'SF Mono', Menlo, monospace; color: var(--ink); white-space: pre; display: block; margin-top: 8px; overflow-x: auto; }
-
-  footer {
-    border-top: 1px solid var(--line); margin-top: 40px; padding: 72px 0 90px; text-align: center;
-  }
-  footer h2 { font-size: clamp(40px, 6vw, 72px); line-height: 1; }
-  footer p { color: var(--muted); max-width: 560px; margin: 20px auto 0; }
-  footer .actions { margin-top: 30px; }
-  .fine { font-size: 14px; color: var(--faint); margin-top: 40px; }
+  footer { padding: 72px 0 64px; text-align: center; }
+  footer p { color: var(--muted); max-width: 520px; margin: 0 auto; }
+  footer .actions { margin-top: 24px; }
+  .fine { font-size: 14px; color: var(--faint); margin-top: 36px; }
 
   .reveal { opacity: 1; transform: none; }
   .js .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.9s cubic-bezier(.22, 1, .36, 1), transform 0.9s cubic-bezier(.22, 1, .36, 1); }
@@ -172,19 +130,12 @@
     .hero { padding: 40px 0 36px; }
     .lede { font-size: 18px; }
     .film video { border-radius: 12px; }
-    .why { margin: 80px auto 20px; }
-    .feature { grid-template-columns: 1fr; gap: 40px; padding: 64px 0; }
-    .feature:nth-of-type(even) .phone-col { order: 0; }
-    .phone { width: 250px; border-radius: 38px; padding: 8px; }
-    .phone img { border-radius: 30px; }
-    .phone-col { gap: 16px; }
-    .phone.small { width: calc(50% - 8px); max-width: 220px; border-radius: 30px; padding: 6px; }
-    .phone.small img { border-radius: 24px; }
-    .phone.small::after { top: 13px; width: 10px; height: 10px; margin-left: -5px; }
+    .beats { grid-template-columns: 1fr; gap: 36px; margin-top: 56px; padding: 44px 0; }
     .top nav .hide-sm { display: none; }
-    .pair { margin-top: 48px; padding: 18px; gap: 16px; align-items: flex-start; }
+    .pair { margin-top: 44px; padding: 18px; gap: 16px; align-items: flex-start; }
     .pair .pair-mark { width: 44px; height: 44px; border-radius: 12px; }
     .pair .arrow { display: none; }
+    footer { padding: 56px 0 48px; }
   }
 </style>
 </head>
@@ -194,8 +145,6 @@
   <header class="top">
     <a class="mark" href="/">Notes</a>
     <nav>
-      <a class="hide-sm" href="#voice">Voice</a>
-      <a class="hide-sm" href="#sync">Sync</a>
       <a class="hide-sm" href="https://vaultsync.tushar.ai/">Obsidian plugin</a>
       <a href="https://github.com/triptu/markdown-github-sync">GitHub</a>
       <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -208,7 +157,7 @@
   <section class="hero">
     <p class="eyebrow">For Android &middot; Open source</p>
     <h1>A calm place<br />to write.</h1>
-    <p class="lede">Notes is a small Android app for your Obsidian vault. It opens to the notes you pinned, writes plain Markdown, and syncs through your own private GitHub repository, with no server in between.</p>
+    <p class="lede">A small Android app for your Obsidian vault. Open it, write, put the phone down. Your notes sync through your own private GitHub repository.</p>
     <div class="actions">
       <a class="btn primary" href="#film">Watch the film</a>
       <a class="btn" href="https://github.com/triptu/markdown-github-sync">
@@ -220,7 +169,22 @@
 
   <section class="film" id="film">
     <video src="notes-launch.mp4" poster="poster.jpg" autoplay muted loop playsinline controls preload="auto" aria-label="A one-minute film of Notes on an Android phone"></video>
-    <p>One minute, recorded in the app on an Android emulator with made-up notes.</p>
+    <p>One minute, recorded in the app with made-up notes.</p>
+  </section>
+
+  <section class="beats">
+    <div class="reveal">
+      <h2>Markdown that looks finished.</h2>
+      <p>Headings, links and tasks render in place. The symbols behind them show only on the line you're editing.</p>
+    </div>
+    <div class="reveal">
+      <h2>Speak, and watch it write.</h2>
+      <p>Tap the mic and the page fills in as you talk, using the phone's own speech recognition.</p>
+    </div>
+    <div class="reveal">
+      <h2>No server. Just your repo.</h2>
+      <p>Edits save on the phone first, then go to your private GitHub repository as commits. Obsidian on your computer sees every word.</p>
+    </div>
   </section>
 
   <a class="pair reveal" href="https://vaultsync.tushar.ai/">
@@ -228,124 +192,18 @@
     <div>
       <p class="eyebrow">Pairs with</p>
       <b>GitHub Vault Sync</b>
-      <span class="pair-desc">The Obsidian plugin this app syncs with. Notes runs its sync engine, unchanged, so your phone and your computer share one private repository.</span>
+      <span class="pair-desc">The Obsidian plugin this app syncs with. Your phone and your computer share one private repository.</span>
     </div>
     <span class="arrow" aria-hidden="true">&rarr;</span>
   </a>
 
-  <section class="why reveal">
-    <h2>Obsidian, without the busy part.</h2>
-    <p>Obsidian's phone app does a lot. This one does less: open it, write, put the phone down. Every note stays a plain Markdown file in the same vault, so Obsidian on your computer sees every word.</p>
-  </section>
-
-  <section class="feature">
-    <div class="phone-col reveal">
-      <div class="phone"><img class="shot-l" src="shots/home-light.jpg" alt="Home: pinned notes Todos, This week, Ideas to build, Reading list and the Writing folder, with a New note bar and a mic button" loading="lazy" /><img class="shot-d" src="shots/home-dark.jpg" alt="" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Home</p>
-      <h2>Your pins, then the page.</h2>
-      <p>Home is a short list of the notes and folders you pinned, and a bar for a new note. Nothing else competes for your eye.</p>
-      <ul>
-        <li>The This week pin opens this week's note at the end, where you stopped writing. If the note doesn't exist yet, it starts from your weekly template.</li>
-        <li>The vault sits on one side of Home and your recent notes on the other.</li>
-        <li>Recents lists notes under date headings, with the time you last touched each one.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="feature">
-    <div class="phone-col reveal">
-      <div class="phone"><img class="shot-l" src="shots/editor-light.jpg" alt="A note called Trip to the hills with bold labels, a bulleted plan and a packing checklist with some items ticked" loading="lazy" /><img class="shot-d" src="shots/editor-dark.jpg" alt="" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Editor</p>
-      <h2>Markdown, minus the markup.</h2>
-      <p>The editor is the whole screen. Headings, bold, links and lists look finished, and the symbols behind them show only on the line you're editing.</p>
-      <ul>
-        <li>Tasks tick with a tap. Long tasks and bullets wrap with a hanging indent.</li>
-        <li>Type <b>[[</b> to get link suggestions. Tap a link to open that note.</li>
-        <li>Undo and redo, and a mic that floats over the page.</li>
-        <li>Images in a note load from GitHub when you reach them, so they don't fill the phone.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="feature">
-    <div class="phone-col reveal">
-      <div class="phone"><img class="shot-l" src="shots/search-light.jpg" alt="Vault search for lake, each result showing the words around the match" loading="lazy" /><img class="shot-d" src="shots/search-dark.jpg" alt="" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Vault</p>
-      <h2>The whole vault, one tree.</h2>
-      <p>Every folder and note on one page. Folders open in place, so you never lose where you are.</p>
-      <ul>
-        <li>Search floats at the top and shows the words around each match.</li>
-        <li>Long-press to make a note or folder, rename, pin to Home, or delete.</li>
-        <li>Deleted the wrong one? Undo brings it back.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="feature" id="voice">
-    <div class="phone-col reveal">
-      <div class="phone"><img class="shot-l" src="shots/voice-light.jpg" alt="The speaking view: a transcript filling in as words are spoken, a level meter, and Pause, Save and Type buttons" loading="lazy" /><img class="shot-d" src="shots/voice-dark.jpg" alt="" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Voice</p>
-      <h2>Speak, and watch it write.</h2>
-      <p>Tap the mic and the screen becomes a page that fills in as you talk. Recognition runs on the phone and keeps going through pauses.</p>
-      <ul>
-        <li>Pause, keep talking, or switch to typing. Save when you're done.</li>
-        <li>Until you save, the note waits as a draft outside your vault.</li>
-        <li>Optional: add an OpenAI key and the recording gets a second, more accurate transcript after you save. It replaces the words you haven't edited, and the recording is deleted after.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="feature">
-    <div class="phone-col reveal">
-      <div class="phone small"><img src="shots/widgets.jpg" alt="An Android home screen with a New note widget and a Groceries widget whose tasks can be ticked" loading="lazy" /></div>
-      <div class="phone small"><img src="shots/shortcuts.jpg" alt="The app icon's shortcuts: New note, Voice note and This week" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Quick ways in</p>
-      <h2>A note is one tap away.</h2>
-      <p>Most notes start when you're doing something else. These get you to the page without opening the app first.</p>
-      <ul>
-        <li>Home screen widgets: a New note bar with a mic, and a pinned note whose tasks tick in place.</li>
-        <li>Press and hold the app icon for New note, Voice note or This week.</li>
-        <li>A Voice note tile in Quick Settings.</li>
-        <li>Share text or a link from any app into a new note, or to the end of one you pick.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="feature" id="sync">
-    <div class="phone-col reveal">
-      <div class="phone"><img class="shot-l" src="shots/settings-light.jpg" alt="Settings: connect a GitHub repository with a branch and a fine-grained token" loading="lazy" /><img class="shot-d" src="shots/settings-dark.jpg" alt="" loading="lazy" /></div>
-    </div>
-    <div class="text reveal">
-      <p class="eyebrow">Sync</p>
-      <h2>No server. Just your repo.</h2>
-      <p>Notes syncs with the private GitHub repository your vault already uses, with the same sync code as the <a href="https://vaultsync.tushar.ai/">GitHub Vault Sync</a> plugin for Obsidian. Your edits become commits, sent straight to the GitHub API. There is no server of its own.</p>
-      <ul>
-        <li>Edits are saved on the phone first and sent after you leave the app, so writing never waits on the network.</li>
-        <li>If the phone and GitHub both changed a note, both versions are kept in the note, between conflict markers, for you to settle.</li>
-        <li>The token stays on the phone, encrypted. Sync stays quiet unless something needs you.</li>
-      </ul>
-    </div>
-  </section>
-
   <footer class="reveal">
-    <h2>Notes</h2>
-    <p>Built for one person's vault and shared in case it fits yours. The app lives in the <b>android</b> folder of the repository, next to the Obsidian plugin it syncs with.</p>
+    <p>Built for one person's vault and shared in case it fits yours.</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/triptu/markdown-github-sync">Source on GitHub</a>
       <a class="btn" href="https://vaultsync.tushar.ai/">The Obsidian plugin</a>
-      <a class="btn" href="notes-launch.mp4" download>Download the film</a>
     </div>
-    <p class="fine">Screens and film show made-up notes in a test build.</p>
+    <p class="fine">The film shows made-up notes in a test build.</p>
   </footer>
 </div>
 <script>
