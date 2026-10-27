@@ -1,0 +1,8 @@
+{
+  "extends": "../../../plugin/tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "typeRoots": ["../../../plugin/node_modules/@types"]
+  },
+  "include": ["*.ts"]
+}

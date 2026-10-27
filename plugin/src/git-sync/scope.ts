@@ -8,6 +8,12 @@ export interface ScopeRules {
   configDir: string;
   /** Object ID of the committed root .gitignore, or null when absent. */
   gitignore: string | null;
+  /**
+   * Device-local exclusion: visible files with these lowercase extensions are
+   * out of this device's scope (left on GitHub, preserved by its commits).
+   * Absent means none; an empty list is not a valid value.
+   */
+  excludedExtensions?: readonly string[];
 }
 
 export interface Scope {
@@ -102,9 +108,21 @@ function denied(path: string, configDir: string): boolean {
   return false;
 }
 
+const EXTENSION = /^[a-z0-9]{1,16}$/;
+
+function validateExtensions(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 256) throw new ScopeError("Invalid excluded extensions");
+  const sorted = [...value].sort();
+  if (sorted.some((item, index) => typeof item !== "string" || !EXTENSION.test(item) || item === sorted[index - 1]))
+    throw new ScopeError("Invalid excluded extensions");
+  return Object.freeze(sorted);
+}
+
 async function validateRules(rules: ScopeRules, text: string | null): Promise<Readonly<ScopeRules>> {
   if (rules.rules !== "config/1") throw new ScopeError("Unknown scope rule version");
   assertValidConfigDir(rules.configDir);
+  const excludedExtensions = validateExtensions(rules.excludedExtensions);
   if (rules.gitignore !== null && !isOid(rules.gitignore)) throw new ScopeError("Invalid .gitignore object ID");
   if ((rules.gitignore === null) !== (text === null)) throw new ScopeError(".gitignore object ID and text disagree");
   if (text !== null) {
@@ -116,7 +134,9 @@ async function validateRules(rules: ScopeRules, text: string | null): Promise<Re
     if (text.includes("\0") || text.indexOf("\ufeff", text.startsWith("\ufeff") ? 1 : 0) !== -1)
       throw new ScopeError("Unsupported .gitignore encoding");
   }
-  return Object.freeze({ rules: rules.rules, configDir: rules.configDir, gitignore: rules.gitignore });
+  // Rules without exclusions keep their exact pre-existing shape, and so their digest.
+  return Object.freeze({ rules: rules.rules, configDir: rules.configDir, gitignore: rules.gitignore,
+    ...(excludedExtensions ? { excludedExtensions } : {}) });
 }
 
 /** Compile a pure per-commit policy. The caller must pause on ScopeError. */
@@ -125,6 +145,12 @@ export async function compileScope(rules: ScopeRules, gitignoreText: string | nu
   const matcher = ignore({ ignoreCase: false, allowRelativePaths: false });
   if (gitignoreText !== null) matcher.add(gitignoreText);
   const digest = await digestText(JSON.stringify([BUILTIN_VERSION, frozenRules]));
+  const excluded = new Set(frozenRules.excludedExtensions ?? []);
+  const excludedExtension = (path: string): boolean => {
+    if (excluded.size === 0) return false;
+    const name = path.slice(path.lastIndexOf("/") + 1), dot = name.lastIndexOf(".");
+    return dot > 0 && excluded.has(name.slice(dot + 1).toLowerCase());
+  };
   const classify = (path: string): HiddenClass => {
     if (!isValidPath(path)) return "denied";
     assertSupportedGitignorePath(path);
@@ -133,7 +159,7 @@ export async function compileScope(rules: ScopeRules, gitignoreText: string | nu
     const hidden = path.split("/").some((segment) => segment.startsWith("."));
     if (hidden && path !== ".gitignore" && !inConfig) return "outside";
     if (path !== ".gitignore" && matcher.ignores(path)) return "ignored";
-    if (!hidden) return "content";
+    if (!hidden) return excludedExtension(path) ? "ignored" : "content";
     if (inConfig) {
       const relative = path.slice(frozenRules.configDir.length + 1).split("/");
       if ((relative.length === 1 && relative[0].endsWith(".json")) ||
@@ -156,12 +182,14 @@ export async function scopeForTree(
   items: readonly { path: string; type: string; sha: string }[],
   readBlob: (oid: string) => Promise<Uint8Array>,
   configDir: string,
+  excludedExtensions?: readonly string[],
 ): Promise<Scope> {
   assertNoNestedGitignore(items.map((item) => item.path));
   const matches = items.filter((item) => item.path === ".gitignore");
   if (matches.length > 1) throw new ScopeError("Duplicate root .gitignore entry");
   const entry = matches[0];
-  if (!entry) return compileScope({ rules: "config/1", configDir, gitignore: null }, null);
+  const device = excludedExtensions === undefined ? {} : { excludedExtensions };
+  if (!entry) return compileScope({ rules: "config/1", configDir, gitignore: null, ...device }, null);
   if (entry.type !== "blob" || !isOid(entry.sha)) throw new ScopeError("Invalid root .gitignore tree entry");
   const bytes = await readBlob(entry.sha);
   if (!(bytes instanceof Uint8Array) || bytes.length > MAX_GITIGNORE_BYTES) throw new ScopeError("Unreadable root .gitignore");
@@ -169,12 +197,13 @@ export async function scopeForTree(
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
   catch { throw new ScopeError("Root .gitignore is not valid UTF-8"); }
-  return compileScope({ rules: "config/1", configDir, gitignore: entry.sha }, text);
+  return compileScope({ rules: "config/1", configDir, gitignore: entry.sha, ...device }, text);
 }
 
 /** Local text is compiled separately so a new ignore rule blocks its own transaction's upload. */
 export async function freezeTransactionScope(parent: Scope, remote: Scope, localGitignoreText: string | null): Promise<TransactionScope> {
-  if (parent.rules.configDir !== remote.rules.configDir)
+  if (parent.rules.configDir !== remote.rules.configDir ||
+    JSON.stringify(parent.rules.excludedExtensions) !== JSON.stringify(remote.rules.excludedExtensions))
     throw new ScopeError("Transaction scope versions do not agree");
   const localOid = localGitignoreText === null ? null : await hashBlob(new TextEncoder().encode(localGitignoreText));
   const local = await compileScope({ ...parent.rules, gitignore: localOid }, localGitignoreText);
