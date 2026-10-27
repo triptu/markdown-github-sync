@@ -24,6 +24,11 @@ class UndoHistory(private val now: () -> Long = System::currentTimeMillis) {
         lastRecordAt = t
     }
 
+    fun clear() {
+        steps.clear()
+        lastRecordAt = 0L
+    }
+
     fun undo(): TextFieldValue? {
         lastRecordAt = 0L
         return steps.removeLastOrNull()

@@ -10,6 +10,7 @@ import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.ZettelName
 import io.github.triptu.notes.vault.NoteNames
 import io.github.triptu.notes.vault.NotePath
+import io.github.triptu.notes.vault.VaultChange
 import io.github.triptu.notes.vault.VaultIndex
 import io.github.triptu.notes.vault.VaultQueries
 import io.github.triptu.notes.vault.VaultStore
@@ -83,6 +84,43 @@ class EditorSession(
 
     init {
         if (target is EditorTarget.Open) load(target.path)
+        scope.launch { followDisk() }
+    }
+
+    /** Keeps the open note in step with changes made outside this editor, such as a sync. */
+    private suspend fun followDisk() {
+        store.changes.collect { change ->
+            val mine = path ?: return@collect
+            when (change) {
+                is VaultChange.Written -> if (change.path == mine) onDiskText(change.text)
+                is VaultChange.Renamed -> if (change.from == mine) path = change.to
+                VaultChange.External -> store.read(mine)?.let(::onDiskText)
+                is VaultChange.Deleted -> Unit
+            }
+        }
+    }
+
+    /**
+     * Without unsaved edits, shows the new text in place and keeps the cursor near where it was.
+     * With unsaved edits, keeps the user's text and saves it over the change; sync's
+     * compare-and-swap is what notices the conflict.
+     */
+    private fun onDiskText(disk: String) {
+        if (!loaded || disk == savedText) return
+        if (disk == value.text) {
+            savedText = disk
+            return
+        }
+        if (value.text != savedText) {
+            savedText = disk
+            scheduleSave()
+            return
+        }
+        value = TextFieldValue(disk, EditOps.mapSelection(value.text, disk, value.selection))
+        parsed = MarkdownParser.parse(disk)
+        savedText = disk
+        undo.clear()
+        canUndo = false
     }
 
     private fun load(path: NotePath) {

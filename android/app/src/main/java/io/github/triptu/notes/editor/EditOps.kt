@@ -73,6 +73,24 @@ object EditOps {
         return TextFieldValue(text, TextRange(query.start + link.length))
     }
 
+    /**
+     * Where the cursor goes when the text is replaced from outside: it keeps its place relative to
+     * the unchanged start or end of the text, and moves to the edge of the change if it was inside it.
+     */
+    fun mapSelection(old: String, new: String, selection: TextRange): TextRange {
+        var prefix = 0
+        val max = minOf(old.length, new.length)
+        while (prefix < max && old[prefix] == new[prefix]) prefix++
+        var suffix = 0
+        while (suffix < max - prefix && old[old.length - 1 - suffix] == new[new.length - 1 - suffix]) suffix++
+        fun map(offset: Int): Int = when {
+            offset <= prefix -> offset
+            offset >= old.length - suffix -> offset + new.length - old.length
+            else -> new.length - suffix
+        }.coerceIn(0, new.length)
+        return TextRange(map(selection.start), map(selection.end))
+    }
+
     private inline fun editLine(value: TextFieldValue, edit: (String) -> String): TextFieldValue {
         val text = value.text
         val cursor = value.selection.start.coerceIn(0, text.length)
