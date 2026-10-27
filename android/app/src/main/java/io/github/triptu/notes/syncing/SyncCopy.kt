@@ -21,6 +21,7 @@ object SyncCopy {
     const val StartSyncing = "Start syncing"
     const val Cancel = "Cancel"
     const val NotNow = "Not now"
+    const val Continue = "Continue"
     const val SaveToken = "Save token"
     const val TokenUpdated = "Token saved."
     const val StopSyncing = "Stop syncing on this phone"
@@ -47,6 +48,7 @@ object SyncCopy {
     fun bothVersions(count: Int): String = if (count == 1) "1 note has both versions" else "$count notes have both versions"
 
     const val AccessLine = "Sync needs a new token"
+    const val NotSyncing = "Notes aren't syncing"
 
     fun lastSynced(at: Long?, now: Long): String {
         if (at == null) return "Not synced yet"

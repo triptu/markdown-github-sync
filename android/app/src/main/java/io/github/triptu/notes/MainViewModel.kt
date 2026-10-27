@@ -24,7 +24,18 @@ import io.github.triptu.notes.vault.VaultQueries
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import io.github.triptu.notes.sync.SyncStatus
+import io.github.triptu.notes.syncing.BothVersions
+import io.github.triptu.notes.syncing.BothVersionsFinder
+import io.github.triptu.notes.syncing.DeletionDecision
+import io.github.triptu.notes.syncing.SyncBar
+import io.github.triptu.notes.syncing.SyncNotice
+import io.github.triptu.notes.syncing.SyncNotices
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,7 +45,10 @@ import java.time.ZoneId
 /** A screen drawn over the pager. */
 sealed interface Overlay {
     data class Editor(val session: EditorSession) : Overlay
-    data object Settings : Overlay
+    /** [focusToken]: opened because GitHub refused the token. */
+    data class Settings(val focusToken: Boolean = false) : Overlay
+    /** First run: connect GitHub sync, or skip. */
+    data object Setup : Overlay
 }
 
 /** Navigation and screen state for the one activity. */
@@ -53,7 +67,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         RecentsFeedBuilder.build(snapshot, LocalDateTime.now(), ZoneId.systemDefault(), templates.takeUnless { it.isRoot })
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, RecentsFeed.Empty)
 
-    val sampleVaultAvailable: Boolean = SampleVault.Available
+    val sync = graph.sync
+
+    /** The debug sample vault, offered only while sync isn't set up. */
+    val sampleVaultAvailable: StateFlow<Boolean> = sync.target.map { SampleVault.Available && it == null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SampleVault.Available && sync.target.value == null)
+
+    private val bothVersions: StateFlow<List<NotePath>> = BothVersionsFinder().let { finder ->
+        graph.index.snapshot.map { finder.find(it) }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    }
+
+    /** The last status that wasn't a sync in progress, so lines don't blink while a retry runs. */
+    private val settledStatus: StateFlow<SyncStatus> = sync.status.filter { it !is SyncStatus.Syncing }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, sync.status.value.takeIf { it !is SyncStatus.Syncing } ?: SyncStatus.NotSetUp)
+
+    private val minutes = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(60_000)
+        }
+    }
+
+    val syncBar: StateFlow<SyncBar> = combine(
+        listOf(sync.status, settledStatus, sync.firstSync, sync.deletion, sync.conflictProblem, bothVersions, minutes),
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        SyncNotices.bar(
+            settled = values[1] as SyncStatus,
+            progress = values[0] as? SyncStatus.Syncing,
+            firstSync = values[2] as Boolean,
+            deletion = values[3] as DeletionDecision?,
+            conflictProblem = values[4] as String?,
+            bothVersions = values[5] as List<NotePath>,
+            now = values[6] as Long,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, SyncBar.Quiet)
+
+    init {
+        if (!sync.setupOffered && sync.target.value == null) overlays += Overlay.Setup
+        // GitHub refused the token: open Settings at the token field once, if nothing else is open.
+        viewModelScope.launch {
+            var shown = false
+            syncBar.collect { bar ->
+                val needsToken = bar.notices.any { it is SyncNotice.NeedsToken }
+                if (needsToken && !shown && overlays.isEmpty()) {
+                    shown = true
+                    openSettings(focusToken = true)
+                }
+                if (!needsToken) shown = false
+            }
+        }
+    }
+
+    fun finishSetup() {
+        sync.markSetupOffered()
+        overlays.remove(Overlay.Setup)
+    }
+
+    /** A note that holds both versions of some lines: open it at the first one. */
+    fun openBothVersions(path: NotePath) = openNote(path, reveal = BothVersions.Mine)
 
     fun openNote(path: NotePath, reveal: String? = null) = push(EditorTarget.Open(path, reveal))
 
@@ -131,8 +203,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openSettings() {
-        overlays += Overlay.Settings
+    fun openSettings(focusToken: Boolean = false) {
+        overlays.removeAll { it is Overlay.Settings }
+        overlays += Overlay.Settings(focusToken)
     }
 
     /** Closes the top overlay. Returns false if there was none. */

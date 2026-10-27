@@ -42,6 +42,7 @@ import io.github.triptu.notes.recents.RecentsScreen
 import io.github.triptu.notes.library.VaultScreen
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SettingsScreen
+import io.github.triptu.notes.settings.SetupScreen
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.vault.FolderPath
 import kotlinx.coroutines.launch
@@ -69,6 +70,8 @@ fun AppRoot(vm: MainViewModel) {
     val query by vm.vaultTree.query.collectAsStateWithLifecycle()
     val results by vm.vaultTree.results.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
+    val syncBar by vm.syncBar.collectAsStateWithLifecycle()
+    val sampleVaultAvailable by vm.sampleVaultAvailable.collectAsStateWithLifecycle()
 
     // Back closes overlays first, then returns from a side page to Home. On Home it exits.
     BackHandler(enabled = vm.overlays.isEmpty() && pager.currentPage != Pages.Home) { go(Pages.Home) }
@@ -117,6 +120,11 @@ fun AppRoot(vm: MainViewModel) {
                     onUnpin = vm::togglePin,
                     onCompose = { vm.newNote() },
                     onVoice = { vm.newNote(voice = true) },
+                    syncBar = syncBar,
+                    onFixToken = { vm.openSettings(focusToken = true) },
+                    onRetrySync = vm.sync::retry,
+                    onOpenBothVersions = vm::openBothVersions,
+                    onDeletion = vm.sync::decideDeletion,
                 )
                 else -> RecentsScreen(recents, FolderPath(capture.weeklyFolder.trim('/')), onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
             }
@@ -131,7 +139,8 @@ fun AppRoot(vm: MainViewModel) {
             contentKey = { overlay ->
                 when (overlay) {
                     is Overlay.Editor -> System.identityHashCode(overlay.session)
-                    Overlay.Settings -> "settings"
+                    is Overlay.Settings -> "settings"
+                    Overlay.Setup -> "setup"
                     null -> "none"
                 }
             },
@@ -149,13 +158,16 @@ fun AppRoot(vm: MainViewModel) {
                         onDelete = vm::deleteOpenNote,
                     )
                 }
-                Overlay.Settings -> SettingsScreen(
+                is Overlay.Settings -> SettingsScreen(
                     capture = capture,
                     onCapture = vm.graph.settings::updateCapture,
-                    sampleVaultAvailable = vm.sampleVaultAvailable,
+                    sync = vm.sync,
+                    focusToken = overlay.focusToken,
+                    sampleVaultAvailable = sampleVaultAvailable,
                     onLoadSampleVault = vm::loadSampleVault,
                     onBack = { vm.back() },
                 )
+                Overlay.Setup -> SetupScreen(vm.sync, onDone = vm::finishSetup)
                 null -> Box(Modifier.fillMaxSize())
             }
         }
