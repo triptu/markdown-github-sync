@@ -36,8 +36,6 @@ Pushing the tag runs `.github/workflows/release.yml`. It checks the tag matches 
 
 Obsidian installs updates for every device once a release is published; a new release must have a higher version.
 
-The `updates` branch is frozen at 0.4.1 for devices that still run the retired updater plugin. Don't publish to it.
-
 `npm run lint` runs Obsidian's `eslint-plugin-obsidianmd` recommended config over `plugin/src`, the same checks as the community plugin review. Keep it free of errors. The warnings it still prints are deliberate: the engine uses bare timers and falls back to `.obsidian` because it also runs under Node in tests, copy keeps the plugin's name in capitals, and settings keep `display()` until `minAppVersion` reaches 1.13.
 
 Sync uses a fine-grained PAT with Contents read/write on the vault repository; when it expires, sync shows this in settings.
