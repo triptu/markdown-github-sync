@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -100,6 +101,55 @@ class NewNoteTest {
         assertEquals(listOf("2026102709 Draft about rivers.md"), File(root, "Writing").list()!!.toList())
         assertEquals("Draft about rivers", session.title)
         session.close(CoroutineScope(Dispatchers.Unconfined))
+    }
+
+    @Test
+    fun `a new note opens below its template, is named by the words under it, and leaves no file when left blank`() = runTest {
+        val root = temp.newFolder("vault")
+        val template = "---\ndate:\ntags:\n  - fleeting\n---\n"
+        File(root, "templates").mkdirs()
+        File(root, "templates/Zettelkasten Template.md").writeText(template)
+        val store = FileVaultStore(root, Dispatchers.Unconfined)
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val index = VaultIndex(store, File(temp.root, "index"), scope, Dispatchers.Unconfined)
+        val session = EditorSession(
+            EditorTarget.New(FolderPath("Zettelkasten")), store, index,
+            CaptureService(store) { CaptureSettings() }, scope, now = { LocalDateTime.of(2026, 10, 28, 9, 41) },
+        )
+        advanceUntilIdle()
+        assertEquals(template, session.value.text)
+        assertEquals(TextRange(template.length), session.value.selection)
+        assertEquals(template.length - 1, session.parsed.frontmatter?.end)
+
+        session.onValueChange(TextFieldValue(template + "Rivers carve", TextRange(template.length + 12)))
+        advanceUntilIdle()
+        assertEquals("Rivers carve", session.title)
+        session.onValueChange(TextFieldValue(template + "Rivers carve slowly", TextRange(template.length + 19)))
+        advanceUntilIdle()
+        assertEquals(listOf("2026102809 Rivers carve slowly.md"), File(root, "Zettelkasten").list()!!.toList())
+
+        session.onValueChange(TextFieldValue(template, TextRange(template.length)))
+        session.close(CoroutineScope(Dispatchers.Unconfined))
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), File(root, "Zettelkasten").list().orEmpty().toList())
+    }
+
+    @Test
+    fun `backing out of an untouched new note writes nothing`() = runTest {
+        val root = temp.newFolder("vault")
+        File(root, "templates").mkdirs()
+        File(root, "templates/Zettelkasten Template.md").writeText("---\ntags:\n  - fleeting\n---\n")
+        val store = FileVaultStore(root, Dispatchers.Unconfined)
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val index = VaultIndex(store, File(temp.root, "index"), scope, Dispatchers.Unconfined)
+        val session = EditorSession(
+            EditorTarget.New(FolderPath("Zettelkasten")), store, index,
+            CaptureService(store) { CaptureSettings() }, scope,
+        )
+        advanceUntilIdle()
+        session.close(CoroutineScope(Dispatchers.Unconfined))
+        advanceUntilIdle()
+        assertFalse(File(root, "Zettelkasten").exists())
     }
 }
 

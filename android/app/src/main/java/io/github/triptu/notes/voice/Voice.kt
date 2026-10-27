@@ -117,7 +117,12 @@ class Voice(
                 val path = withContext(kotlinx.coroutines.Dispatchers.Main) { locate() } ?: return@launch
                 val current = store.read(path) ?: return@launch
                 val next = RefineRules.replaceDictated(current, original, refined) ?: return@launch log("kept the edited text")
-                if (newNote != null && current == original) capture.saveNewNote(newNote.first, path, next, newNote.second) else store.write(path, next)
+                val start = newNote?.let { capture.newNoteStart(it.second) }
+                if (newNote != null && start != null && current == start + original) {
+                    capture.saveNewNote(newNote.first, path, next, newNote.second, start)
+                } else {
+                    store.write(path, next)
+                }
             } catch (e: OpenAiProvider.ProviderError) {
                 if (e.code == 401) _keyRefused.value = true
                 log("refine failed: ${e.code}")

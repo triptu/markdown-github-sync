@@ -85,6 +85,8 @@ fun SettingsScreen(
             Section("New note")
             Field("Folder", capture.newNoteFolder) { v -> onCapture { it.copy(newNoteFolder = v) } }
             Hint("Named by the hour and the first words, like “2026102709 Call the bank”.")
+            Field("Template", capture.newNoteTemplate) { v -> onCapture { it.copy(newNoteTemplate = v) } }
+            Hint("New notes start with this note's text, if it exists. Leave empty to start blank.")
 
             if (voice != null && voiceSettings != null) VoiceSettingsSection(voice, voiceSettings, onVoiceSettings)
 

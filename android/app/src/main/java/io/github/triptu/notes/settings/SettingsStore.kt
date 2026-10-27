@@ -79,6 +79,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
         val c = _capture.value
         prefs.edit {
             putString(Keys.NewNoteFolder, c.newNoteFolder)
+            putString(Keys.NewNoteTemplate, c.newNoteTemplate)
             putString(Keys.WeeklyFolder, c.weeklyFolder)
             putString(Keys.WeeklyFormat, c.weeklyFormat)
             putString(Keys.WeeklyTemplate, c.weeklyTemplate)
@@ -95,6 +96,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
         val d = CaptureSettings()
         return CaptureSettings(
             newNoteFolder = prefs.getString(Keys.NewNoteFolder, null) ?: d.newNoteFolder,
+            newNoteTemplate = prefs.getString(Keys.NewNoteTemplate, null) ?: d.newNoteTemplate,
             weeklyFolder = prefs.getString(Keys.WeeklyFolder, null) ?: d.weeklyFolder,
             weeklyFormat = prefs.getString(Keys.WeeklyFormat, null) ?: d.weeklyFormat,
             weeklyTemplate = prefs.getString(Keys.WeeklyTemplate, null) ?: d.weeklyTemplate,
@@ -108,6 +110,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
         const val VoiceTidy = "voice.tidy"
         const val SampleVault = "sampleVault"
         const val NewNoteFolder = "capture.newNoteFolder"
+        const val NewNoteTemplate = "capture.newNoteTemplate"
         const val WeeklyFolder = "capture.weeklyFolder"
         const val WeeklyFormat = "capture.weeklyFormat"
         const val WeeklyTemplate = "capture.weeklyTemplate"

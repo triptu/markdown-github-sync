@@ -3,7 +3,6 @@ package io.github.triptu.notes.capture
 import java.time.LocalDateTime
 import java.time.format.TextStyle
 import java.time.temporal.IsoFields
-import java.time.temporal.WeekFields
 import java.util.Locale
 
 /**
@@ -42,16 +41,13 @@ object MomentFormat {
     }
 
     private fun render(token: String, at: LocalDateTime, locale: Locale): String {
-        val localeWeek = WeekFields.of(locale)
+        // moment's locale weeks (gggg, ww) follow the vault's week start. This vault's weeks start
+        // on Monday and its weekly notes are named by ISO week, so locale weeks are ISO weeks here.
         return when (token) {
-            "GGGG" -> at.get(IsoFields.WEEK_BASED_YEAR).toString()
-            "GG" -> two(at.get(IsoFields.WEEK_BASED_YEAR) % 100)
-            "gggg" -> at.get(localeWeek.weekBasedYear()).toString()
-            "gg" -> two(at.get(localeWeek.weekBasedYear()) % 100)
-            "WW" -> two(at.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR))
-            "W" -> at.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR).toString()
-            "ww" -> two(at.get(localeWeek.weekOfWeekBasedYear()))
-            "w" -> at.get(localeWeek.weekOfWeekBasedYear()).toString()
+            "GGGG", "gggg" -> at.get(IsoFields.WEEK_BASED_YEAR).toString()
+            "GG", "gg" -> two(at.get(IsoFields.WEEK_BASED_YEAR) % 100)
+            "WW", "ww" -> two(at.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR))
+            "W", "w" -> at.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR).toString()
             "YYYY" -> at.year.toString()
             "YY" -> two(at.year % 100)
             "MMMM" -> at.month.getDisplayName(TextStyle.FULL, locale)

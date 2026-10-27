@@ -17,8 +17,9 @@ object ZettelName {
         return if (words.isEmpty()) stamp(now) else "${stamp(now)} $words"
     }
 
+    /** The first words after any frontmatter, without markdown, at most [MaxWords] and [MaxChars]. */
     fun firstWords(text: String): String {
-        val line = text.lineSequence().map { it.replace(Markup, "").replace(Inline, "").trim() }.firstOrNull { it.isNotEmpty() }
+        val line = withoutFrontmatter(text).lineSequence().map { it.replace(Markup, "").replace(Inline, "").trim() }.firstOrNull { it.isNotEmpty() }
             ?: return ""
         val words = sanitizeNoteName(line).split(' ').filter { it.isNotEmpty() }.take(MaxWords)
         val joined = StringBuilder()
@@ -31,5 +32,12 @@ object ZettelName {
             joined.append(next)
         }
         return joined.toString().trimEnd(',', ';', '.', '!', '?', '-')
+    }
+
+    private fun withoutFrontmatter(text: String): String {
+        val lines = text.lines()
+        if (lines.firstOrNull()?.trimEnd() != "---") return text
+        val close = lines.drop(1).indexOfFirst { it.trimEnd() == "---" }
+        return if (close < 0) text else lines.drop(close + 2).joinToString("\n")
     }
 }

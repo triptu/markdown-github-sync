@@ -70,7 +70,10 @@ class EditorSession(
 
     var value by mutableStateOf(TextFieldValue(""))
         private set
-    var loaded by mutableStateOf(target is EditorTarget.New)
+    /** A new note's filled template, which its text starts with. Loaded with the template. */
+    private var newNoteStart = ""
+
+    var loaded by mutableStateOf(false)
         private set
     var canUndo by mutableStateOf(false)
         private set
@@ -97,14 +100,30 @@ class EditorSession(
 
     /** The note's name as shown in the title. A new note shows the name its first words will give it. */
     val title: String
-        get() = if (isNew) NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text)) else path?.displayName.orEmpty()
+        get() = if (isNew) NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text.removePrefix(newNoteStart))) else path?.displayName.orEmpty()
 
     init {
         when (target) {
             is EditorTarget.Open -> load(target.path)
-            is EditorTarget.New -> if (target.text.isNotEmpty()) onValueChange(TextFieldValue(target.text, TextRange(target.text.length)))
+            is EditorTarget.New -> startNew(target)
         }
         scope.launch { followDisk() }
+    }
+
+    /** A new note opens with its template filled in and the cursor below it, then any starting text. */
+    private fun startNew(target: EditorTarget.New) {
+        scope.launch {
+            val start = capture.newNoteStart(startedAt)
+            newNoteStart = start
+            savedText = start
+            value = TextFieldValue(start, TextRange(start.length))
+            parsed = MarkdownParser.parse(start)
+            loaded = true
+            if (target.text.isNotEmpty()) {
+                val text = start + target.text
+                onValueChange(TextFieldValue(text, TextRange(text.length)))
+            }
+        }
     }
 
     /** Keeps the open note in step with changes made outside this editor, such as a sync. */
@@ -303,7 +322,7 @@ class EditorSession(
         if (text == savedText) return@withLock
         val target = target
         if (target is EditorTarget.New) {
-            path = capture.saveNewNote(target.folder, path, text, startedAt)
+            path = capture.saveNewNote(target.folder, path, text, startedAt, newNoteStart)
         } else {
             path?.let { store.write(it, text) }
         }

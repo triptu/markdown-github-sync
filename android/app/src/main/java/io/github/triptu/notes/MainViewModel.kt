@@ -193,7 +193,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val folder = (session.target as? VoiceTarget.NewNote)?.folder ?: graph.capture.newNoteFolder
-        val saved = graph.mainScope.async { graph.capture.saveNewNote(folder, null, text, session.startedAt) }
+        val saved = graph.mainScope.async { graph.capture.createNewNote(folder, text, session.startedAt) }
         refineOrDrop(audio, text, newNote = folder to session.startedAt) { saved.await() }
     }
 

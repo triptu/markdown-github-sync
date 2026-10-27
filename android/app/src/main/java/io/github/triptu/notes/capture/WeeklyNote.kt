@@ -11,22 +11,23 @@ object WeeklyNote {
     const val WritingSection = "## Notes and Ramblings"
 
     private val HeadingLine = Regex("""^(#{1,6})\s""")
-    private val TemplateDate = Regex("""\{\{date(?::([^}]*))?\}\}""")
-    private val TemplateTime = Regex("""\{\{time(?::([^}]*))?\}\}""")
+
+    /** The Monday that starts [now]'s ISO week, at [now]'s time of day. */
+    fun weekStart(now: LocalDateTime): LocalDateTime = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
 
     /** The ISO week's note: [CaptureSettings.weeklyFormat] applied to that week's Monday. */
     fun pathFor(now: LocalDateTime, settings: CaptureSettings): NotePath {
-        val monday = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val relative = MomentFormat.format(settings.weeklyFormat, monday).trim('/')
+        val relative = MomentFormat.format(settings.weeklyFormat, weekStart(now)).trim('/')
         val folder = settings.weeklyFolder.trim('/')
         return NotePath(if (folder.isEmpty()) "$relative${NotePath.MD}" else "$folder/$relative${NotePath.MD}")
     }
 
-    /** Fills Obsidian core template placeholders: `{{title}}`, `{{date}}`, `{{date:FORMAT}}`, `{{time}}`. */
-    fun fromTemplate(template: String, title: String, now: LocalDateTime): String = template
-        .replace("{{title}}", title)
-        .replace(TemplateDate) { MomentFormat.format(it.groupValues[1].ifEmpty { "YYYY-MM-DD" }, now) }
-        .replace(TemplateTime) { MomentFormat.format(it.groupValues[1].ifEmpty { "HH:mm" }, now) }
+    /**
+     * Fills a weekly template as Periodic Notes does: `{{date}}` is the week's Monday, with offsets
+     * applied before formatting, and without a format it gives the weekly note's own format.
+     */
+    fun fromTemplate(template: String, title: String, now: LocalDateTime, settings: CaptureSettings): String =
+        NoteTemplate.fill(template, title, weekStart(now), dateFormat = settings.weeklyFormat, now = now)
 
     /**
      * Where to put the cursor: the end of the last line written in [section] (or the end of its
