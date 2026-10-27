@@ -10,6 +10,10 @@ import androidx.lifecycle.viewModelScope
 import io.github.triptu.notes.capture.WeeklyNote
 import io.github.triptu.notes.editor.EditorSession
 import io.github.triptu.notes.editor.EditorTarget
+import io.github.triptu.notes.home.Resurface
+import io.github.triptu.notes.home.ResurfaceDay
+import io.github.triptu.notes.home.ResurfaceRules
+import io.github.triptu.notes.home.Resurfaced
 import io.github.triptu.notes.quick.QuickAction
 import io.github.triptu.notes.recents.RecentsFeed
 import io.github.triptu.notes.recents.RecentsFeedBuilder
@@ -27,6 +31,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -44,6 +49,7 @@ import kotlinx.coroutines.launch
 import io.github.triptu.notes.voice.VoiceDraft
 import io.github.triptu.notes.voice.VoiceSession
 import io.github.triptu.notes.voice.VoiceTarget
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -110,6 +116,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             now = values[6] as Long,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SyncBar.Quiet)
+
+    /** Home's old note for today, from the index in memory: no file is read. */
+    val resurfaced: StateFlow<Resurfaced?> = combine(
+        graph.index.snapshot,
+        graph.settings.capture,
+        pins,
+        graph.settings.resurfaceDay,
+        minutes.map { LocalDate.now() }.distinctUntilChanged(),
+    ) { snapshot, settings, pins, remembered, today ->
+        val rules = ResurfaceRules(
+            weeklyFolder = FolderPath(settings.weeklyFolder.trim('/')),
+            templateFolders = setOf(settings.newNoteTemplate, settings.weeklyTemplate).mapTo(HashSet()) { FolderPath(it.trim('/').substringBeforeLast('/', "")) },
+            zettelFolder = FolderPath(settings.newNoteFolder.trim('/')),
+            pinned = pins.filterIsInstance<Pin.Note>().mapTo(HashSet()) { it.path },
+        )
+        val day = Resurface.today(snapshot.notes, today, ZoneId.systemDefault(), rules, remembered)
+        day?.let(graph.settings::setResurfaceDay)
+        day?.pick?.let { pick -> snapshot.notes[pick.path]?.let { Resurface.show(pick, it, today) } }
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** "Not today": Home shows no old note until tomorrow. */
+    fun putAwayResurfaced() = graph.settings.setResurfaceDay(ResurfaceDay(LocalDate.now(), null))
 
     init {
         if (!sync.setupOffered && sync.target.value == null) overlays += Overlay.Setup

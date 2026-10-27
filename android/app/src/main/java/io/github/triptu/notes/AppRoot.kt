@@ -77,6 +77,7 @@ fun AppRoot(vm: MainViewModel) {
     val syncBar by vm.syncBar.collectAsStateWithLifecycle()
     val sampleVaultAvailable by vm.sampleVaultAvailable.collectAsStateWithLifecycle()
     val voiceDraft by vm.voiceDraft.collectAsStateWithLifecycle()
+    val resurfaced by vm.resurfaced.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val canSpeak = remember { SpeechRecognizer.isRecognitionAvailable(context) || SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }
 
@@ -135,6 +136,9 @@ fun AppRoot(vm: MainViewModel) {
                     onRetrySync = vm.sync::retry,
                     onOpenBothVersions = vm::openBothVersions,
                     onDeletion = vm.sync::decideDeletion,
+                    resurfaced = resurfaced,
+                    onResurfaced = { vm.openNote(it) },
+                    onPutAway = vm::putAwayResurfaced,
                 )
                 else -> RecentsScreen(recents, FolderPath(capture.weeklyFolder.trim('/')), onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
             }

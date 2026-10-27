@@ -3,6 +3,7 @@ package io.github.triptu.notes.settings
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import io.github.triptu.notes.capture.CaptureSettings
+import io.github.triptu.notes.home.ResurfaceDay
 import io.github.triptu.notes.voice.VoiceSettings
 import io.github.triptu.notes.vault.NotePath
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +47,17 @@ class SettingsStore(private val prefs: SharedPreferences) {
     fun setDeviceName(name: String) {
         _deviceName.value = name
         prefs.edit { putString(Keys.DeviceName, name) }
+    }
+
+    private val _resurfaceDay = MutableStateFlow(prefs.getString(Keys.ResurfaceDay, null)?.let(ResurfaceDay::decode))
+
+    /** The old note Home showed today, or that it was put away for today. */
+    val resurfaceDay: StateFlow<ResurfaceDay?> = _resurfaceDay.asStateFlow()
+
+    fun setResurfaceDay(day: ResurfaceDay) {
+        if (_resurfaceDay.value == day) return
+        _resurfaceDay.value = day
+        prefs.edit { putString(Keys.ResurfaceDay, day.encode()) }
     }
 
     /** True while the debug sample vault fills the vault folder; setting up sync clears it. */
@@ -109,6 +121,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
         const val VoiceLanguage = "voice.language"
         const val VoiceTidy = "voice.tidy"
         const val SampleVault = "sampleVault"
+        const val ResurfaceDay = "home.resurfaceDay"
         const val NewNoteFolder = "capture.newNoteFolder"
         const val NewNoteTemplate = "capture.newNoteTemplate"
         const val WeeklyFolder = "capture.weeklyFolder"

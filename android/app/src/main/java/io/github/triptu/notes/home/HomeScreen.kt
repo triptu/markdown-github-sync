@@ -34,7 +34,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.triptu.notes.R
 import io.github.triptu.notes.settings.Pin
@@ -71,6 +73,9 @@ fun HomeScreen(
     voiceDraft: VoiceDraft? = null,
     onKeepDraft: () -> Unit = {},
     onDiscardDraft: () -> Unit = {},
+    resurfaced: Resurfaced? = null,
+    onResurfaced: (NotePath) -> Unit = {},
+    onPutAway: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents) { OfflineMark(syncBar.offline) }
@@ -83,7 +88,7 @@ fun HomeScreen(
             ) {
                 if (pins.isEmpty()) {
                     Text(
-                        "Long-press a note or folder in Vault to pin it here.",
+                        HomeCopy.NoPins,
                         style = NotesType.row,
                         color = NotesTheme.colors.muted,
                         textAlign = TextAlign.Center,
@@ -112,7 +117,7 @@ fun HomeScreen(
                             shape = RoundedCornerShape(14.dp),
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Unpin", style = NotesType.row, color = NotesTheme.colors.ink) },
+                                text = { Text(HomeCopy.Unpin, style = NotesType.row, color = NotesTheme.colors.ink) },
                                 leadingIcon = { PhIcon(R.drawable.ph_push_pin, null, 20.dp, NotesTheme.colors.ink2) },
                                 onClick = { menu = false; onUnpin(pin) },
                             )
@@ -121,6 +126,7 @@ fun HomeScreen(
                 }
             }
         }
+        if (resurfaced != null) ResurfaceLine(resurfaced, onResurfaced, onPutAway)
         if (voiceDraft != null) DraftLine(voiceDraft, onKeepDraft, onDiscardDraft)
         Composer(onCompose, onVoice)
     }
@@ -132,6 +138,54 @@ private val Pin.label: String
         is Pin.Folder -> path.name
         Pin.ThisWeek -> "This week"
     }
+
+/**
+ * One old note above the composer: "A year ago", its title, and its first line. Long-press offers
+ * Not today.
+ */
+@Composable
+private fun ResurfaceLine(note: Resurfaced, onOpen: (NotePath) -> Unit, onPutAway: () -> Unit) {
+    val colors = NotesTheme.colors
+    var menu by remember { mutableStateOf(false) }
+    Box(Modifier.padding(bottom = 8.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .pressable({ onOpen(note.path) }, { menu = true }, bleed = PagePadding - 8.dp, label = "Open ${note.path.displayName}", pressColor = colors.raised, selected = menu)
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            PhIcon(R.drawable.ph_clock_counter_clockwise, null, 20.dp, colors.muted, Modifier.padding(top = 1.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row {
+                    Text(
+                        note.path.displayName, style = NotesType.rowMeta.copy(fontWeight = FontWeight.Medium), color = colors.ink2,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(HomeCopy.ago(note.ago), style = NotesType.rowMeta, color = colors.muted, maxLines = 1, modifier = Modifier.alignByBaseline())
+                }
+                if (note.text.isNotEmpty()) {
+                    Text(note.text, style = NotesType.rowMeta, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
+        DropdownMenu(
+            menu, { menu = false },
+            offset = DpOffset(PagePadding, 0.dp),
+            containerColor = colors.raised,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            DropdownMenuItem(
+                text = { Text(HomeCopy.NotToday, style = NotesType.row, color = colors.ink) },
+                leadingIcon = { PhIcon(R.drawable.ph_x, null, 20.dp, colors.ink2) },
+                onClick = { menu = false; onPutAway() },
+            )
+        }
+    }
+}
 
 /** "Unsaved recording, 0:42" with Keep and Discard, above the composer. */
 @Composable
@@ -159,16 +213,16 @@ private fun Composer(onCompose: () -> Unit, onVoice: () -> Unit) {
             .height(56.dp)
             .clip(RoundedCornerShape(28.dp))
             .background(colors.raised)
-            .pressable(onCompose, shape = RoundedCornerShape(28.dp), bleed = 0.dp, label = "New note", pressColor = colors.sunk)
+            .pressable(onCompose, shape = RoundedCornerShape(28.dp), bleed = 0.dp, label = HomeCopy.NewNote, pressColor = colors.sunk)
             .padding(start = 22.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("New note", style = NotesType.row, color = colors.muted, modifier = Modifier.weight(1f))
+        Text(HomeCopy.NewNote, style = NotesType.row, color = colors.muted, modifier = Modifier.weight(1f))
         Box(
-            Modifier.size(48.dp).clip(CircleShape).background(colors.solid).pressable(onVoice, shape = CircleShape, bleed = 0.dp, label = "Speak a note", pressColor = colors.ink2),
+            Modifier.size(48.dp).clip(CircleShape).background(colors.solid).pressable(onVoice, shape = CircleShape, bleed = 0.dp, label = HomeCopy.SpeakNote, pressColor = colors.ink2),
             contentAlignment = Alignment.Center,
         ) {
-            PhIcon(R.drawable.ph_microphone, "Speak a note", 22.dp, colors.onSolid)
+            PhIcon(R.drawable.ph_microphone, HomeCopy.SpeakNote, 22.dp, colors.onSolid)
         }
     }
 }
