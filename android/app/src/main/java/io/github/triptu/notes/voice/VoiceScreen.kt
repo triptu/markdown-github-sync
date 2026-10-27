@@ -58,6 +58,7 @@ import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.QuietButton
+import androidx.compose.ui.platform.LocalFocusManager
 import io.github.triptu.notes.ui.pressable
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
@@ -78,6 +79,10 @@ fun VoiceScreen(session: VoiceSession, onClose: () -> Unit, onSave: () -> Unit, 
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
         }
     }
+    // Opened from a widget or the tile over an editor: the editor's keyboard would cover Save.
+    val focus = LocalFocusManager.current
+    LaunchedEffect(session) { focus.clearFocus(force = true) }
+
     LaunchedEffect(session) {
         if (session.state is VoiceState.NeedsPermission) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {

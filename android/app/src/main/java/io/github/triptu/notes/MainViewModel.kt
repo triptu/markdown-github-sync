@@ -150,12 +150,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun runQuick(action: QuickAction) {
         if (action == QuickAction.Voice && overlays.lastOrNull() is Overlay.Voice) return
         if (overlays.lastOrNull() is Overlay.Voice) dismissVoice()
+        // A new note left blank on top is reused by New note and closed by anything else.
+        val blank = (overlays.lastOrNull() as? Overlay.Editor)?.session?.takeIf { it.isNew && it.value.text.isBlank() }
+        if (blank != null && action != QuickAction.NewNote) back()
         when (action) {
-            QuickAction.NewNote -> {
-                // Tapped again while the last new note is still blank: reuse it.
-                val top = (overlays.lastOrNull() as? Overlay.Editor)?.session
-                if (top != null && top.isNew && top.value.text.isBlank()) top.requestKeyboard() else newNote()
-            }
+            QuickAction.NewNote -> if (blank != null) blank.requestKeyboard() else newNote()
             QuickAction.Voice -> speakNewNote()
             QuickAction.ThisWeek -> openThisWeek()
             is QuickAction.OpenNote -> openNote(action.path)
