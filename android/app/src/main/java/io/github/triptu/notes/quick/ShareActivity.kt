@@ -77,7 +77,10 @@ class ShareActivity : ComponentActivity() {
         }
     }
 
-    private fun newNote(shared: SharedText) = save { graph.capture.createNote(shared.noteName(LocalDateTime.now()), shared.body + "\n") }
+    private fun newNote(shared: SharedText) = save {
+        val now = LocalDateTime.now()
+        graph.capture.createNote(shared.noteName(now), graph.capture.newNoteStart(now) + shared.body + "\n")
+    }
 
     private fun addTo(pin: Pin, shared: SharedText) = save {
         val path = when (pin) {
