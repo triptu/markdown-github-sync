@@ -19,19 +19,9 @@ Limits:
 
 ## Install
 
-Once it's listed in Obsidian's community plugins, go to Settings → Community plugins → Browse, search for **Gitless Vault Sync**, then install and enable it. Obsidian keeps it up to date.
+In Obsidian, go to Settings → Community plugins → Browse, search for **Gitless Vault Sync**, then install and enable it. Or open [`obsidian://show-plugin?id=github-vault-sync`](obsidian://show-plugin?id=github-vault-sync) to go straight to it. Obsidian keeps it up to date.
 
-Until then, install it one of two ways:
-
-- **With [BRAT](https://github.com/TfTHacker/obsidian42-brat).** Install BRAT from Community plugins, click **Add beta plugin** in its settings, and enter `triptu/markdown-github-sync`. BRAT keeps it up to date.
-- **By hand.** Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into your vault's `.obsidian/plugins/github-vault-sync/` folder, then reload Obsidian. With the GitHub CLI, from inside your vault folder:
-
-  ```sh
-  gh release download -R triptu/markdown-github-sync -D .obsidian/plugins/github-vault-sync \
-    -p main.js -p manifest.json -p styles.css --clobber
-  ```
-
-Devices set up earlier may also have a companion plugin, Gitless Vault Sync Updater (GitHub Vault Sync Updater on older installs). Once Gitless Vault Sync is listed, Obsidian updates it instead, and you can disable and delete the updater.
+While Obsidian's review is pending, you can also download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into your vault's `.obsidian/plugins/github-vault-sync/` folder, then reload Obsidian.
 
 ## Set up
 
@@ -91,15 +81,15 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 
 ## Development
 
-Requires Node 22 or newer, npm and `zip`.
+Requires Node 22 or newer and npm.
 
 ```sh
 npm run setup     # install dependencies
 npm run check     # typecheck, lint, test, build and check release metadata
-npm run package   # build both plugins and their zips into dist/
+npm run build     # build the plugin into dist/github-vault-sync/
 ```
 
-The built plugins are in `dist/github-vault-sync/` and `dist/github-vault-sync-updater/`. Copy each folder into `<vault>/.obsidian/plugins/` and reload Obsidian.
+To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` and reload Obsidian.
 
 Maintainer notes, release steps and design rules are in [AGENTS.md](AGENTS.md). Release notes are in [docs/releases](docs/releases/).
 

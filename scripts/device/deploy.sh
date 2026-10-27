@@ -1,6 +1,6 @@
 #!/bin/sh
-# Installs the built plugin straight onto the phone and restarts Obsidian (bypasses the updater).
-# Usage: npm run package && VAULT_DIR=/sdcard/Documents/<vault> scripts/device/deploy.sh   (ADB_SERIAL selects a device)
+# Installs the built plugin straight onto the phone and restarts Obsidian.
+# Usage: npm run build && VAULT_DIR=/sdcard/Documents/<vault> scripts/device/deploy.sh   (ADB_SERIAL selects a device)
 set -e
 adb_() { adb ${ADB_SERIAL:+-s "$ADB_SERIAL"} "$@"; }
 : "${VAULT_DIR:?Set VAULT_DIR to the vault folder on the phone}"
