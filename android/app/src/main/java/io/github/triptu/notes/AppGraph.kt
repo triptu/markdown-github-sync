@@ -9,6 +9,7 @@ import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.PinKeeper
 import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.sync.VaultFiles
+import io.github.triptu.notes.syncing.GitHubSync
 import io.github.triptu.notes.vault.FileVaultStore
 import io.github.triptu.notes.vault.VaultChange
 import io.github.triptu.notes.vault.VaultIndex
@@ -34,6 +35,7 @@ class AppGraph(context: Context) {
     val index = VaultIndex(store, File(context.cacheDir, "vault-index.bin"), scope)
     val settings = SettingsStore(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val capture = CaptureService(store) { settings.capture.value }
+    val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope)
     val expandedFolders = ExpandedFolders(
         PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },
         scope,
@@ -41,6 +43,7 @@ class AppGraph(context: Context) {
 
     fun start() {
         index.start()
+        sync.start()
         scope.launch { keepPinsAlive() }
         scope.launch {
             store.changes.collect { change ->
