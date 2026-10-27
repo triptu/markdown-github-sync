@@ -33,7 +33,6 @@ object SyncCopy {
     const val Starting = "Getting ready…"
 
     const val EnterRepository = "Enter the repository as owner/name."
-    const val EnterBranch = "Enter a branch name."
     const val EnterToken = "Paste a token."
     const val Offline = "Can't reach GitHub. Check your connection."
     const val Stopped = "Sync stopped. Your notes are safe."

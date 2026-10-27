@@ -29,9 +29,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import io.github.triptu.notes.sync.SyncError
 import io.github.triptu.notes.sync.SyncStatus
-import io.github.triptu.notes.syncing.SetupState
 import io.github.triptu.notes.syncing.BothVersions
 import io.github.triptu.notes.syncing.BothVersionsFinder
 import io.github.triptu.notes.syncing.DeletionDecision
@@ -118,22 +116,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (!needsToken) shown = false
             }
-        }
-    }
-
-    /** Debug builds only: made-up sync states for screenshots. */
-    fun demoSync(kind: String) {
-        val now = System.currentTimeMillis()
-        when (kind) {
-            "offline" -> sync.demo(SyncStatus.Offline(now - 3_600_000))
-            "offline-long" -> sync.demo(SyncStatus.Offline(now - 9 * 3_600_000))
-            "error" -> sync.demo(SyncStatus.Error(SyncError(SyncError.Kind.Other, "Some updates from GitHub couldn't be saved because those files changed here. Sync will try again.")))
-            "access" -> sync.demo(SyncStatus.Error(SyncError(SyncError.Kind.Access, "GitHub rejected this token. It may be mistyped, expired or revoked.")))
-            "downloading" -> {
-                sync.demo(SyncStatus.Syncing(12, 44), firstSync = true, setup = SetupState.Downloading(12, 44))
-                if (Overlay.Setup !in overlays) overlays += Overlay.Setup
-            }
-            else -> sync.demo(null, setup = SetupState.Idle)
         }
     }
 

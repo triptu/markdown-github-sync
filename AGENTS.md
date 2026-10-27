@@ -18,9 +18,8 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
 - `plugin/test/`: run with `npm test` from `plugin/` (some tests use relative paths).
 - `android/`: a native Android notes app (Kotlin, Compose) that edits the same vault. Build and test from `android/` with `./gradlew :app:testDebugUnitTest installDebug` (set `ANDROID_SERIAL` when an emulator is also attached).
   - `vault/FileVaultStore.kt` writes through the sync module's `VaultFiles`, the one writer of the vault folder, so sync's compare-and-swap and the editor share a lock. Never write the folder directly.
-  - `syncing/` connects the app to `android/sync`: `GitHubSync` owns the client, setup, the encrypted token and conflict settling (both versions kept inline between Git conflict markers); `SendEditsWorker` sends edits after the app leaves the screen. Sync copy lives in `syncing/SyncCopy.kt`. `adb logcat -s NotesSync` shows engine calls and GitHub requests.
+  - `syncing/` connects the app to `android/sync`: `GitHubSync` owns the client, setup, the encrypted token and conflict settling (both versions kept inline between Git conflict markers); `SendEditsWorker` sends edits after the app leaves the screen. Sync copy lives in `syncing/SyncCopy.kt`. `adb logcat -s NotesSync` shows status changes; debug builds also log engine calls and request timings (never paths or note text).
   - Debug builds have "Load sample vault" in settings while sync isn't set up; setting up sync deletes it first. The sample notes are made up; never copy real vault content into the repo.
-  - Debug builds show made-up sync states for screenshots: `adb shell am start -n io.github.triptu.notes.debug/io.github.triptu.notes.MainActivity --es demoSync offline` (also `offline-long`, `error`, `access`, `downloading`, `off`).
   - Icons are Phosphor SVGs imported with `android/tools/import-phosphor-icons.sh`.
 
 ## Releasing

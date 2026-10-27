@@ -49,15 +49,6 @@ class SyncClient(
     /** Diagnostics: one line per engine call and GitHub request. Never shown to the user. */
     private val log: (String) -> Unit = {},
 ) : Closeable {
-    constructor(
-        storageDir: File,
-        vaultDir: File,
-        config: SyncConfig,
-        tokens: TokenProvider,
-        engineScript: String,
-        clock: () -> Long = System::currentTimeMillis,
-    ) : this(storageDir, VaultFiles(vaultDir), config, tokens, engineScript, clock)
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val http = GitHubHttp()
     private val lastSyncedFile = File(storageDir, "last-synced")
@@ -203,13 +194,6 @@ class SyncClient(
             "invalid" -> throw SyncError(SyncError.Kind.Other, value.str("reason") ?: "That choice isn't available.")
             else -> throw unavailable(value)
         }
-    }
-
-    /** For a file sync couldn't update because it changed here: keep this device's version. */
-    suspend fun keepLocal(path: String) {
-        val value = guard { engine.call("keepLocal", mapOf("path" to path)).obj() }
-        if (value["kind"] != "recorded") throw SyncError(SyncError.Kind.Other, "Couldn't keep this version of $path.")
-        scope.launch { scheduler.now() }
     }
 
     // ---- Attachments ------------------------------------------------------------
