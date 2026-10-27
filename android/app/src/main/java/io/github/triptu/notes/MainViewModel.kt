@@ -9,7 +9,7 @@ import io.github.triptu.notes.editor.EditorSession
 import io.github.triptu.notes.editor.EditorTarget
 import io.github.triptu.notes.recents.RecentsFeed
 import io.github.triptu.notes.recents.RecentsFeedBuilder
-import io.github.triptu.notes.library.LibraryModel
+import io.github.triptu.notes.library.VaultTreeModel
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SampleVault
 import io.github.triptu.notes.vault.FolderPath
@@ -37,7 +37,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val overlays = mutableStateListOf<Overlay>()
 
-    val library = LibraryModel(graph.index, graph.expandedFolders, viewModelScope)
+    val vaultTree = VaultTreeModel(graph.index, graph.expandedFolders, viewModelScope)
 
     val pins: StateFlow<List<Pin>> = graph.settings.pins
     val capture = graph.settings.capture
@@ -80,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isPinned(pin: Pin) = pin in pins.value
 
-    fun openPinnedFolder(folder: FolderPath) = library.reveal(folder)
+    fun openPinnedFolder(folder: FolderPath) = vaultTree.reveal(folder)
 
     fun loadSampleVault() {
         viewModelScope.launch { SampleVault.load(getApplication(), graph) }

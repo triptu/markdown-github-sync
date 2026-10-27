@@ -23,7 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.triptu.notes.editor.EditorScreen
 import io.github.triptu.notes.home.HomeScreen
 import io.github.triptu.notes.recents.RecentsScreen
-import io.github.triptu.notes.library.LibraryScreen
+import io.github.triptu.notes.library.VaultScreen
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SettingsScreen
 import io.github.triptu.notes.ui.theme.NotesTheme
@@ -31,7 +31,7 @@ import io.github.triptu.notes.vault.FolderPath
 import kotlinx.coroutines.launch
 
 private object Pages {
-    const val Library = 0
+    const val Vault = 0
     const val Home = 1
     const val Recents = 2
     const val Count = 3
@@ -48,10 +48,10 @@ fun AppRoot(vm: MainViewModel) {
 
     val pins by vm.pins.collectAsStateWithLifecycle()
     val capture by vm.capture.collectAsStateWithLifecycle()
-    val rows by vm.library.rows.collectAsStateWithLifecycle()
-    val scrollTo by vm.library.scrollTo.collectAsStateWithLifecycle()
-    val query by vm.library.query.collectAsStateWithLifecycle()
-    val results by vm.library.results.collectAsStateWithLifecycle()
+    val rows by vm.vaultTree.rows.collectAsStateWithLifecycle()
+    val scrollTo by vm.vaultTree.scrollTo.collectAsStateWithLifecycle()
+    val query by vm.vaultTree.query.collectAsStateWithLifecycle()
+    val results by vm.vaultTree.results.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
 
     // Back closes overlays first, then returns from a side page to Home. On Home it exits.
@@ -65,16 +65,16 @@ fun AppRoot(vm: MainViewModel) {
             modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
         ) { page ->
             when (page) {
-                Pages.Library -> LibraryScreen(
+                Pages.Vault -> VaultScreen(
                     rows = rows,
                     scrollTo = scrollTo,
-                    onScrolled = vm.library::scrolled,
+                    onScrolled = vm.vaultTree::scrolled,
                     query = query,
                     results = results,
                     pins = pins,
-                    onQuery = vm.library::setQuery,
+                    onQuery = vm.vaultTree::setQuery,
                     onHome = { go(Pages.Home) },
-                    onToggleFolder = vm.library::toggle,
+                    onToggleFolder = vm.vaultTree::toggle,
                     onOpenNote = vm::openNote,
                     onTogglePin = vm::togglePin,
                     onSettings = vm::openSettings,
@@ -82,7 +82,7 @@ fun AppRoot(vm: MainViewModel) {
                 Pages.Home -> HomeScreen(
                     pins = pins,
                     weeklyFolder = FolderPath(capture.weeklyFolder.trim('/')),
-                    onLibrary = { go(Pages.Library) },
+                    onVault = { go(Pages.Vault) },
                     onRecents = { go(Pages.Recents) },
                     onPin = { pin ->
                         when (pin) {
@@ -90,7 +90,7 @@ fun AppRoot(vm: MainViewModel) {
                             Pin.ThisWeek -> vm.openThisWeek()
                             is Pin.Folder -> {
                                 vm.openPinnedFolder(pin.path)
-                                go(Pages.Library)
+                                go(Pages.Vault)
                             }
                         }
                     },

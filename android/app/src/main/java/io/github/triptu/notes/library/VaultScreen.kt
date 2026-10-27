@@ -3,6 +3,18 @@ package io.github.triptu.notes.library
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.gestures.scrollBy
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.HazeColorEffect
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,7 +50,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.triptu.notes.R
 import io.github.triptu.notes.settings.Pin
-import io.github.triptu.notes.ui.HintsRow
+import io.github.triptu.notes.ui.HomeSide
+import io.github.triptu.notes.ui.PageBar
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.ListRow
 import io.github.triptu.notes.ui.PagePadding
@@ -51,14 +64,16 @@ import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.SearchHit
 
 private val IndentPerLevel = 20.dp
+private val SearchHeight = 48.dp
+private val SearchGap = 8.dp
 private val ChevronSlot = 20.dp
 private const val ExpandMs = 150
 
 /** Items above the tree rows in the list: the title and the search field. */
-private const val HeaderItems = 2
+private const val HeaderItems = 1
 
 @Composable
-fun LibraryScreen(
+fun VaultScreen(
     rows: List<TreeRow>,
     scrollTo: FolderPath?,
     onScrolled: () -> Unit,
@@ -85,33 +100,34 @@ fun LibraryScreen(
     LaunchedEffect(searching) {
         if (!searching) state.scrollToItem(treePosition.first, treePosition.second)
     }
+    val pillSpace = with(LocalDensity.current) { (SearchHeight + SearchGap).toPx() }
     LaunchedEffect(scrollTo, rows) {
         val target = scrollTo ?: return@LaunchedEffect
         val index = rows.indexOfFirst { it is TreeRow.Folder && it.path == target }
         if (index < 0) return@LaunchedEffect
         state.scrollToItem(index + HeaderItems)
+        state.scrollBy(-pillSpace) // Keep the folder clear of the floating search pill.
         onScrolled()
     }
 
+    val haze = rememberHazeState()
     Column(Modifier.fillMaxSize()) {
-        HintsRow(left = null, right = "Home", onLeft = {}, onRight = onHome)
-        LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
-            item(key = "title") {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = PagePadding, end = PagePadding - 12.dp, top = 6.dp, bottom = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Library", style = NotesType.title, color = colors.ink, modifier = Modifier.weight(1f))
-                    IconButton48(R.drawable.ph_gear_six, "Settings", onSettings, tint = colors.muted)
+        PageBar("Vault", HomeSide.End, onHome) {
+            IconButton48(R.drawable.ph_gear_six, "Settings", onSettings, tint = colors.muted)
+        }
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(state = state, modifier = Modifier.fillMaxSize().hazeSource(haze)) {
+                // Room for the search pill, which floats over the list.
+                item(key = "searchSpace") { Spacer(Modifier.height(SearchHeight + SearchGap)) }
+                if (searching) {
+                    results(results, pins, query, onOpenNote, onTogglePin)
+                } else {
+                    tree(rows, pins, onToggleFolder, onOpenNote, onTogglePin)
                 }
+                item(key = "end") { Box(Modifier.height(24.dp)) }
             }
-            item(key = "search") { SearchField(query, search) }
-            if (searching) {
-                results(results, pins, query, onOpenNote, onTogglePin)
-            } else {
-                tree(rows, pins, onToggleFolder, onOpenNote, onTogglePin)
-            }
-            item(key = "end") { Box(Modifier.height(24.dp)) }
+            // Pinned under the bar; the list scrolls beneath it.
+            SearchField(query, search, haze)
         }
     }
 }
@@ -221,17 +237,28 @@ private fun TreeItem(
     }
 }
 
+/** The search pill: a blurred, tinted view of the list behind it. */
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
+private fun SearchField(query: String, onQuery: (String) -> Unit, haze: HazeState, modifier: Modifier = Modifier) {
     val colors = NotesTheme.colors
+    val dark = isSystemInDarkTheme()
+    val shape = RoundedCornerShape(24.dp)
+    val blur = remember(colors) {
+        HazeBlurStyle {
+            blurRadius(24.dp)
+            backgroundColor(colors.bg)
+            colorEffects(listOf(HazeColorEffect.tint(colors.raised.copy(alpha = 0.82f))))
+            noiseFactor(0f)
+        }
+    }
     Row(
-        Modifier
+        modifier
             .padding(horizontal = PagePadding)
-            .padding(bottom = 8.dp)
             .fillMaxWidth()
-            .height(48.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(colors.raised)
+            .height(SearchHeight)
+            .clip(shape)
+            .hazeBlur(HazeInput.Sources(haze), blur)
+            .then(if (dark) Modifier.border(1.dp, Color.White.copy(alpha = 0.07f), shape) else Modifier)
             .padding(start = 18.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),

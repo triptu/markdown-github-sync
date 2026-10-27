@@ -4,7 +4,7 @@ import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultSnapshot
 
-/** One visible row of the Library tree. */
+/** One visible row of the Vault tree. */
 sealed interface TreeRow {
     val depth: Int
     val key: String
@@ -18,8 +18,8 @@ sealed interface TreeRow {
     }
 }
 
-/** Flattens the vault into the rows the Library shows: folders first, then notes, open folders expanded in place. */
-object LibraryTree {
+/** Flattens the vault into the rows the Vault screen shows: folders first, then notes, open folders expanded in place. */
+object VaultTree {
     fun rows(snapshot: VaultSnapshot, expanded: Set<FolderPath>): List<TreeRow> {
         val foldersIn = snapshot.folders.groupBy { it.parent ?: FolderPath.Root }
             .mapValues { (_, list) -> list.sortedWith(compareBy(NaturalOrder) { it.name }) }

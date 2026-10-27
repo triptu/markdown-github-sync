@@ -16,9 +16,9 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 
-/** The Library: a tree of the vault with remembered open folders, and a flat search. */
+/** The Vault screen: a tree of the vault with remembered open folders, and a flat search. */
 @OptIn(FlowPreview::class)
-class LibraryModel(index: VaultIndex, private val expanded: ExpandedFolders, scope: CoroutineScope) {
+class VaultTreeModel(index: VaultIndex, private val expanded: ExpandedFolders, scope: CoroutineScope) {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
@@ -27,7 +27,7 @@ class LibraryModel(index: VaultIndex, private val expanded: ExpandedFolders, sco
     val scrollTo: StateFlow<FolderPath?> = _scrollTo.asStateFlow()
 
     val rows: StateFlow<List<TreeRow>> = combine(index.snapshot, expanded.expanded, expanded.loaded) { snapshot, open, loaded ->
-        if (loaded) LibraryTree.rows(snapshot, open) else emptyList()
+        if (loaded) VaultTree.rows(snapshot, open) else emptyList()
     }.flowOn(Dispatchers.Default).stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val results: StateFlow<List<SearchHit>> = combine(index.snapshot, _query.debounce(SearchDebounceMs)) { snapshot, q ->
@@ -43,7 +43,7 @@ class LibraryModel(index: VaultIndex, private val expanded: ExpandedFolders, sco
     /** Opens [folder] and the folders above it, and asks the screen to bring it to the top. */
     fun reveal(folder: FolderPath) {
         _query.value = ""
-        expanded.open(LibraryTree.withAncestors(folder))
+        expanded.open(VaultTree.withAncestors(folder))
         _scrollTo.value = folder
     }
 

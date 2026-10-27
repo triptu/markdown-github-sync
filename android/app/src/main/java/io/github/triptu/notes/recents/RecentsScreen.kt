@@ -30,7 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import io.github.triptu.notes.R
-import io.github.triptu.notes.ui.HintsRow
+import io.github.triptu.notes.ui.HomeSide
+import io.github.triptu.notes.ui.PageBar
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.pressable
@@ -48,15 +49,12 @@ private const val TaskGlyph = "task"
 fun RecentsScreen(feed: RecentsFeed, onHome: () -> Unit, onOpen: (RecentCard) -> Unit) {
     val colors = NotesTheme.colors
     Column(Modifier.fillMaxSize()) {
-        HintsRow(left = "Home", right = null, onLeft = onHome, onRight = {})
+        PageBar("Recents", HomeSide.Start, onHome)
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(start = PagePadding, end = PagePadding, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item(key = "title") {
-                Text("Recents", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
-            }
             if (feed.isEmpty) {
                 item(key = "empty") {
                     Text("What you write shows up here, newest first.", style = NotesType.row, color = colors.muted)

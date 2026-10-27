@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** Which Library folders are open, kept across restarts in DataStore. */
+/** Which Vault folders are open, kept across restarts in DataStore. */
 class ExpandedFolders(private val store: DataStore<Preferences>, private val scope: CoroutineScope) {
     private val key = stringSetPreferencesKey("expanded")
     private val _expanded = MutableStateFlow<Set<FolderPath>>(emptySet())

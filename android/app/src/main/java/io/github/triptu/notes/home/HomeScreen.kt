@@ -48,7 +48,7 @@ private const val CompactPinCount = 6
 fun HomeScreen(
     pins: List<Pin>,
     weeklyFolder: FolderPath,
-    onLibrary: () -> Unit,
+    onVault: () -> Unit,
     onRecents: () -> Unit,
     onPin: (Pin) -> Unit,
     onUnpin: (Pin) -> Unit,
@@ -56,7 +56,7 @@ fun HomeScreen(
     onVoice: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        HintsRow(left = "Library", right = "Recents", onLeft = onLibrary, onRight = onRecents)
+        HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val compact = pins.size > CompactPinCount
             Column(
@@ -65,7 +65,7 @@ fun HomeScreen(
             ) {
                 if (pins.isEmpty()) {
                     Text(
-                        "Long-press a note or folder in Library to pin it here.",
+                        "Long-press a note or folder in Vault to pin it here.",
                         style = NotesType.row,
                         color = NotesTheme.colors.muted,
                         textAlign = TextAlign.Center,

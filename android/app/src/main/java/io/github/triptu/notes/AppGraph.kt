@@ -46,7 +46,7 @@ class AppGraph(context: Context) {
     }
 
     /**
-     * Re-points or drops pins, and the Library's open folders, whenever a fresh snapshot shows
+     * Re-points or drops pins, and the Vault screen's open folders, whenever a fresh snapshot shows
      * their note or folder gone.
      */
     private suspend fun keepPinsAlive() {

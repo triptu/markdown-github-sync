@@ -78,7 +78,7 @@ fun Modifier.pressable(
         .padding(horizontal = bleed)
 }
 
-/** Small tappable labels naming the neighbouring pages ("‹ Library", "Recents ›"). */
+/** Small tappable labels naming the neighbouring pages ("‹ Vault", "Recents ›"). */
 @Composable
 fun HintsRow(left: String?, right: String?, onLeft: () -> Unit, onRight: () -> Unit, modifier: Modifier = Modifier) {
     Row(
@@ -102,6 +102,30 @@ private fun Hint(label: String, @DrawableRes icon: Int, iconFirst: Boolean, onCl
         if (iconFirst) PhIcon(icon, null, 15.dp, muted)
         Text(label, style = NotesType.hint, color = muted)
         if (!iconFirst) PhIcon(icon, null, 15.dp, muted)
+    }
+}
+
+/** Which edge of a side page leads back to Home. */
+enum class HomeSide { Start, End }
+
+/**
+ * The fixed top bar of a side page: its title, and a chevron toward Home on the side Home is on.
+ * [actions] sit next to the chevron.
+ */
+@Composable
+fun PageBar(title: String, homeSide: HomeSide, onHome: () -> Unit, actions: @Composable () -> Unit = {}) {
+    val colors = NotesTheme.colors
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (homeSide == HomeSide.Start) IconButton48(R.drawable.ph_caret_left, "Back to Home", onHome, tint = colors.muted)
+        Text(
+            title, style = NotesType.title, color = colors.ink, maxLines = 1,
+            modifier = Modifier.weight(1f).padding(start = if (homeSide == HomeSide.Start) 4.dp else 12.dp),
+        )
+        actions()
+        if (homeSide == HomeSide.End) IconButton48(R.drawable.ph_caret_right, "Back to Home", onHome, tint = colors.muted)
     }
 }
 
