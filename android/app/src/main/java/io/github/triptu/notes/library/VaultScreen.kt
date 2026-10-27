@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.gestures.scrollBy
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
@@ -110,6 +111,9 @@ fun VaultScreen(
         onScrolled()
     }
 
+    // Opening a note hands the keyboard to the editor, not the search field left behind.
+    val focus = LocalFocusManager.current
+    val open: (NotePath) -> Unit = { focus.clearFocus(); onOpenNote(it) }
     val haze = rememberHazeState()
     Column(Modifier.fillMaxSize()) {
         PageBar("Vault", HomeSide.End, onHome) {
@@ -120,9 +124,9 @@ fun VaultScreen(
                 // Room for the search pill, which floats over the list.
                 item(key = "searchSpace") { Spacer(Modifier.height(SearchHeight + SearchGap)) }
                 if (searching) {
-                    results(results, pins, query, onOpenNote, onTogglePin)
+                    results(results, pins, query, open, onTogglePin)
                 } else {
-                    tree(rows, pins, onToggleFolder, onOpenNote, onTogglePin)
+                    tree(rows, pins, onToggleFolder, open, onTogglePin)
                 }
                 item(key = "end") { Box(Modifier.height(24.dp)) }
             }
