@@ -20,6 +20,16 @@ class SettingsStore(private val prefs: SharedPreferences) {
     private val _capture = MutableStateFlow(readCapture())
     val capture: StateFlow<CaptureSettings> = _capture.asStateFlow()
 
+    private val _deviceName = MutableStateFlow(prefs.getString(Keys.DeviceName, null))
+
+    /** The name typed for this phone in commit messages, or null if never set. */
+    val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
+
+    fun setDeviceName(name: String) {
+        _deviceName.value = name
+        prefs.edit { putString(Keys.DeviceName, name) }
+    }
+
     /** True while the debug sample vault fills the vault folder; setting up sync clears it. */
     val sampleVaultLoaded: Boolean get() = prefs.getBoolean(Keys.SampleVault, false)
 
@@ -75,6 +85,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
 
     private object Keys {
         const val Pins = "pins"
+        const val DeviceName = "sync.deviceName"
         const val SampleVault = "sampleVault"
         const val NewNoteFolder = "capture.newNoteFolder"
         const val WeeklyFolder = "capture.weeklyFolder"
