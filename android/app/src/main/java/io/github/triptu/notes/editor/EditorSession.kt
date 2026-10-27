@@ -36,11 +36,12 @@ sealed interface EditorTarget {
     /**
      * [reveal] is a bit of the note to scroll to, such as the snippet a Recents card showed.
      * [cursorAt] puts the cursor there and opens the keyboard, as the This week pin does.
+     * [insert] is spoken text to add at the cursor once the note loads.
      */
-    data class Open(val path: NotePath, val reveal: String? = null, val cursorAt: Int? = null) : EditorTarget
+    data class Open(val path: NotePath, val reveal: String? = null, val cursorAt: Int? = null, val insert: String? = null) : EditorTarget
 
-    /** A new note in [folder], named `YYYYMMDDHH <first words>`. [voice] starts dictation. */
-    data class New(val folder: FolderPath, val voice: Boolean) : EditorTarget
+    /** A new note in [folder], named `YYYYMMDDHH <first words>`, starting with [text] (such as spoken words). */
+    data class New(val folder: FolderPath, val text: String = "") : EditorTarget
 }
 
 /**
@@ -99,7 +100,10 @@ class EditorSession(
         get() = if (isNew) NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text)) else path?.displayName.orEmpty()
 
     init {
-        if (target is EditorTarget.Open) load(target.path)
+        when (target) {
+            is EditorTarget.Open -> load(target.path)
+            is EditorTarget.New -> if (target.text.isNotEmpty()) onValueChange(TextFieldValue(target.text, TextRange(target.text.length)))
+        }
         scope.launch { followDisk() }
     }
 
@@ -158,10 +162,27 @@ class EditorSession(
     private fun setLoaded(text: String) {
         val cursorAt = (target as? EditorTarget.Open)?.cursorAt?.coerceIn(0, text.length)
         if (revealPending) revealAt = cursorAt ?: findReveal(text)
+        val first = !loaded
         savedText = text
         value = TextFieldValue(text, TextRange(cursorAt ?: 0))
         parsed = MarkdownParser.parse(text)
         loaded = true
+        val insert = (target as? EditorTarget.Open)?.insert
+        if (first && !insert.isNullOrBlank()) insertSpoken(insert)
+    }
+
+    /** Bumped to ask the screen to focus the note and raise the keyboard. */
+    var keyboardRequests by mutableStateOf(0)
+        private set
+
+    fun requestKeyboard() {
+        keyboardRequests++
+    }
+
+    /** Adds spoken words at the cursor as one undo step; they save like typing. */
+    fun insertSpoken(text: String) {
+        if (text.isBlank()) return
+        onValueChange(EditOps.insertText(value, text), newUndoStep = true)
     }
 
     fun revealDone() {

@@ -391,8 +391,20 @@ class GitHubSync(
         return client.remotePaths().also { remoteListing = System.currentTimeMillis() to it }
     }
 
-    private fun deviceName(): String =
-        Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() } ?: Build.MODEL
+    /** The phone's own name, from system settings. */
+    val systemDeviceName: String
+        get() = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() } ?: Build.MODEL
+
+    /** The name typed in Settings, or the phone's own name when that is empty. */
+    val deviceName: StateFlow<String?> get() = settings.deviceName
+
+    /** Names this phone in commit messages; takes effect at the next sync. */
+    fun setDeviceName(name: String) {
+        settings.setDeviceName(name)
+        _client.value?.setDeviceName(deviceName())
+    }
+
+    private fun deviceName(): String = settings.deviceName.value?.trim()?.takeIf { it.isNotEmpty() } ?: systemDeviceName
 
     companion object {
         private const val Tag = "NotesSync"

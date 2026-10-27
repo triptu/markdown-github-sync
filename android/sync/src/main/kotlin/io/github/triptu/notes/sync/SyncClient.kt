@@ -88,6 +88,8 @@ class SyncClient(
 
     private var lastSyncedAt: Long? = lastSyncedFile.takeIf { it.isFile }?.readText()?.trim()?.toLongOrNull()
     @Volatile private var opened = false
+    @Volatile private var deviceName = config.deviceName
+    private var openedDeviceName = deviceName
     @Volatile private var enrolled = false
 
     val scheduler = SyncScheduler(scope, run = { runSync() }, onError = { report(it) }, clock = clock)
@@ -108,6 +110,11 @@ class SyncClient(
 
     /** The app left the screen: send waiting edits now. */
     fun onBackground() = scheduler.background()
+
+    /** Names this device in commit messages from the next sync on. */
+    fun setDeviceName(name: String) {
+        deviceName = name
+    }
 
     /** Call after edits made outside [vault]'s write methods (normally not needed). */
     fun onEdited() = scheduler.edited()
@@ -242,10 +249,11 @@ class SyncClient(
             "owner" to config.owner,
             "name" to config.repository,
             "branch" to config.branch,
-            "deviceName" to config.deviceName,
+            "deviceName" to deviceName,
             "installationId" to installationId,
             "excludedExtensions" to onDemand,
         ))
+        openedDeviceName = deviceName
         opened = true
     }
 
@@ -273,6 +281,8 @@ class SyncClient(
 
     private suspend fun runSync() {
         _status.value = SyncStatus.Syncing()
+        // The engine takes the device name when it opens; opening again is cheap and offline.
+        if (opened && openedDeviceName != deviceName) opened = false
         val outcome = try {
             guard { engine.call("sync").obj() }
         } finally {

@@ -12,6 +12,8 @@ object SyncCopy {
     const val RepositoryPlaceholder = "owner/name"
     const val Branch = "Branch"
     const val Token = "Token"
+    const val DeviceName = "Device name"
+    const val DeviceNameHint = "Shown in the commit messages this phone makes on GitHub."
     const val TokenPlaceholder = "github_pat_…"
     const val TokenSaved = "Saved on this phone"
     const val CreateToken = "Create token"

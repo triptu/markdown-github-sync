@@ -10,10 +10,10 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * The GitHub token, encrypted with an AES key that lives in the Android Keystore and never leaves
+ * A secret such as the GitHub token, encrypted with an AES key that lives in the Android Keystore and never leaves
  * it. The file holds the IV and the ciphertext; without this phone's Keystore it can't be read.
  */
-class TokenVault(private val file: File) {
+class TokenVault(private val file: File, private val alias: String = "github-token") {
     @Volatile private var cached: String? = null
 
     @Synchronized
@@ -53,10 +53,10 @@ class TokenVault(private val file: File) {
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance(Provider).apply { load(null) }
-        (store.getKey(Alias, null) as? SecretKey)?.let { return it }
+        (store.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, Provider)
         generator.init(
-            KeyGenParameterSpec.Builder(Alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
@@ -67,7 +67,6 @@ class TokenVault(private val file: File) {
 
     private companion object {
         const val Provider = "AndroidKeyStore"
-        const val Alias = "github-token"
         const val Transformation = "AES/GCM/NoPadding"
     }
 }

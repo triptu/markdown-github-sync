@@ -25,6 +25,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpOffset
 import io.github.triptu.notes.ui.PagePadding
+import io.github.triptu.notes.ui.QuietButton
+import io.github.triptu.notes.voice.VoiceCopy
+import io.github.triptu.notes.voice.VoiceDraft
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +68,9 @@ fun HomeScreen(
     onRetrySync: () -> Unit = {},
     onOpenBothVersions: (NotePath) -> Unit = {},
     onDeletion: (Boolean) -> Unit = {},
+    voiceDraft: VoiceDraft? = null,
+    onKeepDraft: () -> Unit = {},
+    onDiscardDraft: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents) { OfflineMark(syncBar.offline) }
@@ -113,6 +121,7 @@ fun HomeScreen(
                 }
             }
         }
+        if (voiceDraft != null) DraftLine(voiceDraft, onKeepDraft, onDiscardDraft)
         Composer(onCompose, onVoice)
     }
 }
@@ -123,6 +132,21 @@ private val Pin.label: String
         is Pin.Folder -> path.name
         Pin.ThisWeek -> "This week"
     }
+
+/** "Unsaved recording, 0:42" with Keep and Discard, above the composer. */
+@Composable
+private fun DraftLine(draft: VoiceDraft, onKeep: () -> Unit, onDiscard: () -> Unit) {
+    val colors = NotesTheme.colors
+    Row(
+        Modifier.fillMaxWidth().padding(start = PagePadding, end = PagePadding - 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(VoiceCopy.unsaved(draft.elapsedMs), style = NotesType.rowMeta, color = colors.ink2, modifier = Modifier.weight(1f))
+        QuietButton(VoiceCopy.Keep, onKeep)
+        Spacer(Modifier.width(4.dp))
+        QuietButton(VoiceCopy.Discard, onDiscard, color = colors.ink2)
+    }
+}
 
 /** The "New note" pill with the round mic button. */
 @Composable

@@ -3,6 +3,7 @@ package io.github.triptu.notes.settings
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import io.github.triptu.notes.capture.CaptureSettings
+import io.github.triptu.notes.voice.VoiceSettings
 import io.github.triptu.notes.vault.NotePath
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,33 @@ class SettingsStore(private val prefs: SharedPreferences) {
 
     private val _capture = MutableStateFlow(readCapture())
     val capture: StateFlow<CaptureSettings> = _capture.asStateFlow()
+
+    private val _voice = MutableStateFlow(
+        VoiceSettings(
+            language = prefs.getString(Keys.VoiceLanguage, null).orEmpty(),
+            tidy = prefs.getBoolean(Keys.VoiceTidy, true),
+        ),
+    )
+    val voice: StateFlow<VoiceSettings> = _voice.asStateFlow()
+
+    fun updateVoice(edit: (VoiceSettings) -> VoiceSettings) {
+        _voice.update(edit)
+        val v = _voice.value
+        prefs.edit {
+            putString(Keys.VoiceLanguage, v.language)
+            putBoolean(Keys.VoiceTidy, v.tidy)
+        }
+    }
+
+    private val _deviceName = MutableStateFlow(prefs.getString(Keys.DeviceName, null))
+
+    /** The name typed for this phone in commit messages, or null if never set. */
+    val deviceName: StateFlow<String?> = _deviceName.asStateFlow()
+
+    fun setDeviceName(name: String) {
+        _deviceName.value = name
+        prefs.edit { putString(Keys.DeviceName, name) }
+    }
 
     /** True while the debug sample vault fills the vault folder; setting up sync clears it. */
     val sampleVaultLoaded: Boolean get() = prefs.getBoolean(Keys.SampleVault, false)
@@ -75,6 +103,9 @@ class SettingsStore(private val prefs: SharedPreferences) {
 
     private object Keys {
         const val Pins = "pins"
+        const val DeviceName = "sync.deviceName"
+        const val VoiceLanguage = "voice.language"
+        const val VoiceTidy = "voice.tidy"
         const val SampleVault = "sampleVault"
         const val NewNoteFolder = "capture.newNoteFolder"
         const val WeeklyFolder = "capture.weeklyFolder"

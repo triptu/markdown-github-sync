@@ -95,6 +95,11 @@ internal fun SyncSection(sync: GitHubSync, focusToken: Boolean) {
         PillButton(if (checking) SyncCopy.Checking else SyncCopy.SaveToken, { sync.saveToken(token) }, enabled = !checking, modifier = Modifier.padding(top = 4.dp))
     }
 
+    val savedName by sync.deviceName.collectAsStateWithLifecycle()
+    Spacer(Modifier.height(6.dp))
+    Field(SyncCopy.DeviceName, savedName ?: sync.systemDeviceName, placeholder = sync.systemDeviceName, onChange = sync::setDeviceName)
+    Hint(SyncCopy.DeviceNameHint)
+
     var confirm by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 56.dp).pressable({ confirm = true }, bleed = 0.dp),

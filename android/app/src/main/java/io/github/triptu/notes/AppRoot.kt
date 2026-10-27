@@ -45,6 +45,10 @@ import io.github.triptu.notes.settings.SettingsScreen
 import io.github.triptu.notes.settings.SetupScreen
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.vault.FolderPath
+import io.github.triptu.notes.voice.VoiceScreen
+import android.speech.SpeechRecognizer
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
 private object Pages {
@@ -72,6 +76,9 @@ fun AppRoot(vm: MainViewModel) {
     val recents by vm.recents.collectAsStateWithLifecycle()
     val syncBar by vm.syncBar.collectAsStateWithLifecycle()
     val sampleVaultAvailable by vm.sampleVaultAvailable.collectAsStateWithLifecycle()
+    val voiceDraft by vm.voiceDraft.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val canSpeak = remember { SpeechRecognizer.isRecognitionAvailable(context) || SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }
 
     // Back closes overlays first, then returns from a side page to Home. On Home it exits.
     BackHandler(enabled = vm.overlays.isEmpty() && pager.currentPage != Pages.Home) { go(Pages.Home) }
@@ -119,7 +126,10 @@ fun AppRoot(vm: MainViewModel) {
                     },
                     onUnpin = vm::togglePin,
                     onCompose = { vm.newNote() },
-                    onVoice = { vm.newNote(voice = true) },
+                    onVoice = vm::speakNewNote,
+                    voiceDraft = voiceDraft?.second,
+                    onKeepDraft = vm::keepDraft,
+                    onDiscardDraft = vm::discardDraft,
                     syncBar = syncBar,
                     onFixToken = { vm.openSettings(focusToken = true) },
                     onRetrySync = vm.sync::retry,
@@ -140,6 +150,7 @@ fun AppRoot(vm: MainViewModel) {
                 when (overlay) {
                     is Overlay.Editor -> System.identityHashCode(overlay.session)
                     is Overlay.Settings -> "settings"
+                    is Overlay.Voice -> System.identityHashCode(overlay.session)
                     Overlay.Setup -> "setup"
                     null -> "none"
                 }
@@ -157,6 +168,7 @@ fun AppRoot(vm: MainViewModel) {
                         onOpenLink = vm::openLink,
                         onDelete = vm::deleteOpenNote,
                         images = vm.graph.images,
+                        onSpeak = if (canSpeak) ({ vm.speakInto(overlay.session) }) else null,
                     )
                 }
                 is Overlay.Settings -> SettingsScreen(
@@ -165,10 +177,14 @@ fun AppRoot(vm: MainViewModel) {
                     sync = vm.sync,
                     focusToken = overlay.focusToken,
                     sampleVaultAvailable = sampleVaultAvailable,
+                    voice = vm.graph.voice,
+                    voiceSettings = vm.graph.settings.voice,
+                    onVoiceSettings = vm.graph.settings::updateVoice,
                     onLoadSampleVault = vm::loadSampleVault,
                     onBack = { vm.back() },
                 )
                 Overlay.Setup -> SetupScreen(vm.sync, onDone = vm::finishSetup)
+                is Overlay.Voice -> VoiceScreen(overlay.session, onClose = vm::dismissVoice, onSave = vm::saveVoice, onType = vm::typeVoice)
                 null -> Box(Modifier.fillMaxSize())
             }
         }
