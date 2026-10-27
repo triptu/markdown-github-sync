@@ -1,6 +1,12 @@
 package io.github.triptu.notes.editor
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
@@ -9,12 +15,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -62,7 +71,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.relocation.BringIntoViewModifierNode
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
@@ -133,32 +146,36 @@ fun EditorScreen(
     // Back closes the link popover before it closes the note.
     BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
 
-    Column(
+    val typing = WindowInsets.isImeVisible
+    Box(
         Modifier
             .fillMaxSize()
             .background(colors.bg)
             .windowInsetsPadding(WindowInsets.statusBars)
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+            .clipToBounds(),
     ) {
-        TopBar(session, isPinned, onBack, onTogglePin, onDelete)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            // Keeps the line being typed above the floating mic.
-            val margin = with(LocalDensity.current) { (MicSize + MicMargin * 2).toPx() }
-            val keepClearOfMic = remember(margin) { KeepClearBringIntoView(margin) }
-            CompositionLocalProvider(LocalBringIntoViewSpec provides keepClearOfMic) {
-                // While typing, the text ends above the mic instead of scrolling under it, so the
-                // mic never covers the lines around the cursor.
-                val typing = WindowInsets.isImeVisible && speech != null
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(bottom = if (typing) MicSize + MicMargin * 2 else 0.dp)
-                        .verticalScroll(scroll)
-                        .padding(horizontal = PagePadding),
-                ) {
+        // Keeps the line being typed below the top bar and above the floating mic.
+        val density = LocalDensity.current
+        val top = with(density) { if (typing) 0f else TopBarHeight.toPx() }
+        val bottom = with(density) { if (speech != null) (MicSize + MicMargin * 2).toPx() else 0f }
+        val keepClear = remember(top, bottom) { KeepClearBringIntoView(top, bottom) }
+        val defaultSpec = LocalBringIntoViewSpec.current
+        CompositionLocalProvider(LocalBringIntoViewSpec provides keepClear) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .padding(top = TopBarHeight)
+                    .padding(horizontal = PagePadding),
+            ) {
+                // Only the page keeps clear. The text field's own scroller can't move, so it would
+                // hand the margins up to the page as extra scrolling.
+                CompositionLocalProvider(LocalBringIntoViewSpec provides defaultSpec) {
                     Title(session, onDone = { bodyFocus.requestFocus() })
                     if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
-                    // Tapping the empty space under the text puts the cursor at the end.
+                    // Tapping the empty space under the text puts the cursor at the end. It is taller
+                    // than the mic, so the last lines can always scroll above it.
                     Spacer(
                         Modifier
                             .fillMaxWidth()
@@ -170,24 +187,37 @@ fun EditorScreen(
                     )
                 }
             }
-            if (speech != null) {
-                FloatingMic(speech, Modifier.align(Alignment.BottomEnd).padding(end = MicMargin, bottom = MicMargin))
-            }
+        }
+        // The bar floats over the text, so it can leave while typing without moving a line.
+        AnimatedVisibility(
+            visible = !typing,
+            enter = fadeIn(tween(160)) + slideInVertically(tween(160)) { -it },
+            exit = fadeOut(tween(120)) + slideOutVertically(tween(120)) { -it },
+        ) {
+            TopBar(session, isPinned, onBack, onTogglePin, onDelete)
+        }
+        if (speech != null) {
+            FloatingMic(speech, Modifier.align(Alignment.BottomEnd).padding(end = MicMargin, bottom = MicMargin))
         }
     }
 }
 
+private val TopBarHeight = 48.dp
 private val MicSize = 56.dp
 private val MicMargin = 16.dp
 
-/** Scrolls just enough to show the cursor, keeping [bottomMargin] px clear at the bottom. */
+/** Scrolls just enough to show the cursor, keeping [topMargin] and [bottomMargin] px clear. */
 @OptIn(ExperimentalFoundationApi::class)
-private class KeepClearBringIntoView(private val bottomMargin: Float) : BringIntoViewSpec {
+private class KeepClearBringIntoView(private val topMargin: Float, private val bottomMargin: Float) : BringIntoViewSpec {
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-        val visibleBottom = containerSize - bottomMargin
+        val above = offset - topMargin
+        val below = offset + size - (containerSize - bottomMargin)
         return when {
-            offset < 0f -> offset
-            offset + size > visibleBottom -> minOf(offset, offset + size - visibleBottom)
+            // When the keyboard resizes the view, the whole text field asks to be shown, not the
+            // cursor. Scrolling to its top would push the lines being typed out of view.
+            size > containerSize - topMargin - bottomMargin -> 0f
+            above < 0f -> above
+            below > 0f -> below
             else -> 0f
         }
     }
@@ -214,7 +244,7 @@ private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit
     val colors = NotesTheme.colors
     var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp),
+        Modifier.fillMaxWidth().height(TopBarHeight).background(colors.bg).padding(horizontal = PagePadding - 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton48(R.drawable.ph_arrow_left, "Back", onBack)
@@ -390,11 +420,23 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
         scroll.scrollTo((fieldTopInContent + revealLayout.getLineTop(line).toInt() - revealMargin).coerceAtLeast(0))
         session.revealDone()
     }
+    // The text field scrolls to the selection it had when it took focus, which for a note just
+    // opened is its start, so a tap at the end jumped to the top. Its own requests stop at
+    // [IgnoreBringIntoView]; the editor follows the real cursor instead, also as the keyboard opens.
+    val cursorInView = remember { BringIntoViewRequester() }
+    LaunchedEffect(focused, session.value.selection, layout, scroll.viewportSize) {
+        val l = layout ?: return@LaunchedEffect
+        if (!focused) return@LaunchedEffect
+        cursorInView.bringIntoView(l.getCursorRect(session.value.selection.end.coerceIn(0, l.layoutInput.text.length)))
+    }
     Box(
-        Modifier.onGloballyPositioned {
-            fieldTop = it.positionInWindow().y.toInt()
-            fieldTopInContent = it.positionInParent().y.toInt()
-        },
+        Modifier
+            .onGloballyPositioned {
+                fieldTop = it.positionInWindow().y.toInt()
+                fieldTopInContent = it.positionInParent().y.toInt()
+            }
+            .bringIntoViewRequester(cursorInView)
+            .then(IgnoreBringIntoView),
     ) {
     BasicTextField(
         value = session.value,
@@ -468,4 +510,14 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     val l = layout
     if (query != null && l != null && focused) LinkPopover(session, query, l, fieldTop)
     }
+}
+
+private object IgnoreBringIntoView : ModifierNodeElement<IgnoreBringIntoView.Node>() {
+    class Node : Modifier.Node(), BringIntoViewModifierNode {
+        override suspend fun bringIntoView(childCoordinates: LayoutCoordinates, boundsProvider: () -> Rect?) = Unit
+    }
+    override fun create() = Node()
+    override fun update(node: Node) = Unit
+    override fun hashCode() = 0
+    override fun equals(other: Any?) = other === this
 }
