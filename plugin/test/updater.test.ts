@@ -26,7 +26,6 @@ function fakeHost(remote: Record<string, ArrayBuffer>, installed: string | null,
   }
   const reloads: string[] = [];
   const host: UpdateHost = {
-    token: async () => "token",
     installedVersion: async () => installed && JSON.parse(text(disk.get("manifest.json") ?? null) ?? "{}").version,
     appVersion: () => "1.12.0",
     download: async name => { const data = remote[name]; if (!data) throw new Error(`missing ${name}`); return data; },

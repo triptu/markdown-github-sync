@@ -40,7 +40,7 @@ From then on the updater keeps the plugin current. It checks about every 6 hours
    - Contents: read and write
    - Metadata: read
 
-   Paste the token into settings. Obsidian keeps it in its secret storage. The updater uses the same token.
+   Paste the token into settings. Obsidian keeps it in its secret storage. The updater needs no token; it reads releases from this public repository.
 5. Click **Connect**, look over what the first sync will do, then click **Start syncing**.
 
 Repeat this on each device. Don't copy the `.git-vault-sync/` folder between devices.
@@ -74,7 +74,7 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 ## Troubleshooting
 
 - **"Branch wasn't found, or the repository is empty."** Check the branch name, and make sure the repository has at least one commit.
-- **Access denied.** Check that the token has Contents read and write on the repository, and that it hasn't expired. When the token expires, both sync and updates stop.
+- **Access denied.** Check that the token has Contents read and write on the repository, and that it hasn't expired. When the token expires, sync stops; updates keep working.
 - **"Sync only works with a private repository."** Make the repository private.
 - **Android.** Android pauses Obsidian in the background and cuts its network. Leave Obsidian open until it shows synced before you switch devices.
 - **Past syncs.** The **Sync history** and **File history** commands list what changed and when.

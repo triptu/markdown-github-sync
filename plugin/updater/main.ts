@@ -19,7 +19,7 @@ interface PluginManager {
   loadManifests?(): Promise<void>;
 }
 
-/** Keeps GitHub Vault Sync current from its release branch, using the same GitHub token. */
+/** Keeps GitHub Vault Sync current from the public `updates` branch of its repository. */
 export default class SyncUpdater extends Plugin {
   private data: UpdaterData = { rejected: [] };
   private checking = false;
@@ -81,9 +81,6 @@ export default class SyncUpdater extends Plugin {
         await this.saveData(this.data);
         new Notice(`GitHub Vault Sync ${result.version} didn't load on this device, so the previous version was restored.`, 0);
         return;
-      case "no-token":
-        if (manual) new Notice("Connect GitHub Vault Sync to GitHub first; the updater uses its token.", 8000);
-        return;
       case "skipped":
         if (manual) new Notice(`GitHub Vault Sync ${result.version} is available but wasn't installed. ${result.reason}`, 8000);
         return;
@@ -100,27 +97,14 @@ export default class SyncUpdater extends Plugin {
     const path = (name: PluginFile) => `${this.dir}/${name}`;
     const manager = this.manager();
     return {
-      token: async () => {
-        // Read the sync plugin's saved settings directly so this works even if it failed to load.
-        const settings = `${this.dir}/data.json`;
-        if (!(await adapter.exists(settings))) return null;
-        const secretId: unknown = Reflect.get(JSON.parse(await adapter.read(settings)) ?? {}, "secretId");
-        return typeof secretId === "string" && secretId ? this.app.secretStorage?.getSecret(secretId) ?? null : null;
-      },
       installedVersion: async () => {
         if (!(await adapter.exists(path("manifest.json")))) return null;
         const version: unknown = Reflect.get(JSON.parse(await adapter.read(path("manifest.json"))) ?? {}, "version");
         return typeof version === "string" ? version : null;
       },
       appVersion: () => apiVersion,
-      download: async (name, token) => {
-        const response = await requestUrl({
-          url: `https://api.github.com/repos/${REPOSITORY}/contents/${name}?ref=${BRANCH}`,
-          headers: { Accept: "application/vnd.github.raw", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" },
-          throw: false,
-        });
-        if (response.status === 401 || response.status === 403 || response.status === 404)
-          throw new Error(`GitHub refused access to ${REPOSITORY}. Make sure the token includes that repository.`);
+      download: async name => {
+        const response = await requestUrl({ url: `https://raw.githubusercontent.com/${REPOSITORY}/${BRANCH}/${name}`, throw: false });
         if (response.status !== 200) throw new Error(`GitHub answered ${response.status}.`);
         return response.arrayBuffer;
       },

@@ -1,9 +1,9 @@
 {
   "id": "github-vault-sync-updater",
   "name": "GitHub Vault Sync Updater",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minAppVersion": "1.11.4",
-  "description": "Keeps GitHub Vault Sync up to date from its GitHub release branch, using the same GitHub token.",
+  "description": "Keeps GitHub Vault Sync up to date from its public GitHub release branch. Needs no token.",
   "author": "Tushar Tripathi",
   "isDesktopOnly": false
 }

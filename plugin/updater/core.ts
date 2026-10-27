@@ -64,11 +64,10 @@ export async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 
 /** What the updater needs from Obsidian; a fake stands in for it in tests. */
 export interface UpdateHost {
-  token(): Promise<string | null>;
   installedVersion(): Promise<string | null>;
   appVersion(): string;
-  /** A file from the updates branch. */
-  download(name: string, token: string): Promise<ArrayBuffer>;
+  /** A file from the public updates branch. */
+  download(name: string): Promise<ArrayBuffer>;
   read(name: PluginFile): Promise<ArrayBuffer | null>;
   write(name: PluginFile, data: ArrayBuffer): Promise<void>;
   remove(name: PluginFile): Promise<void>;
@@ -79,7 +78,6 @@ export interface UpdateHost {
 }
 
 export type UpdateResult =
-  | { kind: "no-token" }
   | { kind: "up-to-date"; version: string }
   | { kind: "skipped"; version: string; reason: string }
   | { kind: "busy" }
@@ -87,9 +85,7 @@ export type UpdateResult =
   | { kind: "rolled-back"; version: string };
 
 export async function checkForUpdate(host: UpdateHost, rejected: ReadonlySet<string>): Promise<UpdateResult> {
-  const token = await host.token();
-  if (!token) return { kind: "no-token" };
-  const index = parseIndex(JSON.parse(new TextDecoder().decode(await host.download("latest.json", token))));
+  const index = parseIndex(JSON.parse(new TextDecoder().decode(await host.download("latest.json"))));
   const installed = await host.installedVersion();
   if (installed && compareVersions(index.version, installed) <= 0) return { kind: "up-to-date", version: installed };
   if (rejected.has(index.version)) return { kind: "skipped", version: index.version, reason: "It failed to load here before." };
@@ -99,7 +95,7 @@ export async function checkForUpdate(host: UpdateHost, rejected: ReadonlySet<str
   // Everything is downloaded and checked before a single file is touched.
   const incoming = {} as Record<PluginFile, ArrayBuffer>;
   for (const name of PLUGIN_FILES) {
-    const data = await host.download(`latest/${name}`, token);
+    const data = await host.download(`latest/${name}`);
     if (await sha256Hex(data) !== index.files[name]) throw new Error(`The downloaded ${name} doesn't match its checksum.`);
     incoming[name] = data;
   }

@@ -30,7 +30,7 @@ Every device with the updater installs the new version within about 6 hours. You
 
 The updater itself never updates automatically, so keep it small and stable. To change it, bump `plugin/updater/manifest.json` and copy `dist/github-vault-sync-updater/*` into `.obsidian/plugins/github-vault-sync-updater/` on one device. Config sync carries it to the other devices once the change is approved under Obsidian settings.
 
-The updater reads the token through the sync plugin's `data.json` (`secretId`), from Obsidian's secret storage. The token is a fine-grained PAT. It needs Contents read/write on the vault repository. The plugin repository is public, so updates need no extra access. If the token expires, both sync and updates stop. Sync shows this in settings; the updater fails silently.
+The updater needs no token: it reads `latest.json` and `latest/*` from the public `updates` branch through raw.githubusercontent.com and checks each file's SHA-256. Sync uses a fine-grained PAT with Contents read/write on the vault repository; when it expires, sync shows this in settings.
 
 ## Testing on the phone
 
