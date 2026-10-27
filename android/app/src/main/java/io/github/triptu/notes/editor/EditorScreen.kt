@@ -69,6 +69,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.rememberTextMeasurer
 import io.github.triptu.notes.R
 import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.ui.IconButton48
@@ -279,6 +281,15 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     val boxSide = with(density) { TaskBoxSize.toPx() }
     val slop = with(density) { 14.dp.toPx() }
     val xHeightCenter = with(density) { 6.sp.toPx() }
+    val measurer = rememberTextMeasurer()
+    val indentOf = remember(measurer, density) {
+        val cache = HashMap<String, TextUnit>()
+        val style = NotesType.noteBody
+        val measure: (String) -> TextUnit = { prefix ->
+            cache.getOrPut(prefix) { with(density) { measurer.measure(prefix, style).size.width.toSp() } }
+        }
+        measure
+    }
 
     fun boxTopLeft(l: TextLayoutResult, task: TaskMark): Offset {
         val line = l.getLineForOffset(task.markerStart)
@@ -295,7 +306,7 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
         onValueChange = { session.onValueChange(it) },
         textStyle = NotesType.noteBody.copy(color = colors.ink),
         cursorBrush = SolidColor(colors.ink),
-        visualTransformation = LivePreview(session.parsed, session.value.selection, focused, colors),
+        visualTransformation = LivePreview(session.parsed, session.value.selection, focused, colors, indentOf),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = { layout = it },
         modifier = Modifier
