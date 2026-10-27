@@ -1,19 +1,16 @@
 export interface SchedulerClock {
   now(): number;
-  setTimeout(
-    callback: () => void,
-    milliseconds: number,
-  ): ReturnType<typeof setTimeout>;
-  clearTimeout(id: ReturnType<typeof setTimeout>): void;
+  setTimeout(callback: () => void, milliseconds: number): number;
+  clearTimeout(id: number): void;
 }
 const clock: SchedulerClock = {
   now: () => Date.now(),
-  setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
-  clearTimeout: id => clearTimeout(id),
+  setTimeout: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+  clearTimeout: id => window.clearTimeout(id),
 };
 /** One foreground worker, coalesced edits, and bounded exponential backoff. */
 export class ForegroundScheduler {
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: number | null = null;
   private running = false;
   private stopped = false;
   private pending = false;

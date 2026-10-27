@@ -19,7 +19,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: plugin/package-lock.json
       - run: npm run setup
       - name: Tag matches manifest.json
         run: test "$(node -p 'require("./manifest.json").version')" = "$GITHUB_REF_NAME"

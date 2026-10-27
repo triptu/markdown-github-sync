@@ -81,7 +81,7 @@ export class GitObsidianVault implements LocalVault {
     private assertActive: () => void = () => {},
     private transactions?: NativeTransactionJournal,
     private hostLifetime: string | null = null,
-    private indexTick: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, indexWaitIntervalMs)),
+    private indexTick: () => Promise<void> = () => new Promise(resolve => window.setTimeout(resolve, indexWaitIntervalMs)),
   ) {
     if (transactions && !transactions.matchesPolicy(nativePolicy))
       throw new Error("Native transaction journal policy does not match the vault.");

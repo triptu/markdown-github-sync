@@ -26,7 +26,7 @@ Gitless Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub 
 
 ## Releasing
 
-1. Bump the version in `package.json`, `plugin/package.json`, `plugin/package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version`, run at the root and in `plugin/`, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
+1. Bump the version in `package.json`, `plugin/package.json`, `package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version --workspaces --include-workspace-root`, run at the root, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
 2. Add `docs/releases/<version>.md`.
 3. Run `npm run check`. It typechecks, lints, tests and builds, and fails if the version fields or `versions.json` disagree.
 4. Commit and push.
@@ -36,7 +36,9 @@ Pushing the tag runs `.github/workflows/release.yml`. It checks the tag matches 
 
 Obsidian installs updates for every device once a release is published; a new release must have a higher version.
 
-`npm run lint` runs Obsidian's `eslint-plugin-obsidianmd` recommended config over `plugin/src`, the same checks as the community plugin review. Keep it free of errors. The warnings it still prints are deliberate: the engine uses bare timers and falls back to `.obsidian` because it also runs under Node in tests, copy keeps the plugin's name in capitals, and settings keep `display()` until `minAppVersion` reaches 1.13.
+`npm run lint` runs Obsidian's `eslint-plugin-obsidianmd` recommended config over `plugin/src`, the same checks as the community plugin review. Keep it free of errors. The warnings it still prints are deliberate: the engine uses bare timers and falls back to `.obsidian` because it also runs under Node in tests and in the Android app, copy keeps the plugin's name in capitals, and settings keep `display()` until `minAppVersion` reaches 1.13.
+
+The review installs and builds from the repository root, so `plugin/` is an npm workspace and its one lockfile is the root `package-lock.json`. Without a lockfile at the root the review can't resolve the `obsidian` types and reports every API call as unsafe.
 
 Sync uses a fine-grained PAT with Contents read/write on the vault repository; when it expires, sync shows this in settings.
 

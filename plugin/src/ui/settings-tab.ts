@@ -32,14 +32,14 @@ function renderCommitSettings(el: HTMLElement, draft: CommitDraft, changed: () =
     return valid;
   };
   const edited = () => { if (update()) changed(); };
-  new Setting(el).setName("Device name")
+  new Setting(el).setClass("git-sync-text-row").setName("Device name")
     .addText(text => text.setValue(draft.deviceName).setPlaceholder(deviceSuggestion())
       .onChange(value => { draft.deviceName = value.trim() || deviceSuggestion(); edited(); }));
-  new Setting(el).setClass("git-sync-format-field").setName("Message")
+  new Setting(el).setClass("git-sync-text-row").setClass("git-sync-format-field").setName("Message")
     .setDesc("{{device}}, {{count}} (files changed) and {{date}} are filled in.")
     .addText(text => text.setValue(draft.commitMessageTemplate)
       .onChange(value => { draft.commitMessageTemplate = value; edited(); }));
-  new Setting(el).setClass("git-sync-format-field").setName("Date format")
+  new Setting(el).setClass("git-sync-text-row").setClass("git-sync-format-field").setName("Date format")
     .setDesc("YYYY MM MMM D DD Do HH mm ss. Wrap other text in [brackets].")
     .addText(text => text.setValue(draft.commitDateFormat)
       .onChange(value => { draft.commitDateFormat = value; edited(); }));
@@ -56,7 +56,7 @@ function tokenDescription(url: () => string): DocumentFragment {
 /** Masked token field. Blank keeps the saved token; the saved value is never read back into the page. */
 function tokenInput(setting: Setting, saved: boolean, handlers: { edited(): void; committed(value: string): void }, url: () => string) {
   let input: HTMLInputElement | null = null;
-  setting.addText(text => {
+  setting.setClass("git-sync-text-row").addText(text => {
     input = text.inputEl;
     input.type = "password";
     input.autocomplete = "off";
@@ -205,11 +205,11 @@ export class GitSettings extends PluginSettingTab {
     };
     const recheck = debounce(() => { void check(); }, 800, true);
     const edited = () => { access.clear(); recheck(); };
-    new Setting(el).setName("Repository")
+    new Setting(el).setClass("git-sync-text-row").setName("Repository")
       .setDesc("Owner and name, or paste the repository link.")
       .addText(text => text.setValue(repository).setPlaceholder("username/notes")
         .onChange(value => { repository = value; edited(); }));
-    new Setting(el).setName("Branch")
+    new Setting(el).setClass("git-sync-text-row").setName("Branch")
       .addText(text => text.setValue(draft.branch).setPlaceholder("main")
         .onChange(value => { draft.branch = value.trim(); edited(); }));
     const creationUrl = () => tokenCreationUrl(parseRepository(repository)?.owner ?? "");

@@ -3,8 +3,11 @@
   "private": true,
   "license": "MIT",
   "version": "0.4.1",
+  "workspaces": [
+    "plugin"
+  ],
   "scripts": {
-    "setup": "npm ci --prefix plugin",
+    "setup": "npm ci",
     "build": "npm run build --prefix plugin",
     "typecheck": "npm run typecheck --prefix plugin",
     "test": "npm test --prefix plugin",

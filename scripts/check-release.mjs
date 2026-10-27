@@ -5,12 +5,12 @@ import { readFile } from "node:fs/promises";
 const read = async path => JSON.parse(await readFile(path, "utf8"));
 const manifest = await read("manifest.json");
 const versions = await read("versions.json");
-const lock = await read("plugin/package-lock.json");
+const lock = await read("package-lock.json");
 const found = {
   "package.json": (await read("package.json")).version,
   "plugin/package.json": (await read("plugin/package.json")).version,
-  "plugin/package-lock.json": lock.version,
-  "plugin/package-lock.json (root package)": lock.packages[""].version,
+  "package-lock.json": lock.packages[""].version,
+  "package-lock.json (plugin)": lock.packages.plugin.version,
 };
 const problems = [];
 if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) problems.push(`manifest.json version ${manifest.version} isn't plain x.y.z.`);
