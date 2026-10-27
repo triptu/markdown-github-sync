@@ -21,7 +21,7 @@ Limits:
 
 In Obsidian, go to Settings → Community plugins → Browse, search for **Gitless Vault Sync**, then install and enable it. Or open [`obsidian://show-plugin?id=github-vault-sync`](obsidian://show-plugin?id=github-vault-sync) to go straight to it. Obsidian keeps it up to date.
 
-While Obsidian's review is pending, you can also download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into your vault's `.obsidian/plugins/github-vault-sync/` folder, then reload Obsidian.
+Or download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into `.obsidian/plugins/github-vault-sync/` in your vault.
 
 ## Set up
 
@@ -68,6 +68,8 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 - You need a GitHub account, a private repository and a fine-grained personal access token. The token stays in Obsidian's secret storage on each device and is sent only to GitHub.
 - The plugin connects only to GitHub. It calls `api.github.com` for the repository, and downloads a commit's files in one go from `codeload.github.com`.
 - It uploads your notes, and the Obsidian settings, themes and plugins that sync, to the repository you choose, and writes what it downloads into your vault. That includes the settings folder (`.obsidian`, or whatever you've named it) after you approve the change.
+- To find what changed, it lists the files in your vault and reads the ones it syncs. Nothing outside the vault is read.
+- It uses the clipboard only when you tap **Copy link** next to the token field, to copy GitHub's token page link. It never reads the clipboard.
 - It keeps its journal in `.git-vault-sync/` inside the vault. Apart from the token, everything it stores is inside the vault.
 - There's no telemetry, analytics or ads. It's free and open source.
 

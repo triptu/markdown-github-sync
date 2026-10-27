@@ -29,8 +29,10 @@ Gitless Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub 
 1. Bump the version in `package.json`, `plugin/package.json`, `plugin/package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version`, run at the root and in `plugin/`, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
 2. Add `docs/releases/<version>.md`.
 3. Run `npm run check`. It typechecks, lints, tests and builds, and fails if the version fields or `versions.json` disagree.
-4. Commit and push. Obsidian reads `manifest.json` from `main` to learn the latest version, so push before releasing.
-5. Run `gh release create <version> dist/github-vault-sync/main.js dist/github-vault-sync/manifest.json dist/github-vault-sync/styles.css --latest -F docs/releases/<version>.md`. The tag is the bare version with no `v`. Publish it as a full release, not a pre-release.
+4. Commit and push.
+5. Run `git tag <version> && git push origin <version>`. The tag is the bare version with no `v`.
+
+Pushing the tag runs `.github/workflows/release.yml`. It checks the tag matches `manifest.json`, runs `npm run check`, attests `main.js`, `manifest.json` and `styles.css` with GitHub artifact attestations, and publishes a full release, marked latest, with only those three files and the notes from `docs/releases/<version>.md`.
 
 Obsidian installs updates for every device once a release is published; a new release must have a higher version.
 
