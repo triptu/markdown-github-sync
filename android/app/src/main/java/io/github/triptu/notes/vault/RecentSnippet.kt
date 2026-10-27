@@ -48,16 +48,18 @@ object RecentSnippet {
 
     private fun snippetAround(lines: List<String>, index: Int): String {
         if (ListLine.containsMatchIn(lines[index])) return lines[index].trim()
+        fun prose(line: String) = line.isNotBlank() && !Heading.containsMatchIn(line) && !ListLine.containsMatchIn(line)
         var start = index
-        while (start > 0 && lines[start - 1].isNotBlank() && !Heading.containsMatchIn(lines[start - 1])) start--
+        while (start > 0 && prose(lines[start - 1])) start--
         var end = index
-        while (end < lines.size - 1 && lines[end + 1].isNotBlank() && !Heading.containsMatchIn(lines[end + 1])) end++
+        while (end < lines.size - 1 && prose(lines[end + 1])) end++
         return lines.subList(start, end + 1).filter(::isContent).joinToString(" ") { it.trim() }
     }
 
     /** Prefers prose: a list at the end (a "Done" section) says less than the paragraph above it. */
     private fun lastParagraph(lines: List<String>): String {
-        val prose = lines.indexOfLast { isContent(it) && !ListLine.containsMatchIn(it) }
+        // A line ending in ":" labels the list under it; it isn't worth showing alone.
+        val prose = lines.indexOfLast { isContent(it) && !ListLine.containsMatchIn(it) && !it.trimEnd().endsWith(":") }
         val last = if (prose >= 0) prose else lines.indexOfLast(::isContent)
         return if (last < 0) "" else snippetAround(lines, last)
     }

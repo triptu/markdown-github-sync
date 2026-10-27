@@ -118,6 +118,7 @@ class RecentSnippetTest {
     fun `new note prefers prose over a trailing list`() {
         assertEquals("went well", RecentSnippet.of(null, "## Notes\n\nwent well\n\n## Done\n- 1-1\n"))
         assertEquals("- [ ] eggs", RecentSnippet.of(null, "- [ ] milk\n- [ ] eggs\n"))
+        assertEquals("- [ ] send notes", RecentSnippet.of(null, "Follow-ups:\n- [ ] send notes\n"))
     }
 
     @Test
