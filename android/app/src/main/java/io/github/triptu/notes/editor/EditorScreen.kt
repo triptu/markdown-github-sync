@@ -5,7 +5,15 @@ import android.content.Intent
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -57,6 +65,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -83,6 +93,7 @@ import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     session: EditorSession,
@@ -101,6 +112,9 @@ fun EditorScreen(
         if (capture.voice) speech?.invoke()
     }
 
+    // Back closes the link popover before it closes the note.
+    BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -109,29 +123,67 @@ fun EditorScreen(
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
         TopBar(session, isPinned, onBack, onTogglePin)
-        Column(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = PagePadding),
-        ) {
-            Title(session, onDone = { bodyFocus.requestFocus() })
-            if (session.loaded) Body(session, bodyFocus, onOpenLink)
-            // Tapping the empty space under the text puts the cursor at the end.
-            Spacer(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 240.dp)
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                        session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
-                        bodyFocus.requestFocus()
-                    },
-            )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            // Keeps the line being typed above the floating mic.
+            val margin = with(LocalDensity.current) { (MicSize + MicMargin * 2).toPx() }
+            val keepClearOfMic = remember(margin) { KeepClearBringIntoView(margin) }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides keepClearOfMic) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = PagePadding),
+                ) {
+                    Title(session, onDone = { bodyFocus.requestFocus() })
+                    if (session.loaded) Body(session, bodyFocus, onOpenLink)
+                    // Tapping the empty space under the text puts the cursor at the end.
+                    Spacer(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 240.dp)
+                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                                session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
+                                bodyFocus.requestFocus()
+                            },
+                    )
+                }
+            }
+            if (speech != null) {
+                FloatingMic(speech, Modifier.align(Alignment.BottomEnd).padding(end = MicMargin, bottom = MicMargin))
+            }
         }
-        val query = EditOps.linkQuery(session.value)
-        if (query != null) LinkSuggestions(session, query)
-        Toolbar(session, speech)
+    }
+}
+
+private val MicSize = 56.dp
+private val MicMargin = 16.dp
+
+/** Scrolls just enough to show the cursor, keeping [bottomMargin] px clear at the bottom. */
+@OptIn(ExperimentalFoundationApi::class)
+private class KeepClearBringIntoView(private val bottomMargin: Float) : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
+        val visibleBottom = containerSize - bottomMargin
+        return when {
+            offset < 0f -> offset
+            offset + size > visibleBottom -> minOf(offset, offset + size - visibleBottom)
+            else -> 0f
+        }
+    }
+}
+
+/** The Home mic, floating: 56dp circle, solid ink. */
+@Composable
+private fun FloatingMic(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = NotesTheme.colors
+    Box(
+        modifier
+            .size(MicSize)
+            .clip(CircleShape)
+            .background(colors.solid)
+            .pressable(onClick, shape = CircleShape, bleed = 0.dp, label = "Speak", pressColor = colors.ink2),
+        contentAlignment = Alignment.Center,
+    ) {
+        PhIcon(R.drawable.ph_microphone, "Speak", 24.dp, colors.onSolid)
     }
 }
 
@@ -156,6 +208,7 @@ private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit
                 )
             }
         }
+        UndoButton(session)
         Box {
             IconButton48(R.drawable.ph_dots_three_vertical, "More", { menu = true })
             DropdownMenu(menu, { menu = false }, containerColor = colors.raised, shape = RoundedCornerShape(14.dp)) {
@@ -186,6 +239,35 @@ private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit
             },
             dismissButton = { TextButton({ confirmDelete = false }) { Text("Keep", color = colors.ink2) } },
         )
+    }
+}
+
+/** Undo, with redo on long-press. Its slot is always there so the bar never shifts. */
+@Composable
+private fun UndoButton(session: EditorSession) {
+    val colors = NotesTheme.colors
+    val visible = session.canUndo || session.canRedo
+    Box(
+        Modifier
+            .size(48.dp)
+            .then(
+                if (visible) {
+                    Modifier.pressable(
+                        onClick = session::undo,
+                        onLongClick = session::redo,
+                        shape = CircleShape,
+                        bleed = 0.dp,
+                        label = "Undo",
+                    )
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (visible) {
+            PhIcon(R.drawable.ph_arrow_u_up_left, "Undo, long-press to redo", 22.dp, if (session.canUndo) colors.ink2 else colors.muted)
+        }
     }
 }
 
@@ -301,6 +383,8 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
 
     fun revealed(task: TaskMark) = focused && current.selection.min <= task.markerEnd - 1 && current.selection.max >= task.markerStart
 
+    var fieldTop by remember { mutableStateOf(0) }
+    Box(Modifier.onGloballyPositioned { fieldTop = it.positionInWindow().y.toInt() }) {
     BasicTextField(
         value = session.value,
         onValueChange = { session.onValueChange(it) },
@@ -312,7 +396,10 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(focus)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (!it.isFocused) session.dismissLink()
+            }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -346,55 +433,9 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
                 }
             },
     )
-}
-
-@Composable
-private fun LinkSuggestions(session: EditorSession, query: LinkQuery) {
-    val colors = NotesTheme.colors
-    val suggestions = remember(query.query, session.path) { session.linkSuggestions(query) }
-    val showCreate = query.query.isNotBlank() && suggestions.none { it.name.equals(query.query.trim(), ignoreCase = true) }
-    if (suggestions.isEmpty() && !showCreate) return
-    Column(Modifier.fillMaxWidth().background(colors.raised).padding(vertical = 4.dp)) {
-        for (path in suggestions) {
-            SuggestionRow(path.displayName, path.folder.value.ifEmpty { null }) {
-                session.onValueChange(EditOps.completeLink(session.value, query, path.name), newUndoStep = true)
-            }
-        }
-        if (showCreate) {
-            SuggestionRow("Link to new note “${query.query.trim()}”", null) {
-                session.onValueChange(EditOps.completeLink(session.value, query, query.query.trim()), newUndoStep = true)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SuggestionRow(name: String, folder: String?, onClick: () -> Unit) {
-    val colors = NotesTheme.colors
-    Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp).pressable(onClick, pressColor = colors.sunk),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(name, style = NotesType.row, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (folder != null) {
-            Spacer(Modifier.width(10.dp))
-            Text(folder, style = NotesType.rowMeta, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-@Composable
-private fun Toolbar(session: EditorSession, speech: (() -> Unit)?) {
-    Row(
-        Modifier.fillMaxWidth().height(48.dp),
-        horizontalArrangement = Arrangement.SpaceAround,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton48(R.drawable.ph_check_square, "Checkbox", { session.onValueChange(EditOps.toggleTaskLine(session.value), newUndoStep = true) })
-        IconButton48(R.drawable.ph_brackets_square, "Link to a note", { session.onValueChange(EditOps.insertLink(session.value), newUndoStep = true) })
-        IconButton48(R.drawable.ph_text_h, "Heading", { session.onValueChange(EditOps.cycleHeading(session.value), newUndoStep = true) })
-        if (speech != null) IconButton48(R.drawable.ph_microphone, "Speak", speech)
-        IconButton48(R.drawable.ph_arrow_u_up_left, "Undo", session::undo, enabled = session.canUndo)
+    val query = session.linkQuery
+    val l = layout
+    if (query != null && l != null && focused) LinkPopover(session, query, l, fieldTop)
     }
 }
 

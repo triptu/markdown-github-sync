@@ -4,6 +4,9 @@ data class FolderContents(val folders: List<FolderPath>, val notes: List<NotePat
 
 data class SearchHit(val path: NotePath, val excerpt: String)
 
+/** A `[[` suggestion. [showFolder] when another note has the same title. */
+data class LinkSuggestion(val path: NotePath, val showFolder: Boolean)
+
 /** Read-only questions about a [VaultSnapshot]. Pure, so they run off the main thread and test easily. */
 object VaultQueries {
     private const val ExcerptLead = 24
@@ -46,16 +49,38 @@ object VaultQueries {
         return snapshot.notes.keys.filter { it.name.equals(name, ignoreCase = true) }.minByOrNull { it.value.length }
     }
 
-    /** Note names for `[[` autocomplete: names starting with the query first, then names containing it. */
-    fun linkSuggestions(snapshot: VaultSnapshot, query: String, limit: Int = 5): List<NotePath> {
-        val q = query.trim()
-        val all = snapshot.notes.values.asSequence()
-        val matching = if (q.isEmpty()) all else all.filter { it.path.name.contains(q, ignoreCase = true) }
-        return matching
-            .sortedWith(compareBy<IndexedNote> { !it.path.name.startsWith(q, ignoreCase = true) }.thenByDescending { it.modifiedAt })
+    /**
+     * Notes for `[[` autocomplete, matched on the title people see (no stamp): titles starting
+     * with the query, then titles with a word starting with it, then titles containing it.
+     * Ties go to the most recently edited. An empty query lists recent notes.
+     */
+    fun linkSuggestions(snapshot: VaultSnapshot, query: String, exclude: NotePath?, limit: Int = 4): List<LinkSuggestion> {
+        val q = query.trim().lowercase()
+        val ranked = snapshot.notes.values.asSequence()
+            .filter { it.path != exclude }
+            .mapNotNull { note -> matchRank(note.path.displayName.lowercase(), q)?.let { note to it } }
+            .sortedWith(compareBy<Pair<IndexedNote, Int>> { it.second }.thenByDescending { it.first.modifiedAt })
             .take(limit)
-            .map { it.path }
+            .map { it.first.path }
             .toList()
+        if (ranked.isEmpty()) return emptyList()
+        val wanted = ranked.mapTo(HashSet()) { it.displayName.lowercase() }
+        val counts = HashMap<String, Int>()
+        for (path in snapshot.notes.keys) {
+            val title = path.displayName.lowercase()
+            if (title in wanted) counts[title] = (counts[title] ?: 0) + 1
+        }
+        return ranked.map { LinkSuggestion(it, showFolder = (counts[it.displayName.lowercase()] ?: 0) > 1) }
+    }
+
+    private val WordStart = Regex("""[^\p{L}\p{N}]+""")
+
+    private fun matchRank(title: String, q: String): Int? = when {
+        q.isEmpty() -> 0
+        title.startsWith(q) -> 0
+        title.split(WordStart).any { it.startsWith(q) } -> 1
+        title.contains(q) -> 2
+        else -> null
     }
 
     private fun firstLine(text: String): String =

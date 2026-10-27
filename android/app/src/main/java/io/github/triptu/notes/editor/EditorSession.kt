@@ -8,6 +8,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.ZettelName
+import io.github.triptu.notes.vault.LinkSuggestion
 import io.github.triptu.notes.vault.NoteNames
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultChange
@@ -67,6 +68,12 @@ class EditorSession(
         private set
     var canUndo by mutableStateOf(false)
         private set
+    var canRedo by mutableStateOf(false)
+        private set
+
+    /** Where the `[[` of the link being typed starts, while the suggestion popover is open. */
+    var linkStart: Int? by mutableStateOf(null)
+        private set
     var parsed by mutableStateOf(MarkdownParser.parse(""))
         private set
     var deleted by mutableStateOf(false)
@@ -120,7 +127,8 @@ class EditorSession(
         parsed = MarkdownParser.parse(disk)
         savedText = disk
         undo.clear()
-        canUndo = false
+        linkStart = null
+        syncUndoState()
     }
 
     private fun load(path: NotePath) {
@@ -141,27 +149,53 @@ class EditorSession(
 
     fun onValueChange(next: TextFieldValue, newUndoStep: Boolean = false) {
         val textChanged = next.text != value.text
+        linkStart = EditOps.trackLink(value, next, linkStart)
         if (textChanged) {
             undo.record(value, force = newUndoStep)
-            canUndo = undo.canUndo
             parsed = MarkdownParser.parse(next.text)
         }
         value = next
-        if (textChanged) scheduleSave()
+        if (textChanged) {
+            syncUndoState()
+            scheduleSave()
+        }
     }
 
-    fun undo() {
-        val previous = undo.undo() ?: return
-        value = previous
-        parsed = MarkdownParser.parse(previous.text)
-        canUndo = undo.canUndo
+    fun undo() = restore(undo.undo(value))
+
+    fun redo() = restore(undo.redo(value))
+
+    private fun restore(to: TextFieldValue?) {
+        if (to == null) return
+        value = to
+        parsed = MarkdownParser.parse(to.text)
+        linkStart = null
+        syncUndoState()
         scheduleSave()
     }
 
-    fun toggleTask(task: TaskMark) = onValueChange(EditOps.toggleTask(value, task), newUndoStep = true)
+    private fun syncUndoState() {
+        canUndo = undo.canUndo
+        canRedo = undo.canRedo
+    }
 
-    fun linkSuggestions(query: LinkQuery): List<NotePath> =
-        VaultQueries.linkSuggestions(index.snapshot.value, query.query).filter { it != path }
+    /** Closes the link popover until another `[[` is typed. */
+    fun dismissLink() {
+        linkStart = null
+    }
+
+    val linkQuery: LinkQuery? get() = linkStart?.let { EditOps.linkQuery(value, it) }
+
+    fun linkSuggestions(query: LinkQuery): List<LinkSuggestion> =
+        VaultQueries.linkSuggestions(index.snapshot.value, query.query, exclude = path)
+
+    /** Finishes the link being typed as `[[name]]` and closes the popover. */
+    fun completeLink(query: LinkQuery, name: String) {
+        onValueChange(EditOps.completeLink(value, query, name), newUndoStep = true)
+        linkStart = null
+    }
+
+    fun toggleTask(task: TaskMark) = onValueChange(EditOps.toggleTask(value, task), newUndoStep = true)
 
     /** Switches where a capture goes, moving anything already saved. */
     fun switchDestination(to: CaptureDestination) {

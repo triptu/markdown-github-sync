@@ -6,42 +6,13 @@ import androidx.compose.ui.text.input.TextFieldValue
 /** The `[[query` being typed before the cursor, and where its `[[` starts. */
 data class LinkQuery(val start: Int, val query: String)
 
-/** Text edits behind the toolbar and taps. Pure functions of the editor value. */
+/** Text edits behind taps and link completion. Pure functions of the editor value. */
 object EditOps {
-    private val TaskPrefix = Regex("""^(\s*)[-*+] \[[ xX]\] ?""")
-    private val BulletPrefix = Regex("""^(\s*)([-*+]) """)
-    private val HeadingPrefix = Regex("""^(#{1,6}) """)
-
     fun toggleTask(value: TextFieldValue, task: TaskMark): TextFieldValue {
         val i = task.stateIndex
         if (i >= value.text.length) return value
         val next = if (task.checked) ' ' else 'x'
         return value.copy(text = value.text.replaceRange(i, i + 1, next.toString()))
-    }
-
-    /** Makes the cursor's line a task, or a task back into plain text. */
-    fun toggleTaskLine(value: TextFieldValue): TextFieldValue = editLine(value) { line ->
-        TaskPrefix.find(line)?.let { return@editLine it.groupValues[1] + line.substring(it.range.last + 1) }
-        BulletPrefix.find(line)?.let { return@editLine it.groupValues[1] + it.groupValues[2] + " [ ] " + line.substring(it.range.last + 1) }
-        val indent = line.takeWhile { it == ' ' || it == '\t' }
-        "$indent- [ ] ${line.substring(indent.length)}"
-    }
-
-    /** Cycles the cursor's line through `#`, `##`, `###` and plain text. */
-    fun cycleHeading(value: TextFieldValue): TextFieldValue = editLine(value) { line ->
-        val match = HeadingPrefix.find(line)
-        val level = match?.groupValues?.get(1)?.length ?: 0
-        val body = match?.let { line.substring(it.range.last + 1) } ?: line
-        if (level >= 3) body else "#".repeat(level + 1) + " " + body
-    }
-
-    /** Wraps the selection in `[[ ]]`, or opens an empty link at the cursor. */
-    fun insertLink(value: TextFieldValue): TextFieldValue {
-        val sel = value.selection
-        val chosen = value.text.substring(sel.min, sel.max)
-        val text = value.text.replaceRange(sel.min, sel.max, "[[$chosen]]")
-        val cursor = if (chosen.isEmpty()) sel.min + 2 else sel.min + chosen.length + 4
-        return TextFieldValue(text, TextRange(cursor))
     }
 
     fun insertText(value: TextFieldValue, insert: String): TextFieldValue {
@@ -52,19 +23,30 @@ object EditOps {
         return TextFieldValue(value.text.replaceRange(sel.min, sel.max, piece), TextRange(sel.min + piece.length))
     }
 
-    fun linkQuery(value: TextFieldValue): LinkQuery? {
-        if (!value.selection.collapsed) return null
-        val cursor = value.selection.start
-        val lineStart = value.text.lastIndexOf('\n', cursor - 1) + 1
-        val before = value.text.substring(lineStart, cursor)
-        val open = before.lastIndexOf("[[")
-        if (open < 0) return null
-        val query = before.substring(open + 2)
-        if (query.contains("]]") || query.contains('|') || query.length > 60) return null
-        return LinkQuery(lineStart + open, query)
+    /**
+     * Where the open link popover's `[[` is after an edit, or null when it should close.
+     * It opens only when `[[` was just typed before the cursor, and closes when the cursor leaves
+     * the `[[...` span, the `[[` is deleted, or `]]` or a line break is typed.
+     */
+    fun trackLink(old: TextFieldValue, new: TextFieldValue, openAt: Int?): Int? {
+        if (!new.selection.collapsed) return null
+        val caret = new.selection.start
+        val typed = new.text.length - old.text.length
+        val justOpened = typed > 0 && caret >= 2 && caret - typed >= 0 &&
+            new.text.startsWith("[[", caret - 2) &&
+            new.text.removeRange(caret - typed, caret) == old.text
+        if (justOpened) return caret - 2
+        val start = openAt ?: return null
+        if (caret < start + 2 || !new.text.startsWith("[[", start)) return null
+        val query = new.text.substring(start + 2, caret)
+        if (query.contains("]]") || query.contains("[[") || query.contains('\n')) return null
+        return start
     }
 
-    /** Replaces the `[[query` before the cursor with a finished link to [name]. */
+    fun linkQuery(value: TextFieldValue, start: Int): LinkQuery =
+        LinkQuery(start, value.text.substring(start + 2, value.selection.start.coerceAtLeast(start + 2)))
+
+    /** Replaces the `[[query` before the cursor with `[[name]]`, reusing a `]]` already after it. */
     fun completeLink(value: TextFieldValue, query: LinkQuery, name: String): TextFieldValue {
         val cursor = value.selection.start
         val closeAfter = if (value.text.startsWith("]]", cursor)) cursor + 2 else cursor
@@ -89,17 +71,5 @@ object EditOps {
             else -> new.length - suffix
         }.coerceIn(0, new.length)
         return TextRange(map(selection.start), map(selection.end))
-    }
-
-    private inline fun editLine(value: TextFieldValue, edit: (String) -> String): TextFieldValue {
-        val text = value.text
-        val cursor = value.selection.start.coerceIn(0, text.length)
-        val start = text.lastIndexOf('\n', cursor - 1) + 1
-        val end = text.indexOf('\n', cursor).let { if (it < 0) text.length else it }
-        val line = text.substring(start, end)
-        val edited = edit(line)
-        val delta = edited.length - line.length
-        val newCursor = (cursor + delta).coerceIn(start, start + edited.length)
-        return TextFieldValue(text.replaceRange(start, end, edited), TextRange(newCursor))
     }
 }
