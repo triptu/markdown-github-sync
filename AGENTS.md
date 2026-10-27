@@ -21,6 +21,8 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
   - `syncing/` connects the app to `android/sync`: `GitHubSync` owns the client, setup, the encrypted token and conflict settling (both versions kept inline between Git conflict markers); `SendEditsWorker` sends edits after the app leaves the screen. Sync copy lives in `syncing/SyncCopy.kt`. `adb logcat -s NotesSync` shows status changes; debug builds also log engine calls and request timings (never paths or note text).
   - Debug builds have "Load sample vault" in settings while sync isn't set up; setting up sync deletes it first. The sample notes are made up; never copy real vault content into the repo.
   - Icons are Phosphor SVGs imported with `android/tools/import-phosphor-icons.sh`.
+  - `voice/` is the speaking view. `LiveSpeech` runs Android's recognizer (on-device first); on Android 13+ `MicCapture` owns the mic and feeds it through a pipe as one segmented session, and keeps a WAV for the optional OpenAI refine (`refine/`). `Transcript` stitches results across sessions; drafts live in `files/voice-drafts`, outside the vault. Copy lives in `voice/VoiceCopy.kt`. `adb logcat -s NotesVoice` shows sessions in debug builds.
+  - To test speech without talking, put 16 kHz mono 16-bit PCM at the debug app's `cache/voice-test.pcm` (`run-as io.github.triptu.notes.debug`); the debug app plays it instead of the mic. Delete it afterwards. `am start ... --es theme light|dark` forces a theme in debug builds, for screenshots.
 
 ## Releasing
 
