@@ -48,18 +48,14 @@ fun AppRoot(vm: MainViewModel) {
 
     val pins by vm.pins.collectAsStateWithLifecycle()
     val capture by vm.capture.collectAsStateWithLifecycle()
-    val location by vm.library.location.collectAsStateWithLifecycle()
-    val contents by vm.library.contents.collectAsStateWithLifecycle()
+    val rows by vm.library.rows.collectAsStateWithLifecycle()
+    val scrollTo by vm.library.scrollTo.collectAsStateWithLifecycle()
     val query by vm.library.query.collectAsStateWithLifecycle()
     val results by vm.library.results.collectAsStateWithLifecycle()
     val recents by vm.recents.collectAsStateWithLifecycle()
 
-    // Back closes overlays first, then leaves a folder or side page for Home. On Home it exits.
-    BackHandler(enabled = vm.overlays.isEmpty() && pager.currentPage != Pages.Home) {
-        if (pager.currentPage == Pages.Library && vm.library.up()) return@BackHandler
-        go(Pages.Home)
-        if (location.fromPin) vm.library.reset()
-    }
+    // Back closes overlays first, then returns from a side page to Home. On Home it exits.
+    BackHandler(enabled = vm.overlays.isEmpty() && pager.currentPage != Pages.Home) { go(Pages.Home) }
     BackHandler(enabled = vm.overlays.isNotEmpty()) { vm.back() }
 
     Box(Modifier.fillMaxSize().background(colors.bg)) {
@@ -70,22 +66,15 @@ fun AppRoot(vm: MainViewModel) {
         ) { page ->
             when (page) {
                 Pages.Library -> LibraryScreen(
-                    location = location,
-                    contents = contents,
+                    rows = rows,
+                    scrollTo = scrollTo,
+                    onScrolled = vm.library::scrolled,
                     query = query,
                     results = results,
                     pins = pins,
                     onQuery = vm.library::setQuery,
-                    onUp = {
-                        if (location.fromPin) {
-                            go(Pages.Home)
-                            vm.library.reset()
-                        } else {
-                            vm.library.up()
-                        }
-                    },
                     onHome = { go(Pages.Home) },
-                    onOpenFolder = vm.library::open,
+                    onToggleFolder = vm.library::toggle,
                     onOpenNote = vm::openNote,
                     onTogglePin = vm::togglePin,
                     onSettings = vm::openSettings,

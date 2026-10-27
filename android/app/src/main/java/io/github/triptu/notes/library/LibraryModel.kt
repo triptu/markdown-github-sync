@@ -1,6 +1,5 @@
 package io.github.triptu.notes.library
 
-import io.github.triptu.notes.vault.FolderContents
 import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.SearchHit
 import io.github.triptu.notes.vault.VaultIndex
@@ -17,24 +16,19 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 
-/** Where the Library is, and what it shows there. */
-data class LibraryLocation(
-    val folder: FolderPath,
-    /** Opened from a pinned folder on Home, so back returns to Home instead of climbing folders. */
-    val fromPin: Boolean,
-)
-
+/** The Library: a tree of the vault with remembered open folders, and a flat search. */
 @OptIn(FlowPreview::class)
-class LibraryModel(index: VaultIndex, scope: CoroutineScope) {
-    private val _location = MutableStateFlow(LibraryLocation(FolderPath.Root, fromPin = false))
-    val location: StateFlow<LibraryLocation> = _location.asStateFlow()
-
+class LibraryModel(index: VaultIndex, private val expanded: ExpandedFolders, scope: CoroutineScope) {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    val contents: StateFlow<FolderContents> = combine(index.snapshot, _location) { snapshot, location ->
-        VaultQueries.contents(snapshot, location.folder)
-    }.flowOn(Dispatchers.Default).stateIn(scope, SharingStarted.Eagerly, FolderContents(emptyList(), emptyList()))
+    /** A folder the screen should scroll to the top, once. */
+    private val _scrollTo = MutableStateFlow<FolderPath?>(null)
+    val scrollTo: StateFlow<FolderPath?> = _scrollTo.asStateFlow()
+
+    val rows: StateFlow<List<TreeRow>> = combine(index.snapshot, expanded.expanded, expanded.loaded) { snapshot, open, loaded ->
+        if (loaded) LibraryTree.rows(snapshot, open) else emptyList()
+    }.flowOn(Dispatchers.Default).stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val results: StateFlow<List<SearchHit>> = combine(index.snapshot, _query.debounce(SearchDebounceMs)) { snapshot, q ->
         VaultQueries.search(snapshot, q)
@@ -44,25 +38,17 @@ class LibraryModel(index: VaultIndex, scope: CoroutineScope) {
         _query.value = q
     }
 
-    fun open(folder: FolderPath) {
-        _location.value = LibraryLocation(folder, fromPin = false)
-    }
+    fun toggle(folder: FolderPath) = expanded.toggle(folder)
 
-    fun openFromPin(folder: FolderPath) {
+    /** Opens [folder] and the folders above it, and asks the screen to bring it to the top. */
+    fun reveal(folder: FolderPath) {
         _query.value = ""
-        _location.value = LibraryLocation(folder, fromPin = true)
+        expanded.open(LibraryTree.withAncestors(folder))
+        _scrollTo.value = folder
     }
 
-    /** Goes up one folder. Returns false when there's nowhere further up inside the Library. */
-    fun up(): Boolean {
-        val here = _location.value
-        if (here.fromPin || here.folder.isRoot) return false
-        _location.value = here.copy(folder = here.folder.parent ?: FolderPath.Root)
-        return true
-    }
-
-    fun reset() {
-        _location.value = LibraryLocation(FolderPath.Root, fromPin = false)
+    fun scrolled() {
+        _scrollTo.value = null
     }
 
     private companion object {

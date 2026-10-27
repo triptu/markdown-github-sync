@@ -37,7 +37,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val overlays = mutableStateListOf<Overlay>()
 
-    val library = LibraryModel(graph.index, viewModelScope)
+    val library = LibraryModel(graph.index, graph.expandedFolders, viewModelScope)
 
     val pins: StateFlow<List<Pin>> = graph.settings.pins
     val capture = graph.settings.capture
@@ -80,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isPinned(pin: Pin) = pin in pins.value
 
-    fun openPinnedFolder(folder: FolderPath) = library.openFromPin(folder)
+    fun openPinnedFolder(folder: FolderPath) = library.reveal(folder)
 
     fun loadSampleVault() {
         viewModelScope.launch { SampleVault.load(getApplication(), graph) }

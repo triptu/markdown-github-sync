@@ -2,6 +2,10 @@ package io.github.triptu.notes
 
 import android.content.Context
 import io.github.triptu.notes.capture.CaptureService
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.preferencesDataStoreFile
+import io.github.triptu.notes.library.ExpandedFolders
+import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.PinKeeper
 import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.vault.FileVaultStore
@@ -26,6 +30,10 @@ class AppGraph(context: Context) {
     val index = VaultIndex(store, File(context.cacheDir, "vault-index.bin"), scope)
     val settings = SettingsStore(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val capture = CaptureService(store) { settings.capture.value }
+    val expandedFolders = ExpandedFolders(
+        PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },
+        scope,
+    )
 
     fun start() {
         index.start()
@@ -37,7 +45,10 @@ class AppGraph(context: Context) {
         }
     }
 
-    /** Re-points or drops pins whenever a fresh snapshot shows their note or folder gone. */
+    /**
+     * Re-points or drops pins, and the Library's open folders, whenever a fresh snapshot shows
+     * their note or folder gone.
+     */
     private suspend fun keepPinsAlive() {
         var previous: VaultSnapshot = VaultSnapshot.Empty
         index.snapshot.collect { current ->
@@ -45,6 +56,10 @@ class AppGraph(context: Context) {
                 val pins = settings.pins.value
                 val kept = PinKeeper.reconcile(pins, previous, current)
                 if (kept != pins) settings.setPins(kept)
+                val open = expandedFolders.expanded.value
+                val stillOpen = PinKeeper.reconcile(open.map(Pin::Folder), previous, current)
+                    .filterIsInstance<Pin.Folder>().mapTo(HashSet()) { it.path }
+                if (stillOpen != open) expandedFolders.set(stillOpen)
             }
             previous = current
         }
