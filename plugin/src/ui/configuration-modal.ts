@@ -20,7 +20,7 @@ export class ConfigurationModal extends Modal {
     const el = this.contentEl;
     el.empty(); el.addClass("git-sync-panel");
     this.setTitle("Obsidian settings");
-    if (!session) { el.createEl("p", { text: "Connect to GitHub in GitHub Vault Sync settings first." }); return; }
+    if (!session) { el.createEl("p", { text: "Connect to GitHub in Gitless Vault Sync settings first." }); return; }
     const loading = el.createEl("p", { text: "Checking settings on this device…", cls: "git-sync-muted" });
     try {
       const listing = await session.listConfiguration();

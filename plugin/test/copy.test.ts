@@ -101,7 +101,7 @@ test("token link prefills repository permissions and owner without adding broade
   assert.equal(url.searchParams.get("target_name"), "triptu");
   assert.equal(url.searchParams.get("contents"), "write");
   assert.equal(url.searchParams.get("metadata"), "read");
-  assert.equal(url.searchParams.get("name"), "Obsidian GitHub Vault Sync");
+  assert.equal(url.searchParams.get("name"), "Obsidian Gitless Vault Sync");
   assert.deepEqual([...url.searchParams.keys()].sort(), ["contents", "description", "metadata", "name", "target_name"]);
   assert.equal(new URL(tokenCreationUrl("")).searchParams.has("target_name"), false);
 });

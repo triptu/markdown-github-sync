@@ -174,7 +174,7 @@ export default class GitVaultSync extends Plugin {
   }
   /** Opens this plugin's settings page; uses Obsidian's unofficial settings API when present. */
   openSettings(): void {
-    if (!openSettingsTab(this.app, this.manifest.id)) new Notice("Open Settings → GitHub Vault Sync.");
+    if (!openSettingsTab(this.app, this.manifest.id)) new Notice("Open Settings → Gitless Vault Sync.");
   }
   /** Background failures: offline is retried quietly; anything else is shown until it's fixed. */
   fail(error: unknown): void {
@@ -500,13 +500,13 @@ export default class GitVaultSync extends Plugin {
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
         // Internal safety copies are pruned quietly; a failed cleanup retries next time.
         try { await this.compactRecoveryOwned(); }
-        catch (error) { console.warn("GitHub Vault Sync: cleanup skipped", error); }
+        catch (error) { console.warn("Gitless Vault Sync: cleanup skipped", error); }
       }
     });
   }
   async syncNow(): Promise<void> {
     if (!this.session) {
-      new Notice("Finish setting up GitHub Vault Sync in settings.");
+      new Notice("Finish setting up Gitless Vault Sync in settings.");
       return;
     }
     await this.scheduler?.now();

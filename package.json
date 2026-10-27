@@ -2,7 +2,7 @@
   "name": "markdown-github-sync",
   "private": true,
   "license": "MIT",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "scripts": {
     "setup": "npm ci --prefix plugin",
     "build": "npm run build --prefix plugin",

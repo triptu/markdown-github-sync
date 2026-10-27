@@ -1,6 +1,6 @@
-# GitHub Vault Sync
+# Gitless Vault Sync
 
-An Obsidian plugin that syncs a vault through ordinary commits in a private GitHub repository, on desktop and mobile. There's no server and no local Git checkout. The plugin talks to the GitHub API directly.
+An Obsidian plugin that syncs a vault through ordinary commits in a private GitHub repository, on desktop and mobile. There's no server and no local Git checkout. The plugin talks to the GitHub API directly. It was called GitHub Vault Sync before 0.4.1.
 
 ## What it does and its limits
 
@@ -19,7 +19,7 @@ Limits:
 
 ## Install
 
-Once it's listed in Obsidian's community plugins, go to Settings → Community plugins → Browse, search for **GitHub Vault Sync**, then install and enable it. Obsidian keeps it up to date.
+Once it's listed in Obsidian's community plugins, go to Settings → Community plugins → Browse, search for **Gitless Vault Sync**, then install and enable it. Obsidian keeps it up to date.
 
 Until then, install it one of two ways:
 
@@ -31,13 +31,13 @@ Until then, install it one of two ways:
     -p main.js -p manifest.json -p styles.css --clobber
   ```
 
-Devices set up earlier may also have a companion plugin, GitHub Vault Sync Updater. Once GitHub Vault Sync is listed, Obsidian updates it instead, and you can disable and delete the updater.
+Devices set up earlier may also have a companion plugin, Gitless Vault Sync Updater (GitHub Vault Sync Updater on older installs). Once Gitless Vault Sync is listed, Obsidian updates it instead, and you can disable and delete the updater.
 
 ## Set up
 
 1. Create a private repository on GitHub, for example `your-name/notes`. It can't be empty, so tick **Add a README file** when you create it.
-2. In Obsidian, go to Settings → Community plugins. Turn off any other sync plugin (Obsidian Git, Self-hosted LiveSync, Remotely Save). Then enable **GitHub Vault Sync**.
-3. In GitHub Vault Sync's settings, enter the repository as `your-name/notes` and the branch (usually `main`).
+2. In Obsidian, go to Settings → Community plugins. Turn off any other sync plugin (Obsidian Git, Self-hosted LiveSync, Remotely Save). Then enable **Gitless Vault Sync**.
+3. In Gitless Vault Sync's settings, enter the repository as `your-name/notes` and the branch (usually `main`).
 4. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new). The **Create token** link in settings opens this form with the permissions filled in. Give it access to only your notes repository, with:
    - Contents: read and write
    - Metadata: read

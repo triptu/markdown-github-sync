@@ -19,7 +19,7 @@ interface PluginManager {
   loadManifests?(): Promise<void>;
 }
 
-/** Keeps GitHub Vault Sync current from the public `updates` branch of its repository. */
+/** Keeps Gitless Vault Sync current from the public `updates` branch of its repository. */
 export default class SyncUpdater extends Plugin {
   private data: UpdaterData = { rejected: [] };
   private checking = false;
@@ -30,7 +30,7 @@ export default class SyncUpdater extends Plugin {
     const saved: unknown = await this.loadData();
     const rejected: unknown = saved && Reflect.get(saved, "rejected");
     if (Array.isArray(rejected)) this.data.rejected = rejected.filter((item): item is string => typeof item === "string");
-    this.addCommand({ id: "check", name: "Check for GitHub Vault Sync update", callback: () => { void this.check(true); } });
+    this.addCommand({ id: "check", name: "Check for Gitless Vault Sync update", callback: () => { void this.check(true); } });
     this.app.workspace.onLayoutReady(() => {
       // Let startup and the first sync settle before looking for updates.
       this.registerInterval(window.setTimeout(() => { void this.check(false); }, 20_000));
@@ -64,8 +64,8 @@ export default class SyncUpdater extends Plugin {
     } catch (error) {
       this.failedAt = Date.now();
       // Background checks stay quiet on failure (often just offline); a manual check says why.
-      if (manual) new Notice(`Couldn't check for a GitHub Vault Sync update. ${error instanceof Error ? error.message : ""}`, 8000);
-      else console.warn("GitHub Vault Sync updater:", error);
+      if (manual) new Notice(`Couldn't check for a Gitless Vault Sync update. ${error instanceof Error ? error.message : ""}`, 8000);
+      else console.warn("Gitless Vault Sync updater:", error);
     } finally {
       this.checking = false;
     }
@@ -74,21 +74,21 @@ export default class SyncUpdater extends Plugin {
   private async report(result: UpdateResult, manual: boolean): Promise<void> {
     switch (result.kind) {
       case "updated":
-        new Notice(`GitHub Vault Sync updated to ${result.to}.`, 4000);
+        new Notice(`Gitless Vault Sync updated to ${result.to}.`, 4000);
         return;
       case "rolled-back":
         this.data.rejected = [...new Set([...this.data.rejected, result.version])];
         await this.saveData(this.data);
-        new Notice(`GitHub Vault Sync ${result.version} didn't load on this device, so the previous version was restored.`, 0);
+        new Notice(`Gitless Vault Sync ${result.version} didn't load on this device, so the previous version was restored.`, 0);
         return;
       case "skipped":
-        if (manual) new Notice(`GitHub Vault Sync ${result.version} is available but wasn't installed. ${result.reason}`, 8000);
+        if (manual) new Notice(`Gitless Vault Sync ${result.version} is available but wasn't installed. ${result.reason}`, 8000);
         return;
       case "busy":
         if (manual) new Notice("A sync is running. The update will be tried again later.", 6000);
         return;
       case "up-to-date":
-        if (manual) new Notice(`GitHub Vault Sync is up to date (${result.version}).`, 4000);
+        if (manual) new Notice(`Gitless Vault Sync is up to date (${result.version}).`, 4000);
     }
   }
 

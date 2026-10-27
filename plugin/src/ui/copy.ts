@@ -9,7 +9,7 @@ export function failure(error: unknown): string {
 /** GitHub's fine-grained token form, prefilled with this plugin's name and the permissions it needs. */
 export function tokenCreationUrl(owner: string): string {
   const url = new URL("https://github.com/settings/personal-access-tokens/new");
-  url.searchParams.set("name", "Obsidian GitHub Vault Sync");
+  url.searchParams.set("name", "Obsidian Gitless Vault Sync");
   url.searchParams.set("description", "Sync my Obsidian vault with GitHub");
   url.searchParams.set("contents", "write");
   url.searchParams.set("metadata", "read");
