@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
@@ -112,11 +111,13 @@ import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     session: EditorSession,
     isPinned: Boolean,
+    /** The keyboard is up for this note: the bar leaves and the text has the screen. */
+    typing: Boolean,
     onBack: () -> Unit,
     onTogglePin: () -> Unit,
     onOpenLink: (String) -> Unit,
@@ -145,7 +146,6 @@ fun EditorScreen(
     // Back closes the link suggestions before it closes the note.
     BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
 
-    val typing = WindowInsets.isImeVisible
     val linkQuery = session.linkQuery.takeIf { typing }
     val linkChoices = remember(linkQuery?.query, session.path) { linkQuery?.let(session::linkChoices).orEmpty() }
     val linking = linkChoices.isNotEmpty()
