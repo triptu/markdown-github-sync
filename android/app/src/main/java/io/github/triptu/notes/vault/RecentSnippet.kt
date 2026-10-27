@@ -19,7 +19,10 @@ object RecentSnippet {
         if (lines.isEmpty()) return ""
         val changed = if (old == null) null else lastChangedLine(bodyLines(old), lines)
         val snippet = changed?.let { snippetAround(lines, it) }
-        return (snippet?.takeIf { it.isNotBlank() } ?: lastParagraph(lines)).take(MaxLength)
+        val chosen = snippet?.takeIf { it.isNotBlank() } ?: lastParagraph(lines)
+        // A note of only links still gets a line, rather than vanishing from Recents.
+        val fallback = { lines.lastOrNull { line -> line.any { it.isLetterOrDigit() } && !Heading.containsMatchIn(line) }?.trim().orEmpty() }
+        return chosen.ifBlank(fallback).take(MaxLength)
     }
 
     private fun bodyLines(text: String): List<String> {
@@ -44,7 +47,8 @@ object RecentSnippet {
     }
 
     private fun isContent(line: String) =
-        line.isNotBlank() && !Heading.containsMatchIn(line) && !TimeLine.matches(line) && line.trim() != "- [ ]"
+        line.any { it.isLetterOrDigit() } && !Heading.containsMatchIn(line) && !TimeLine.matches(line) && line.trim() != "- [ ]" &&
+            !SnippetText.isOnlyLinks(line)
 
     private fun snippetAround(lines: List<String>, index: Int): String {
         if (ListLine.containsMatchIn(lines[index])) return lines[index].trim()

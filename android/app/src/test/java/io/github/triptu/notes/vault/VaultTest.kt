@@ -122,6 +122,16 @@ class RecentSnippetTest {
     }
 
     @Test
+    fun `link-only lines are skipped and links read as titles`() {
+        val note = "Rent decides the days.\n\nLinks: [[Zettelkasten/2026030820 Rent is a vote for a life]], [[Walden|the book]]\n"
+        assertEquals("Rent decides the days.", RecentSnippet.of(null, note))
+        assertEquals(
+            "see Rent is a vote for a life and the book, soon",
+            SnippetText.plain("- see [[2026030820 Rent is a vote for a life]] and **[[Walden|the book]]**,\n  soon"),
+        )
+    }
+
+    @Test
     fun `edit in the middle shows that paragraph, not the last`() {
         val old = "one\n\ntwo\n\nthree"
         val new = "one\n\ntwo, now longer\nand wrapped\n\nthree"

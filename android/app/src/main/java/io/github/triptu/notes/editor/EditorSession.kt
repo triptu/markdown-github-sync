@@ -31,7 +31,8 @@ import java.time.LocalDateTime
 
 /** What the editor was opened for. */
 sealed interface EditorTarget {
-    data class Open(val path: NotePath) : EditorTarget
+    /** [reveal] is a bit of the note to scroll to, such as the snippet a Recents card showed. */
+    data class Open(val path: NotePath, val reveal: String? = null) : EditorTarget
     data class Capture(val destination: CaptureDestination, val voice: Boolean) : EditorTarget
 }
 
@@ -78,6 +79,11 @@ class EditorSession(
         private set
     var deleted by mutableStateOf(false)
         private set
+
+    /** Where to scroll once the note is shown, from [EditorTarget.Open.reveal]. Cleared once used. */
+    var revealAt: Int? by mutableStateOf(null)
+        private set
+    private var revealPending = (target as? EditorTarget.Open)?.reveal != null
 
     val isCapture: Boolean get() = target is EditorTarget.Capture
 
@@ -141,10 +147,28 @@ class EditorSession(
     }
 
     private fun setLoaded(text: String) {
+        if (revealPending) revealAt = findReveal(text)
         savedText = text
         value = TextFieldValue(text, TextRange(0))
         parsed = MarkdownParser.parse(text)
         loaded = true
+    }
+
+    fun revealDone() {
+        revealPending = false
+        revealAt = null
+    }
+
+    /** Finds the start of the reveal snippet. Snippets join a paragraph's lines, so try short keys too. */
+    private fun findReveal(text: String): Int? {
+        val reveal = (target as? EditorTarget.Open)?.reveal?.trim() ?: return null
+        for (length in intArrayOf(40, 20, 10)) {
+            val key = reveal.take(length)
+            if (key.length < 3) break
+            val at = text.indexOf(key)
+            if (at >= 0) return at
+        }
+        return null
     }
 
     fun onValueChange(next: TextFieldValue, newUndoStep: Boolean = false) {

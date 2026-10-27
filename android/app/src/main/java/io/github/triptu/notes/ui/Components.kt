@@ -78,7 +78,7 @@ fun Modifier.pressable(
         .padding(horizontal = bleed)
 }
 
-/** Small tappable labels naming the neighbouring pages ("‹ Library", "Lately ›"). */
+/** Small tappable labels naming the neighbouring pages ("‹ Library", "Recents ›"). */
 @Composable
 fun HintsRow(left: String?, right: String?, onLeft: () -> Unit, onRight: () -> Unit, modifier: Modifier = Modifier) {
     Row(

@@ -22,7 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.triptu.notes.editor.EditorScreen
 import io.github.triptu.notes.home.HomeScreen
-import io.github.triptu.notes.lately.LatelyScreen
+import io.github.triptu.notes.recents.RecentsScreen
 import io.github.triptu.notes.library.LibraryScreen
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SettingsScreen
@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 private object Pages {
     const val Library = 0
     const val Home = 1
-    const val Lately = 2
+    const val Recents = 2
     const val Count = 3
 }
 
@@ -52,7 +52,7 @@ fun AppRoot(vm: MainViewModel) {
     val contents by vm.library.contents.collectAsStateWithLifecycle()
     val query by vm.library.query.collectAsStateWithLifecycle()
     val results by vm.library.results.collectAsStateWithLifecycle()
-    val lately by vm.lately.collectAsStateWithLifecycle()
+    val recents by vm.recents.collectAsStateWithLifecycle()
 
     // Back closes overlays first, then leaves a folder or side page for Home. On Home it exits.
     BackHandler(enabled = vm.overlays.isEmpty() && pager.currentPage != Pages.Home) {
@@ -94,7 +94,7 @@ fun AppRoot(vm: MainViewModel) {
                     pins = pins,
                     weeklyFolder = FolderPath(capture.weeklyFolder.trim('/')),
                     onLibrary = { go(Pages.Library) },
-                    onLately = { go(Pages.Lately) },
+                    onRecents = { go(Pages.Recents) },
                     onPin = { pin ->
                         when (pin) {
                             is Pin.Note -> vm.openNote(pin.path)
@@ -109,7 +109,7 @@ fun AppRoot(vm: MainViewModel) {
                     onCompose = { vm.capture() },
                     onVoice = { vm.capture(voice = true) },
                 )
-                else -> LatelyScreen(lately, onHome = { go(Pages.Home) }, onOpen = vm::openNote)
+                else -> RecentsScreen(recents, onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
             }
         }
 

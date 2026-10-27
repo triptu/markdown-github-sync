@@ -49,14 +49,14 @@ fun HomeScreen(
     pins: List<Pin>,
     weeklyFolder: FolderPath,
     onLibrary: () -> Unit,
-    onLately: () -> Unit,
+    onRecents: () -> Unit,
     onPin: (Pin) -> Unit,
     onUnpin: (Pin) -> Unit,
     onCompose: () -> Unit,
     onVoice: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
-        HintsRow(left = "Library", right = "Lately", onLeft = onLibrary, onRight = onLately)
+        HintsRow(left = "Library", right = "Recents", onLeft = onLibrary, onRight = onRecents)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val compact = pins.size > CompactPinCount
             Column(

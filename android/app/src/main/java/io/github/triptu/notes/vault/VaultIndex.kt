@@ -19,7 +19,7 @@ data class IndexedNote(
     val path: NotePath,
     val modifiedAt: Long,
     val size: Long,
-    /** The most recently changed paragraph, for the Lately feed. */
+    /** The most recently changed paragraph, for Recents. */
     val snippet: String,
     val text: String,
 )
@@ -40,7 +40,7 @@ class VaultSnapshot(
 }
 
 /**
- * In-memory index of the vault, used by Library, search and Lately.
+ * In-memory index of the vault, used by Library, search and Recents.
  *
  * Starts from a cache file so the first frame has data, then rescans: listing is cheap (stat only)
  * and only files whose size or modified time changed are read again.

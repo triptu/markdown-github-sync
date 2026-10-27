@@ -7,8 +7,8 @@ import androidx.lifecycle.viewModelScope
 import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.editor.EditorSession
 import io.github.triptu.notes.editor.EditorTarget
-import io.github.triptu.notes.lately.LatelyFeed
-import io.github.triptu.notes.lately.LatelyFeedBuilder
+import io.github.triptu.notes.recents.RecentsFeed
+import io.github.triptu.notes.recents.RecentsFeedBuilder
 import io.github.triptu.notes.library.LibraryModel
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SampleVault
@@ -42,14 +42,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pins: StateFlow<List<Pin>> = graph.settings.pins
     val capture = graph.settings.capture
 
-    val lately: StateFlow<LatelyFeed> = combine(graph.index.snapshot, graph.settings.capture) { snapshot, settings ->
+    val recents: StateFlow<RecentsFeed> = combine(graph.index.snapshot, graph.settings.capture) { snapshot, settings ->
         val templates = settings.weeklyTemplate.substringBeforeLast('/', "").let(::FolderPath)
-        LatelyFeedBuilder.build(snapshot, LocalDateTime.now(), ZoneId.systemDefault(), templates.takeUnless { it.isRoot })
-    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, LatelyFeed.Empty)
+        RecentsFeedBuilder.build(snapshot, LocalDateTime.now(), ZoneId.systemDefault(), templates.takeUnless { it.isRoot })
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, RecentsFeed.Empty)
 
     val sampleVaultAvailable: Boolean = SampleVault.Available
 
-    fun openNote(path: NotePath) = push(EditorTarget.Open(path))
+    fun openNote(path: NotePath, reveal: String? = null) = push(EditorTarget.Open(path, reveal))
 
     fun capture(destination: CaptureDestination = capture.value.defaultDestination, voice: Boolean = false) =
         push(EditorTarget.Capture(destination, voice))

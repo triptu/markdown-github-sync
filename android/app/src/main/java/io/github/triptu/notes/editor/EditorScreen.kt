@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -112,6 +114,8 @@ fun EditorScreen(
         if (capture.voice) speech?.invoke()
     }
 
+    val scroll = rememberScrollState()
+
     // Back closes the link popover before it closes the note.
     BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
 
@@ -131,11 +135,11 @@ fun EditorScreen(
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(scroll)
                         .padding(horizontal = PagePadding),
                 ) {
                     Title(session, onDone = { bodyFocus.requestFocus() })
-                    if (session.loaded) Body(session, bodyFocus, onOpenLink)
+                    if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll)
                     // Tapping the empty space under the text puts the cursor at the end.
                     Spacer(
                         Modifier
@@ -352,7 +356,7 @@ private fun Title(session: EditorSession, onDone: () -> Unit) {
 }
 
 @Composable
-private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (String) -> Unit) {
+private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (String) -> Unit, scroll: ScrollState) {
     val colors = NotesTheme.colors
     val density = LocalDensity.current
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -384,7 +388,23 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     fun revealed(task: TaskMark) = focused && current.selection.min <= task.markerEnd - 1 && current.selection.max >= task.markerStart
 
     var fieldTop by remember { mutableStateOf(0) }
-    Box(Modifier.onGloballyPositioned { fieldTop = it.positionInWindow().y.toInt() }) {
+    var fieldTopInContent by remember { mutableStateOf(0) }
+    // Opened from a Recents card: scroll so that card's text sits near the top.
+    val revealAt = session.revealAt
+    val revealLayout = layout
+    val revealMargin = with(density) { 96.dp.roundToPx() }
+    LaunchedEffect(revealAt, revealLayout != null) {
+        if (revealAt == null || revealLayout == null) return@LaunchedEffect
+        val line = revealLayout.getLineForOffset(revealAt.coerceAtMost(revealLayout.layoutInput.text.length))
+        scroll.scrollTo((fieldTopInContent + revealLayout.getLineTop(line).toInt() - revealMargin).coerceAtLeast(0))
+        session.revealDone()
+    }
+    Box(
+        Modifier.onGloballyPositioned {
+            fieldTop = it.positionInWindow().y.toInt()
+            fieldTopInContent = it.positionInParent().y.toInt()
+        },
+    ) {
     BasicTextField(
         value = session.value,
         onValueChange = { session.onValueChange(it) },
