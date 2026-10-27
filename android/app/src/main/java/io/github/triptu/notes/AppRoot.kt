@@ -98,7 +98,7 @@ fun AppRoot(vm: MainViewModel) {
                     onCompose = { vm.capture() },
                     onVoice = { vm.capture(voice = true) },
                 )
-                else -> RecentsScreen(recents, onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
+                else -> RecentsScreen(recents, FolderPath(capture.weeklyFolder.trim('/')), onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
             }
         }
 

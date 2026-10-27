@@ -22,6 +22,8 @@ data class RecentCard(
     val task: Boolean?,
     /** The raw snippet, so the editor can scroll to it. */
     val source: String,
+    /** The "A year ago" note rather than a recent change. */
+    val resurfaced: Boolean = false,
 )
 
 data class RecentSection(val label: String, val cards: List<RecentCard>)
@@ -42,7 +44,8 @@ object RecentsFeedBuilder {
     private const val MaxCards = 40
     private const val WindowDays = 60L
     private const val YearAgoWindowDays = 3L
-    private val TimeFormat = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
+    private val ShortDay = DateTimeFormatter.ofPattern("EEE", Locale.ENGLISH)
+    private val ShortDate = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
     private val DayFormat = DateTimeFormatter.ofPattern("EEEE", Locale.ENGLISH)
     private val DateFormat = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
     private val DateWithYear = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH)
@@ -62,13 +65,25 @@ object RecentsFeedBuilder {
             .take(MaxCards)
         val sections = recent
             .groupBy { (_, at) -> sectionLabel(at.toLocalDate(), today) }
-            .map { (label, items) -> RecentSection(label, items.map { (note, at) -> card(note, TimeFormat.format(at).lowercase(Locale.ENGLISH)) }) }
+            .map { (label, items) -> RecentSection(label, items.map { (note, at) -> card(note, relativeTime(at, now)) }) }
             .toMutableList()
         yearAgo(notes, today, zone)?.let { old ->
             val afterToday = if (sections.firstOrNull()?.label == "Today") 1 else 0
             sections.add(afterToday, RecentSection("", listOf(old)))
         }
         return RecentsFeed(sections)
+    }
+
+    /** "now", "24m", "2h" today; "Mon" within the week; "12 Oct" before that. */
+    fun relativeTime(at: LocalDateTime, now: LocalDateTime): String {
+        val minutes = ChronoUnit.MINUTES.between(at, now).coerceAtLeast(0)
+        return when {
+            at.toLocalDate() == now.toLocalDate() && minutes < 1 -> "now"
+            at.toLocalDate() == now.toLocalDate() && minutes < 60 -> "${minutes}m"
+            at.toLocalDate() == now.toLocalDate() -> "${minutes / 60}h"
+            ChronoUnit.DAYS.between(at.toLocalDate(), now.toLocalDate()) < 7 -> ShortDay.format(at)
+            else -> ShortDate.format(at)
+        }
     }
 
     private fun sectionLabel(day: LocalDate, today: LocalDate): String {
@@ -95,7 +110,7 @@ object RecentsFeedBuilder {
         if (candidates.isEmpty()) return null
         val pick = candidates[Math.floorMod(today.toEpochDay(), candidates.size.toLong()).toInt()]
         val folder = pick.path.folder.value.substringBefore('/').ifEmpty { "your notes" }.replaceFirstChar { it.uppercase() }
-        return card(pick, "A year ago · $folder")
+        return card(pick, "A year ago · $folder").copy(resurfaced = true)
     }
 
     /** The date a note is about: from its name when it has one, else when it was last changed. */
