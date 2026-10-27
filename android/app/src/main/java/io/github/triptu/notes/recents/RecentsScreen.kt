@@ -61,13 +61,11 @@ fun RecentsScreen(feed: RecentsFeed, weeklyFolder: FolderPath, onHome: () -> Uni
                 }
             }
             for ((i, section) in feed.sections.withIndex()) {
-                if (section.label.isNotEmpty()) {
-                    item(key = "label:$i:${section.label}") {
-                        Text(
-                            section.label, style = NotesType.day, color = colors.muted,
-                            modifier = Modifier.padding(start = PagePadding, end = PagePadding, top = 20.dp, bottom = 4.dp),
-                        )
-                    }
+                item(key = "label:$i:${section.label}") {
+                    Text(
+                        section.label, style = NotesType.day, color = colors.muted,
+                        modifier = Modifier.padding(start = PagePadding, end = PagePadding, top = 20.dp, bottom = 4.dp),
+                    )
                 }
                 items(section.cards, key = { "row:$i:" + it.path.value }) { card -> RecentRow(card, weeklyFolder, onOpen) }
             }
@@ -79,7 +77,7 @@ fun RecentsScreen(feed: RecentsFeed, weeklyFolder: FolderPath, onHome: () -> Uni
 @Composable
 private fun RecentRow(card: RecentCard, weeklyFolder: FolderPath, onOpen: (RecentCard) -> Unit) {
     val colors = NotesTheme.colors
-    val icon = if (card.resurfaced) R.drawable.ph_clock_counter_clockwise else PinIcons.of(Pin.Note(card.path), weeklyFolder)
+    val icon = PinIcons.of(Pin.Note(card.path), weeklyFolder)
     Row(
         Modifier
             .fillMaxWidth()
