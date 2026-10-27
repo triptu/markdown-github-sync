@@ -44,7 +44,7 @@ class WidgetNoteTest {
                 Gap,
                 Text("Plain link text", heading = false, bullet = false, indent = 0),
             ),
-            WidgetNote.lines(note),
+            WidgetNote.lines(note, title = "Weekly"),
         )
     }
 
@@ -73,7 +73,7 @@ class WidgetNoteTest {
     @Test
     fun `Windows line endings and an empty task survive a toggle`() {
         val crlf = "- [ ] one\r\n- [ ]\r\n"
-        assertEquals(listOf(Task(0, false, "one", 0), Task(1, false, "", 0)), WidgetNote.lines(crlf))
+        assertEquals(listOf(Task(0, false, "one", 0), Task(1, false, "", 0)), WidgetNote.lines(crlf, title = "crlf"))
         assertEquals("- [ ] one\r\n- [x]\r\n", WidgetNote.toggle(crlf, line = 1, wasChecked = false))
     }
 
@@ -82,7 +82,16 @@ class WidgetNoteTest {
         val fenced = "```\n- [ ] not a task\n```\n- [ ] a task"
         assertEquals(
             listOf(Text("- [ ] not a task", heading = false, bullet = false, indent = 0), Task(3, false, "a task", 0)),
-            WidgetNote.lines(fenced),
+            WidgetNote.lines(fenced, title = "fenced"),
+        )
+    }
+
+    @Test
+    fun `a first heading that repeats the widget's title is left out`() {
+        val note = "# Todos\n\n## This week\n- [ ] pack"
+        assertEquals(
+            listOf(Text("This week", heading = true, bullet = false, indent = 0), Task(3, false, "pack", 0)),
+            WidgetNote.lines(note, title = "Todos"),
         )
     }
 }

@@ -24,7 +24,8 @@ object WidgetNote {
     private val ImageOnly = Regex("""^\s*(!\[\[[^\]]*]]|!\[[^\]]*]\([^)]*\))\s*$""")
     private val Fence = Regex("""^\s*(```|~~~)""")
 
-    fun lines(note: String): List<WidgetLine> {
+    /** A first heading that only repeats [title] is left out; the widget already shows the title. */
+    fun lines(note: String, title: String): List<WidgetLine> {
         val raw = note.split('\n').map { it.removeSuffix("\r") }
         val out = ArrayList<WidgetLine>()
         fun gap() {
@@ -68,6 +69,11 @@ object WidgetNote {
             }
             val text = Quote.find(line)?.groupValues?.get(1) ?: line
             out += WidgetLine.Text(plain(text), heading = false, bullet = false, indent = 0)
+        }
+        val first = out.firstOrNull()
+        if (first is WidgetLine.Text && first.heading && first.text.trim().equals(title.trim(), ignoreCase = true)) {
+            out.removeAt(0)
+            if (out.firstOrNull() == WidgetLine.Gap) out.removeAt(0)
         }
         if (out.lastOrNull() == WidgetLine.Gap) out.removeAt(out.lastIndex)
         return out

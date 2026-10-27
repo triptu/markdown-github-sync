@@ -67,7 +67,7 @@ class NoteWidgets(
         val text = store.read(path)
             ?: return if (pin == Pin.ThisWeek) NoteWidgetState.WeekNotStarted else NoteWidgetState.Gone
         val title = if (pin == Pin.ThisWeek) QuickCopy.ThisWeek else path.displayName
-        return NoteWidgetState.Shown(pin, title, WidgetNote.lines(text))
+        return NoteWidgetState.Shown(pin, title, WidgetNote.lines(text, title))
     }
 
     /** Ticks or unticks the task on [line], if the note still has it in the state the widget showed. */
