@@ -17,4 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "notes"
 
 include(":app")
-// include(":sync") // GitHub sync module, added separately.
+include(":sync")
