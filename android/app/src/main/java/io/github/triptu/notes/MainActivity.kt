@@ -16,6 +16,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             NotesTheme { AppRoot(vm) }
         }
+        // Only a fresh launch: a theme change recreates the activity with the same intent.
+        if (savedInstanceState == null) demo(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        demo(intent)
+    }
+
+    /** Debug builds: `adb shell am start ... --es demoSync offline|offline-long|error|access|downloading|off`. */
+    private fun demo(intent: android.content.Intent?) {
+        if (BuildConfig.DEBUG) intent?.getStringExtra("demoSync")?.let(vm::demoSync)
     }
 
     override fun onStart() {

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -77,6 +78,9 @@ class GitHubSync(
     private val ready = CompletableDeferred<Unit>()
 
     private val _client = MutableStateFlow<SyncClient?>(null)
+
+    /** Debug builds only: a made-up status for screenshots of states that are hard to cause. */
+    private val demoStatus = MutableStateFlow<SyncStatus?>(null)
     private val _target = MutableStateFlow(prefs.target)
 
     /** Set while sync is set up. */
@@ -85,6 +89,7 @@ class GitHubSync(
     @OptIn(ExperimentalCoroutinesApi::class)
     val status: StateFlow<SyncStatus> = _client
         .flatMapLatest { it?.status ?: flowOf(SyncStatus.NotSetUp) }
+        .combine(demoStatus) { real, demo -> demo ?: real }
         .stateIn(scope, SharingStarted.Eagerly, SyncStatus.NotSetUp)
 
     private val _setup = MutableStateFlow<SetupState>(SetupState.Idle)
@@ -418,6 +423,13 @@ class GitHubSync(
     suspend fun attachment(path: String): File {
         val client = _client.value ?: throw SyncError(SyncError.Kind.Other, "Sync isn't set up")
         return client.fetchAttachment(path)
+    }
+
+    /** Debug builds only: shows [status] instead of the real one (null: back to real), see MainActivity. */
+    fun demo(status: SyncStatus?, firstSync: Boolean = false, setup: SetupState? = null) {
+        demoStatus.value = status
+        _firstSync.value = firstSync
+        if (setup != null) _setup.value = setup
     }
 
     @Volatile private var remoteListing: Pair<Long, List<String>>? = null
