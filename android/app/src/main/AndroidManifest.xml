@@ -28,6 +28,42 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".quick.WidgetSetupActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Notes.Sheet"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".quick.CaptureWidgetReceiver"
+            android:exported="true"
+            android:label="@string/capture_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/capture_widget" />
+        </receiver>
+
+        <receiver
+            android:name=".quick.PinnedNoteWidgetReceiver"
+            android:exported="true"
+            android:label="@string/pinned_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/pinned_note_widget" />
+        </receiver>
+
         <service
             android:name=".quick.VoiceTileService"
             android:exported="true"

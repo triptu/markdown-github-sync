@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.haze.blur)
+    implementation(libs.glance.appwidget)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
