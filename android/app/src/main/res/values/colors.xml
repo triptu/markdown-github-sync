@@ -3,4 +3,10 @@
     <color name="window_bg">#FAFAFA</color>
     <color name="launcher_bg">#1A1A1A</color>
     <color name="launcher_ink">#FAFAFA</color>
+    <!-- Widgets, the tile and shortcuts: the app's neutral palette, following the system theme. -->
+    <color name="quick_bg">#FAFAFA</color>
+    <color name="quick_raised">#F0F0F0</color>
+    <color name="quick_ink">#1A1A1A</color>
+    <color name="quick_ink2">#555555</color>
+    <color name="quick_muted">#6E6E6E</color>
 </resources>
