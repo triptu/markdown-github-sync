@@ -232,6 +232,17 @@ class SyncClient(
         }
     }
 
+    /** Every file path on GitHub at the branch head (one request), to find embeds by name. */
+    suspend fun remotePaths(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            attachments.paths()
+        } catch (error: Attachments.Failure) {
+            throw SyncError(if (error.status == 401 || error.status == 403) SyncError.Kind.Access else SyncError.Kind.Other, error.message ?: "Listing failed")
+        } catch (error: java.io.IOException) {
+            throw SyncError(SyncError.Kind.Offline, "Couldn't reach GitHub. Check your connection.")
+        }
+    }
+
     override fun close() {
         if (vault.onLocalChange === onLocalChange) vault.onLocalChange = null
         scheduler.stop()

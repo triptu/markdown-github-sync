@@ -156,6 +156,7 @@ fun AppRoot(vm: MainViewModel) {
                         onTogglePin = { path?.let { vm.togglePin(Pin.Note(it)) } },
                         onOpenLink = vm::openLink,
                         onDelete = vm::deleteOpenNote,
+                        images = vm.graph.images,
                     )
                 }
                 is Overlay.Settings -> SettingsScreen(

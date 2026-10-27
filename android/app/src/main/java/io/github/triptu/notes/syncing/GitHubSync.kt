@@ -420,6 +420,15 @@ class GitHubSync(
         return client.fetchAttachment(path)
     }
 
+    @Volatile private var remoteListing: Pair<Long, List<String>>? = null
+
+    /** Every path on GitHub, at most five minutes old. Throws [SyncError]. */
+    suspend fun remotePaths(): List<String> {
+        remoteListing?.let { (at, paths) -> if (System.currentTimeMillis() - at < 5 * 60_000) return paths }
+        val client = _client.value ?: throw SyncError(SyncError.Kind.Other, "Sync isn't set up")
+        return client.remotePaths().also { remoteListing = System.currentTimeMillis() to it }
+    }
+
     private fun deviceName(): String =
         Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)?.takeIf { it.isNotBlank() } ?: Build.MODEL
 

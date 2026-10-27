@@ -34,6 +34,8 @@ class LivePreview(
     private val colors: NotesColors,
     /** Width of a line's leading markup as drawn, for the hanging indent of wrapped lines. */
     private val measure: (String) -> TextUnit,
+    /** Space to leave under each embed's line for its picture, by the embed's start offset. */
+    private val imageSpace: Map<Int, TextUnit> = emptyMap(),
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
@@ -75,6 +77,20 @@ class LivePreview(
             span(SpanStyle(color = colors.muted), bullet.index, bullet.index + 1)
             val lineStart = lineStartOf(raw, bullet.index)
             paragraph(hangingIndent(lineStart, (bullet.index + 2).coerceAtMost(bullet.lineEnd)), lineStart, bullet.lineEnd)
+        }
+        for (m in parsed.conflictMarkers) span(SpanStyle(color = colors.muted, fontSize = 14.sp), m.start, m.end)
+        val taken = paragraphs.map { it.second }.toSet()
+        for (image in parsed.images) {
+            val space = imageSpace[image.start] ?: continue
+            if (image.lineStart in taken) continue
+            // While the cursor is away the markup is hidden, so the picture takes the whole line.
+            val editing = touches(image.lineStart, image.lineEnd)
+            if (editing) span(SpanStyle(color = colors.muted, fontSize = 14.sp), image.start, image.end)
+            else hide(image.start, image.end)
+            paragraph(
+                ParagraphStyle(lineHeight = ((if (editing) LineSp else 0f) + space.value).sp, lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Top, LineHeightStyle.Trim.None)),
+                image.lineStart, image.lineEnd,
+            )
         }
         for (q in parsed.quotes) span(SpanStyle(color = colors.ink2, fontStyle = FontStyle.Italic), q.start, q.end)
         for (i in parsed.inline) {
@@ -120,13 +136,18 @@ class LivePreview(
     private fun touches(start: Int, end: Int): Boolean = focused && selection.min <= end && selection.max >= start
 
     override fun equals(other: Any?): Boolean =
-        other is LivePreview && other.parsed == parsed && other.selection == selection && other.focused == focused && other.colors == colors
+        other is LivePreview && other.parsed == parsed && other.selection == selection && other.focused == focused && other.colors == colors &&
+            other.imageSpace == imageSpace
 
-    override fun hashCode(): Int = 31 * (31 * (31 * parsed.hashCode() + selection.hashCode()) + focused.hashCode()) + colors.hashCode()
+    override fun hashCode(): Int =
+        31 * (31 * (31 * (31 * parsed.hashCode() + selection.hashCode()) + focused.hashCode()) + colors.hashCode()) + imageSpace.hashCode()
 
     companion object {
         private val Hidden = SpanStyle(color = Color.Transparent, fontSize = 1.sp, letterSpacing = 0.sp)
         private const val ZeroWidthSpace = '\u200B'
+
+        /** The body's line height, which an embed's line keeps above its picture. */
+        const val LineSp = 26f
         private val HeadingSizes = listOf(24.sp, 21.sp, 19.sp, 17.sp, 17.sp, 17.sp)
         private val HeadingSpaceAbove = listOf(10f, 8f, 6f, 4f, 4f, 4f)
 
