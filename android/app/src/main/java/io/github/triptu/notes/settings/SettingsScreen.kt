@@ -1,0 +1,129 @@
+package io.github.triptu.notes.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.unit.dp
+import io.github.triptu.notes.R
+import io.github.triptu.notes.capture.CaptureSettings
+import io.github.triptu.notes.capture.WeeklyNote
+import io.github.triptu.notes.ui.IconButton48
+import io.github.triptu.notes.ui.PagePadding
+import io.github.triptu.notes.ui.pressable
+import io.github.triptu.notes.ui.theme.NotesTheme
+import io.github.triptu.notes.ui.theme.NotesType
+import java.time.LocalDateTime
+
+@Composable
+fun SettingsScreen(
+    capture: CaptureSettings,
+    onCapture: ((CaptureSettings) -> CaptureSettings) -> Unit,
+    sampleVaultAvailable: Boolean,
+    onLoadSampleVault: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val colors = NotesTheme.colors
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+    ) {
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton48(R.drawable.ph_arrow_left, "Back", onBack)
+        }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PagePadding)) {
+            Text("Settings", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+
+            Section("New note")
+            Field("Folder", capture.newNoteFolder) { v -> onCapture { it.copy(newNoteFolder = v) } }
+            Hint("Named by the hour and the first words, like “2026102709 Call the bank”.")
+
+            Section("This week")
+            Field("Folder", capture.weeklyFolder) { v -> onCapture { it.copy(weeklyFolder = v) } }
+            Field("Name format", capture.weeklyFormat) { v -> onCapture { it.copy(weeklyFormat = v) } }
+            Hint("Same format as Obsidian's Periodic Notes. This week: ${runCatching { WeeklyNote.pathFor(LocalDateTime.now(), capture).value }.getOrDefault("–")}")
+            Field("Template", capture.weeklyTemplate) { v -> onCapture { it.copy(weeklyTemplate = v) } }
+            Hint("Used when this week's note doesn't exist yet. The This week pin opens it at the end of “Notes and Ramblings”.")
+
+            if (sampleVaultAvailable) {
+                Section("Testing")
+                var loaded by remember { mutableStateOf(false) }
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 56.dp).pressable({ onLoadSampleVault(); loaded = true }, bleed = 0.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (loaded) "Sample vault loaded" else "Load sample vault", style = NotesType.row, color = colors.ink)
+                        Text("Adds about 40 made-up notes and pins. Debug builds only.", style = NotesType.rowMeta, color = colors.muted)
+                    }
+                }
+            }
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun Section(text: String) {
+    Text(text, style = NotesType.section, color = NotesTheme.colors.muted, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+}
+
+@Composable
+private fun Label(text: String) {
+    Text(text, style = NotesType.rowMeta, color = NotesTheme.colors.ink2, modifier = Modifier.padding(top = 6.dp, bottom = 6.dp))
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(text, style = NotesType.rowMeta, color = NotesTheme.colors.muted, modifier = Modifier.padding(bottom = 6.dp))
+}
+
+/** A labelled text field that saves as you type. */
+@Composable
+private fun Field(label: String, value: String, onChange: (String) -> Unit) {
+    val colors = NotesTheme.colors
+    Label(label)
+    BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        singleLine = true,
+        textStyle = NotesType.field.copy(color = colors.ink),
+        cursorBrush = SolidColor(colors.ink),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.raised)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    )
+}

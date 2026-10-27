@@ -16,6 +16,10 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
 - `plugin/src/ui/`: modals and settings. All user-facing wording lives in `ui/copy.ts`.
 - `plugin/updater/`: the companion **GitHub Vault Sync Updater** plugin. `core.ts` holds the logic and has no Obsidian imports.
 - `plugin/test/`: run with `npm test` from `plugin/` (some tests use relative paths).
+- `android/`: a native Android notes app (Kotlin, Compose) that edits the same vault. Build and test from `android/` with `./gradlew :app:testDebugUnitTest installDebug` (set `ANDROID_SERIAL` when an emulator is also attached).
+  - `vault/VaultStore.kt` is the seam for sync: write through the store, or write the folder and call `notifyExternalChange()`.
+  - Debug builds have "Load sample vault" in settings. The sample notes are made up; never copy real vault content into the repo.
+  - Icons are Phosphor SVGs imported with `android/tools/import-phosphor-icons.sh`.
 
 ## Releasing
 
