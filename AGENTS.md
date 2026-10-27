@@ -27,14 +27,23 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
 
 ## Releasing
 
-1. Bump the version in `package.json`, `plugin/package.json`, `plugin/package-lock.json` and `plugin/manifest.json`.
+1. Bump the version in `package.json`, `plugin/package.json`, `plugin/package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version`, run at the root and in `plugin/`, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
 2. Add `docs/releases/<version>.md`.
-3. Run `npm run check`.
-4. Commit and push.
-5. Run `npm run publish-update`. This builds the plugin and force-pushes a single commit to the `updates` branch, containing `latest.json` (the version plus a SHA-256 for each file) and `latest/*`.
-6. Run `gh release create <version> dist/github-vault-sync.zip dist/github-vault-sync-updater.zip --latest -F docs/releases/<version>.md`. Publish it as a full release, not a pre-release: the beta in the version number is not a reason to mark it as one, and pre-releases are hidden from "latest release" lookups. New devices install from these zips; existing ones update from the `updates` branch.
+3. Run `npm run check`. It typechecks, lints, tests and builds, and fails if the version fields or `versions.json` disagree.
+4. Commit and push. Obsidian reads `manifest.json` from `main` to learn the latest version, so push before releasing.
+5. Run `npm run publish-update`. This builds the plugin, zips it and force-pushes a single commit to the `updates` branch, containing `latest.json` (the version plus a SHA-256 for each file) and `latest/*`.
+6. Run `gh release create <version> dist/github-vault-sync/main.js dist/github-vault-sync/manifest.json dist/github-vault-sync/styles.css dist/github-vault-sync.zip dist/github-vault-sync-updater.zip --latest -F docs/releases/<version>.md`. The tag is the bare version with no `v`. Obsidian and BRAT install the three loose files; the zips are for manual installs and the updater. Publish it as a full release, not a pre-release, because pre-releases are hidden from "latest release" lookups.
 
-Every device with the updater installs the new version within about 6 hours. You can also run the command "Check for GitHub Vault Sync update" from the command palette. If the new version fails to load, the updater restores the old files and never retries that version. To ship a fix, publish a higher version number.
+Devices with the updater install the new version within about 6 hours, or at once with the command "Check for GitHub Vault Sync update". If it fails to load, the updater restores the old files and never retries that version. To ship a fix, publish a higher version number.
+
+`npm run lint` runs Obsidian's `eslint-plugin-obsidianmd` recommended config over `plugin/src`, the same checks as the community plugin review. Keep it free of errors. The warnings it still prints are deliberate: the engine uses bare timers and falls back to `.obsidian` because it also runs under Node in tests, copy keeps the plugin's name in capitals, and settings keep `display()` until `minAppVersion` reaches 1.13.
+
+The plugin is being submitted to Obsidian's community plugins under the same id, `github-vault-sync`. Once it's listed, Obsidian updates every device from these GitHub releases, and the updater can retire:
+
+1. On each device, disable and delete **GitHub Vault Sync Updater**. Remove it before ever uninstalling GitHub Vault Sync itself: while the updater is installed, it puts the plugin's files back when they're missing.
+2. Drop step 5 and the two zips from step 6, then delete the `updates` branch, `plugin/updater/`, `scripts/publish-update.mjs` and the updater parts of `plugin/build.mjs` and `scripts/package.mjs`.
+
+Until then, both paths can run side by side. The updater never installs a version that's the same as or older than the one on disk, so it never undoes a community update, and both install the same build.
 
 The updater itself never updates automatically, so keep it small and stable. To change it, bump `plugin/updater/manifest.json` and copy `dist/github-vault-sync-updater/*` into `.obsidian/plugins/github-vault-sync-updater/` on one device. Config sync carries it to the other devices once the change is approved under Obsidian settings.
 

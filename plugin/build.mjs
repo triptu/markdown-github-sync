@@ -11,7 +11,7 @@ await build({
   outfile: "../dist/github-vault-sync/main.js",
   logLevel: "info",
 });
-await copyFile("manifest.json", "../dist/github-vault-sync/manifest.json");
+await copyFile("../manifest.json", "../dist/github-vault-sync/manifest.json");
 
 await copyFile("styles.css", "../dist/github-vault-sync/styles.css");
 

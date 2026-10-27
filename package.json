@@ -2,13 +2,13 @@
   "name": "markdown-github-sync",
   "private": true,
   "license": "MIT",
-  "version": "0.3.0-beta.8",
+  "version": "0.4.0",
   "scripts": {
     "setup": "npm ci --prefix plugin",
     "build": "npm run build --prefix plugin",
     "typecheck": "npm run typecheck --prefix plugin",
     "test": "npm test --prefix plugin",
-    "check": "npm run typecheck && npm run lint && npm test && npm run build",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build && node scripts/check-release.mjs",
     "package": "npm run build && node scripts/package.mjs",
     "publish-update": "npm run package && node scripts/publish-update.mjs",
     "lint": "npm run lint --prefix plugin"
