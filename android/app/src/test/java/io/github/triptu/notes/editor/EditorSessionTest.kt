@@ -90,7 +90,7 @@ class NewNoteTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val index = VaultIndex(store, File(temp.root, "index"), scope, Dispatchers.Unconfined)
         val session = EditorSession(
-            EditorTarget.New(FolderPath("Writing"), voice = false), store, index,
+            EditorTarget.New(FolderPath("Writing")), store, index,
             CaptureService(store) { CaptureSettings() }, scope, now = { LocalDateTime.of(2026, 10, 27, 9, 41) },
         )
         session.onValueChange(TextFieldValue("Draft about"))

@@ -38,7 +38,11 @@ import io.github.triptu.notes.syncing.SyncNotice
 import io.github.triptu.notes.syncing.SyncNotices
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import io.github.triptu.notes.voice.VoiceDraft
+import io.github.triptu.notes.voice.VoiceSession
+import io.github.triptu.notes.voice.VoiceTarget
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -49,6 +53,9 @@ sealed interface Overlay {
     data class Settings(val focusToken: Boolean = false) : Overlay
     /** First run: connect GitHub sync, or skip. */
     data object Setup : Overlay
+
+    /** The speaking view. */
+    data class Voice(val session: VoiceSession) : Overlay
 }
 
 /** Navigation and screen state for the one activity. */
@@ -130,12 +137,127 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openNote(path: NotePath, reveal: String? = null) = push(EditorTarget.Open(path, reveal))
 
     /** A new note from Home, in the new-note folder. */
-    fun newNote(voice: Boolean = false) = push(EditorTarget.New(graph.capture.newNoteFolder, voice))
+    fun newNote() = push(EditorTarget.New(graph.capture.newNoteFolder))
 
     /** A new note in a Vault folder. The folder is shown open when the user comes back. */
     fun newNoteIn(folder: FolderPath) {
         vaultTree.reveal(folder, scroll = false)
-        push(EditorTarget.New(folder, voice = false))
+        push(EditorTarget.New(folder))
+    }
+
+    // ---- Speaking ----------------------------------------------------------------
+
+    /** Unsaved words from an earlier recording, offered on Home. */
+    val voiceDraft: StateFlow<Pair<String, VoiceDraft>?> = graph.voice.draft
+
+    /** Home's mic: Save makes a new note in the new-note folder. */
+    fun speakNewNote() = openVoice(VoiceTarget.NewNote(graph.capture.newNoteFolder), editor = null)
+
+    /** The editor's mic: Save adds the words at that note's cursor. */
+    fun speakInto(editor: EditorSession) {
+        val target = editor.path?.let { VoiceTarget.IntoNote(it, editor.value.selection.min) }
+            ?: VoiceTarget.NewNote(editor.folder ?: graph.capture.newNoteFolder)
+        openVoice(target, editor)
+    }
+
+    private fun openVoice(target: VoiceTarget, editor: EditorSession?) {
+        if (overlays.any { it is Overlay.Voice }) return
+        val voice = graph.voice
+        overlays += Overlay.Voice(
+            VoiceSession(
+                target = target,
+                editor = editor,
+                context = getApplication(),
+                language = graph.settings.voice.value.language.ifEmpty { null },
+                record = voice.refining,
+                drafts = voice.drafts,
+                scope = viewModelScope,
+                audioDir = voice.audioDir,
+            ),
+        )
+    }
+
+    /** Save: the words go to their note, then the cloud refine runs if a key is set. */
+    fun saveVoice() {
+        val session = closeVoice() ?: return
+        val (text, audio) = session.finish()
+        graph.voice.dropDraft(session.id)
+        if (text.isBlank()) {
+            audio?.delete()
+            return
+        }
+        val editor = session.editor
+        if (editor != null) {
+            editor.insertSpoken(text)
+            refineOrDrop(audio, text, newNote = null) { editor.flush(); editor.path }
+            return
+        }
+        val folder = (session.target as? VoiceTarget.NewNote)?.folder ?: graph.capture.newNoteFolder
+        val saved = graph.mainScope.async { graph.capture.saveNewNote(folder, null, text, session.startedAt) }
+        refineOrDrop(audio, text, newNote = folder to session.startedAt) { saved.await() }
+    }
+
+    /** Type: the editor opens with the words so far, keyboard up. */
+    fun typeVoice() {
+        val session = closeVoice() ?: return
+        val (text, audio) = session.finish()
+        audio?.delete()
+        graph.voice.dropDraft(session.id)
+        val editor = session.editor
+        if (editor != null) {
+            editor.insertSpoken(text)
+            editor.requestKeyboard()
+            return
+        }
+        val folder = (session.target as? VoiceTarget.NewNote)?.folder ?: graph.capture.newNoteFolder
+        push(EditorTarget.New(folder, text))
+    }
+
+    /** X, Back, or the app closing the view: the words are kept as a draft for Home to offer. */
+    fun dismissVoice() {
+        val session = closeVoice() ?: return
+        session.finish().second?.delete()
+        graph.voice.keepDraft(session.id, session.draft())
+    }
+
+    /** The app left the screen: stop listening and keep the words. The view stays, paused. */
+    fun pauseVoice() {
+        (overlays.lastOrNull() as? Overlay.Voice)?.session?.pause()
+    }
+
+    /** Keep on Home's draft line: the words open in the editor, like Type. */
+    fun keepDraft() {
+        val (id, draft) = voiceDraft.value ?: return
+        graph.voice.dropDraft(id)
+        when (val target = draft.target) {
+            is VoiceTarget.NewNote -> push(EditorTarget.New(target.folder, draft.text))
+            is VoiceTarget.IntoNote -> viewModelScope.launch {
+                if (graph.store.exists(target.path)) {
+                    push(EditorTarget.Open(target.path, cursorAt = target.cursor, insert = draft.text))
+                } else {
+                    push(EditorTarget.New(graph.capture.newNoteFolder, draft.text))
+                }
+            }
+        }
+    }
+
+    fun discardDraft() {
+        voiceDraft.value?.let { graph.voice.dropDraft(it.first) }
+    }
+
+    private fun closeVoice(): VoiceSession? {
+        val top = overlays.lastOrNull() as? Overlay.Voice ?: return null
+        overlays.remove(top)
+        return top.session
+    }
+
+    private fun refineOrDrop(audio: java.io.File?, text: String, newNote: Pair<FolderPath, LocalDateTime>?, locate: suspend () -> NotePath?) {
+        if (audio == null) return
+        if (!graph.voice.refining) {
+            audio.delete()
+            return
+        }
+        graph.voice.refine(audio, text, newNote, locate)
     }
 
     fun createFolder(parent: FolderPath, name: String) {
@@ -210,6 +332,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Closes the top overlay. Returns false if there was none. */
     fun back(): Boolean {
+        if (overlays.lastOrNull() is Overlay.Voice) {
+            dismissVoice()
+            return true
+        }
         val top = overlays.removeLastOrNull() ?: return false
         if (top is Overlay.Editor) top.session.close(graph.mainScope)
         return true
@@ -239,6 +365,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        overlays.filterIsInstance<Overlay.Voice>().forEach { voice ->
+            voice.session.finish().second?.delete()
+            graph.voice.keepDraft(voice.session.id, voice.session.draft())
+        }
         overlays.filterIsInstance<Overlay.Editor>().forEach { it.session.close(graph.mainScope) }
     }
 }

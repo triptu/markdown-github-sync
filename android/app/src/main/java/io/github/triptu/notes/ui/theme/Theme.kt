@@ -33,18 +33,20 @@ data class NotesColors(
     val press: Color,
     val solid: Color,
     val onSolid: Color,
+    /** The recording dot. */
+    val rec: Color,
 )
 
 val LightColors = NotesColors(
     bg = Color(0xFFFAFAFA), raised = Color(0xFFF0F0F0), sunk = Color(0xFFE6E6E6), line = Color(0xFFE8E8E8),
     ink = Color(0xFF1A1A1A), ink2 = Color(0xFF555555), muted = Color(0xFF6E6E6E), press = Color(0xFFEBEBEB),
-    solid = Color(0xFF1A1A1A), onSolid = Color(0xFFFAFAFA),
+    solid = Color(0xFF1A1A1A), onSolid = Color(0xFFFAFAFA), rec = Color(0xFFC93C32),
 )
 
 val DarkColors = NotesColors(
     bg = Color(0xFF171717), raised = Color(0xFF232323), sunk = Color(0xFF2B2B2B), line = Color(0xFF262626),
     ink = Color(0xFFEDEDED), ink2 = Color(0xFFB4B4B4), muted = Color(0xFF8F8F8F), press = Color(0xFF262626),
-    solid = Color(0xFFEDEDED), onSolid = Color(0xFF171717),
+    solid = Color(0xFFEDEDED), onSolid = Color(0xFF171717), rec = Color(0xFFE5584D),
 )
 
 val Inter = FontFamily(
@@ -75,6 +77,8 @@ object NotesType {
         fontFamily = Inter, fontSize = 17.sp, lineHeight = 26.sp,
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Proportional, LineHeightStyle.Trim.None),
     )
+    /** Words in the speaking view. */
+    val spoken = TextStyle(fontFamily = Inter, fontSize = 22.sp, lineHeight = 1.45.em)
     val section = TextStyle(fontFamily = Inter, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
 }
 

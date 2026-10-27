@@ -12,6 +12,7 @@ import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.sync.VaultFiles
 import io.github.triptu.notes.syncing.GitHubSync
 import io.github.triptu.notes.syncing.NoteImages
+import io.github.triptu.notes.voice.Voice
 import io.github.triptu.notes.vault.FileVaultStore
 import io.github.triptu.notes.vault.VaultChange
 import io.github.triptu.notes.vault.VaultIndex
@@ -38,6 +39,7 @@ class AppGraph(context: Context) {
     val settings = SettingsStore(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val capture = CaptureService(store) { settings.capture.value }
     val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope) { SampleVault.paths(context) }
+    val voice = Voice(context.applicationContext, store, capture, settings, scope)
     val images = NoteImages(vaultFiles, sync, context.resources.displayMetrics.widthPixels)
     val expandedFolders = ExpandedFolders(
         PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },

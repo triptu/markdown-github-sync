@@ -1,10 +1,5 @@
 package io.github.triptu.notes.editor
 
-import android.app.Activity
-import android.content.Intent
-import android.speech.RecognizerIntent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -70,7 +65,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
@@ -116,21 +110,23 @@ fun EditorScreen(
     onOpenLink: (String) -> Unit,
     onDelete: () -> Unit,
     images: NoteImages? = null,
+    /** Opens the speaking view to add words at the cursor; null when the phone can't recognize speech. */
+    onSpeak: (() -> Unit)? = null,
 ) {
     val colors = NotesTheme.colors
     val bodyFocus = remember { FocusRequester() }
-    val speech = rememberSpeechInput { spoken -> session.onValueChange(EditOps.insertText(session.value, spoken), newUndoStep = true) }
+    val focusManager = LocalFocusManager.current
+    val speech = onSpeak?.let { speak -> { focusManager.clearFocus(); speak() } }
 
     LaunchedEffect(session, session.loaded) {
         if (!session.loaded) return@LaunchedEffect
         when (val target = session.target) {
-            is EditorTarget.New -> {
-                bodyFocus.requestFocus()
-                if (target.voice) speech?.invoke()
-            }
+            is EditorTarget.New -> bodyFocus.requestFocus()
             is EditorTarget.Open -> if (target.cursorAt != null) bodyFocus.requestFocus()
         }
     }
+
+    LaunchedEffect(session.keyboardRequests) { if (session.keyboardRequests > 0) bodyFocus.requestFocus() }
 
     val scroll = rememberScrollState()
 
@@ -472,20 +468,4 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
     val l = layout
     if (query != null && l != null && focused) LinkPopover(session, query, l, fieldTop)
     }
-}
-
-/** Android's speech input, if the phone has it. Returns null when it doesn't. */
-@Composable
-private fun rememberSpeechInput(onText: (String) -> Unit): (() -> Unit)? {
-    val context = LocalContext.current
-    val intent = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-    }
-    val available = remember { intent.resolveActivity(context.packageManager) != null }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let(onText)
-    }
-    return if (available) ({ launcher.launch(intent) }) else null
 }

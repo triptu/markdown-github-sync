@@ -48,6 +48,9 @@ import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.pressable
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
+import io.github.triptu.notes.voice.Voice
+import io.github.triptu.notes.voice.VoiceSettings
+import kotlinx.coroutines.flow.StateFlow
 import java.time.LocalDateTime
 
 @Composable
@@ -59,6 +62,9 @@ fun SettingsScreen(
     sampleVaultAvailable: Boolean,
     onLoadSampleVault: () -> Unit,
     onBack: () -> Unit,
+    voice: Voice? = null,
+    voiceSettings: StateFlow<VoiceSettings>? = null,
+    onVoiceSettings: ((VoiceSettings) -> VoiceSettings) -> Unit = {},
 ) {
     val colors = NotesTheme.colors
     Column(
@@ -79,6 +85,8 @@ fun SettingsScreen(
             Section("New note")
             Field("Folder", capture.newNoteFolder) { v -> onCapture { it.copy(newNoteFolder = v) } }
             Hint("Named by the hour and the first words, like “2026102709 Call the bank”.")
+
+            if (voice != null && voiceSettings != null) VoiceSettingsSection(voice, voiceSettings, onVoiceSettings)
 
             Section("This week")
             Field("Folder", capture.weeklyFolder) { v -> onCapture { it.copy(weeklyFolder = v) } }
