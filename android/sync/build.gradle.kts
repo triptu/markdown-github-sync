@@ -27,6 +27,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    sourceSets {
+        getByName("test").kotlin.directories += "src/sharedTest/kotlin"
+        getByName("androidTest").kotlin.directories += "src/sharedTest/kotlin"
+    }
+
     testOptions {
         unitTests.all {
             it.systemProperty("syncEngineBundle", bundleFile.get().asFile.absolutePath)
