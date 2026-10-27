@@ -6,7 +6,7 @@
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
 
-    <!-- Sheets drawn over another app: the widget's note picker. -->
+    <!-- Sheets drawn over another app: the share target and the widget's note picker. -->
     <style name="Theme.Notes.Sheet">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

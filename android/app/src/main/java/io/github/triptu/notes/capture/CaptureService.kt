@@ -28,6 +28,13 @@ class CaptureService(
         return path
     }
 
+    /** A new note named [name] in the new-note folder, numbered if that name is taken. */
+    suspend fun createNote(name: String, text: String): NotePath {
+        val path = freePath(newNoteFolder, sanitizeNoteName(name).ifEmpty { "Untitled" }, null)
+        store.write(path, text)
+        return path
+    }
+
     fun weeklyPath(at: LocalDateTime): NotePath = WeeklyNote.pathFor(at, settings())
 
     /** This week's note, created from the template if it doesn't exist yet. */
