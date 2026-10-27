@@ -85,4 +85,12 @@ class VaultFilesTest {
         assertTrue(vault.delete("bin/run.sh"))
         assertEquals(3, changes)
     }
+
+    @Test
+    fun createsFoldersButNotThroughFiles() {
+        vault.createFolder("Projects/Garden")
+        assertTrue(File(vault.root, "Projects/Garden").isDirectory)
+        vault.writeText("note.md", "x")
+        assertTrue(runCatching { vault.createFolder("note.md/inside") }.isFailure)
+    }
 }

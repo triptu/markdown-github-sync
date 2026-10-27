@@ -40,6 +40,10 @@ import io.github.triptu.notes.ui.pressable
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import io.github.triptu.notes.vault.FolderPath
+import io.github.triptu.notes.vault.NotePath
+import io.github.triptu.notes.syncing.OfflineMark
+import io.github.triptu.notes.syncing.SyncBar
+import io.github.triptu.notes.syncing.SyncLines
 
 /** Past this many pins, rows get a little tighter, as in the mockup. */
 private const val CompactPinCount = 6
@@ -54,9 +58,15 @@ fun HomeScreen(
     onUnpin: (Pin) -> Unit,
     onCompose: () -> Unit,
     onVoice: () -> Unit,
+    syncBar: SyncBar = SyncBar.Quiet,
+    onFixToken: () -> Unit = {},
+    onRetrySync: () -> Unit = {},
+    onOpenBothVersions: (NotePath) -> Unit = {},
+    onDeletion: (Boolean) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
-        HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents)
+        HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents) { OfflineMark(syncBar.offline) }
+        SyncLines(syncBar.notices, onFixToken, onRetrySync, onOpenBothVersions, onDeletion)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val compact = pins.size > CompactPinCount
             Column(

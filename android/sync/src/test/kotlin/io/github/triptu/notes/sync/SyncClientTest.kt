@@ -33,6 +33,25 @@ class SyncClientTest {
     }
 
     @Test
+    fun noNetworkIsReportedAsOffline() = runBlocking {
+        // Every request goes through a proxy nothing listens on, as with airplane mode on.
+        val saved = listOf("https.proxyHost", "https.proxyPort").associateWith { System.getProperty(it) }
+        System.setProperty("https.proxyHost", "127.0.0.1")
+        System.setProperty("https.proxyPort", "9")
+        try {
+            val script = File(System.getProperty("syncEngineBundle")!!).readText()
+            val client = SyncClient(File(dir, "sync"), File(dir, "vault"), config(), { "github_pat_test" }, engineScript = script)
+            val error = runCatching { client.checkAccess() }.exceptionOrNull()
+            assertTrue("$error", error is SyncError && error.kind == SyncError.Kind.Offline)
+            val attachment = runCatching { client.fetchAttachment("media/photo.png") }.exceptionOrNull()
+            assertTrue("$attachment", attachment is SyncError && attachment.kind == SyncError.Kind.Offline)
+            client.close()
+        } finally {
+            saved.forEach { (key, value) -> if (value == null) System.clearProperty(key) else System.setProperty(key, value) }
+        }
+    }
+
+    @Test
     fun onDemandExtensionsAreValidated() {
         for (bad in listOf(".png", "PNG", "", "a-b", "x".repeat(17))) {
             assertTrue(bad, runCatching { config(setOf(bad)) }.exceptionOrNull() is IllegalArgumentException)

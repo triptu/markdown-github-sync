@@ -84,6 +84,14 @@ class VaultFiles(val root: File) {
         onLocalChange?.invoke()
     }
 
+    /** Creates a folder and any missing parents. Sync ignores empty folders. */
+    fun createFolder(path: String) {
+        lock.withLock {
+            val folder = resolveBelow(root, path)
+            ensureParents(File(folder, "x"))?.let { error(it) }
+        }
+    }
+
     /** Every file outside hidden folders: what the app can show, and what sync scans. */
     fun list(): List<VaultEntry> {
         val result = ArrayList<VaultEntry>()

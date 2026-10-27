@@ -9,7 +9,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Debug builds only: copies a made-up vault into the app's vault folder for testing and screenshots. */
+/**
+ * Debug builds only: copies a made-up vault into the app's vault folder for testing and
+ * screenshots. Offered only while sync isn't set up; setting up sync removes it again.
+ */
 object SampleVault {
     const val Available = true
     private const val AssetRoot = "sample-vault"
@@ -22,10 +25,13 @@ object SampleVault {
                 .mapNotNull { line -> line.split('\t').takeIf { it.size == 2 }?.let { it[0] to it[1].trim().toLong() } }
                 .toMap()
             val now = System.currentTimeMillis()
-            copy(assets, AssetRoot, graph.vaultRoot) { relative, file ->
-                minutesAgo[relative]?.let { file.setLastModified(now - it * 60_000) }
+            val vault = graph.vaultFiles.value
+            copy(assets, AssetRoot) { relative, bytes ->
+                vault.writeBytes(relative, bytes)
+                minutesAgo[relative]?.let { File(vault.root, relative).setLastModified(now - it * 60_000) }
             }
         }
+        graph.settings.setSampleVaultLoaded(true)
         graph.index.refresh()
         graph.settings.setPins(
             listOf(
@@ -38,19 +44,30 @@ object SampleVault {
         )
     }
 
-    private fun copy(assets: AssetManager, assetPath: String, target: File, relative: String = "", onFile: (String, File) -> Unit) {
+    /** Vault paths of every sample note, so setting up sync can remove exactly those. */
+    fun paths(context: Context): List<String> {
+        val out = ArrayList<String>()
+        copyNames(context.assets, AssetRoot, "", out)
+        return out
+    }
+
+    private fun copyNames(assets: AssetManager, assetPath: String, relative: String, out: MutableList<String>) {
         val children = assets.list(assetPath).orEmpty()
         if (children.isEmpty()) {
-            if (relative.endsWith(NotePath.MD)) {
-                val file = File(target, relative)
-                file.parentFile?.mkdirs()
-                assets.open(assetPath).use { input -> file.outputStream().use { input.copyTo(it) } }
-                onFile(relative, file)
-            }
+            if (relative.endsWith(NotePath.MD)) out += relative
+            return
+        }
+        for (child in children) copyNames(assets, "$assetPath/$child", if (relative.isEmpty()) child else "$relative/$child", out)
+    }
+
+    private fun copy(assets: AssetManager, assetPath: String, relative: String = "", onFile: (String, ByteArray) -> Unit) {
+        val children = assets.list(assetPath).orEmpty()
+        if (children.isEmpty()) {
+            if (relative.endsWith(NotePath.MD)) onFile(relative, assets.open(assetPath).use { it.readBytes() })
             return
         }
         for (child in children) {
-            copy(assets, "$assetPath/$child", target, if (relative.isEmpty()) child else "$relative/$child", onFile)
+            copy(assets, "$assetPath/$child", if (relative.isEmpty()) child else "$relative/$child", onFile)
         }
     }
 }

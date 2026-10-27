@@ -7,6 +7,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.ZettelName
+import io.github.triptu.notes.syncing.BothVersions
 import io.github.triptu.notes.vault.DeletedNote
 import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.LinkSuggestion
@@ -117,8 +118,8 @@ class EditorSession(
 
     /**
      * Without unsaved edits, shows the new text in place and keeps the cursor near where it was.
-     * With unsaved edits, keeps the user's text and saves it over the change; sync's
-     * compare-and-swap is what notices the conflict.
+     * With unsaved edits, merges them with the change (base: the last saved text), keeping both
+     * versions of lines both sides changed, and saves the merge. Nothing on either side is lost.
      */
     private fun onDiskText(disk: String) {
         if (!loaded || disk == savedText) return
@@ -127,7 +128,13 @@ class EditorSession(
             return
         }
         if (value.text != savedText) {
+            val merged = BothVersions.merge(savedText, value.text, disk)
             savedText = disk
+            if (merged != value.text) {
+                value = TextFieldValue(merged, EditOps.mapSelection(value.text, merged, value.selection))
+                parsed = MarkdownParser.parse(merged)
+                linkStart = null
+            }
             scheduleSave()
             return
         }

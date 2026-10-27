@@ -53,14 +53,28 @@ class EditorSessionTest {
     }
 
     @Test
-    fun `an outside change does not replace unsaved edits, which are then saved`() = runTest {
-        val (session, store, root) = open("milk\n")
-        session.onValueChange(TextFieldValue("milk\ntea\n", TextRange(9)))
-        File(root, path.value).writeText("milk\ncoffee\n")
+    fun `an outside change while edits are unsaved merges both, and the merge is saved`() = runTest {
+        val (session, store, root) = open("milk\neggs\nrice\n")
+        session.onValueChange(TextFieldValue("milk\neggs\nrice\ntea\n", TextRange(17)))
+        File(root, path.value).writeText("oat milk\neggs\nrice\n")
         store.notifyExternalChange()
         advanceUntilIdle()
-        assertEquals("milk\ntea\n", session.value.text)
-        assertEquals("milk\ntea\n", File(root, path.value).readText())
+        assertEquals("oat milk\neggs\nrice\ntea\n", session.value.text)
+        assertEquals(TextRange(21), session.value.selection)
+        assertEquals("oat milk\neggs\nrice\ntea\n", File(root, path.value).readText())
+        session.close(CoroutineScope(Dispatchers.Unconfined))
+    }
+
+    @Test
+    fun `an outside change to the line being edited keeps both versions`() = runTest {
+        val (session, store, root) = open("milk\n")
+        session.onValueChange(TextFieldValue("milk and tea\n", TextRange(12)))
+        File(root, path.value).writeText("milk and coffee\n")
+        store.notifyExternalChange()
+        advanceUntilIdle()
+        val both = "<<<<<<< This phone\nmilk and tea\n\n=======\nmilk and coffee\n>>>>>>> GitHub\n"
+        assertEquals(both, session.value.text)
+        assertEquals(both, File(root, path.value).readText())
         session.close(CoroutineScope(Dispatchers.Unconfined))
     }
 }

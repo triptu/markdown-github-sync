@@ -78,16 +78,55 @@ fun Modifier.pressable(
         .padding(horizontal = bleed)
 }
 
-/** Small tappable labels naming the neighbouring pages ("‹ Vault", "Recents ›"). */
+/** Small tappable labels naming the neighbouring pages ("‹ Vault", "Recents ›"), with [center] between them. */
 @Composable
-fun HintsRow(left: String?, right: String?, onLeft: () -> Unit, onRight: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+fun HintsRow(
+    left: String?,
+    right: String?,
+    onLeft: () -> Unit,
+    onRight: () -> Unit,
+    modifier: Modifier = Modifier,
+    center: @Composable () -> Unit = {},
+) {
+    Box(modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = PagePadding - 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (left != null) Hint(left, R.drawable.ph_caret_left, iconFirst = true, onClick = onLeft) else Spacer(Modifier.width(1.dp))
+            if (right != null) Hint(right, R.drawable.ph_caret_right, iconFirst = false, onClick = onRight)
+        }
+        center()
+    }
+}
+
+/** The one solid button style: a full-width pill. [busy] keeps it in place but inert. */
+@Composable
+fun PillButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val colors = NotesTheme.colors
+    val shape = RoundedCornerShape(24.dp)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(shape)
+            .background(if (enabled) colors.solid else colors.sunk)
+            .pressable({ if (enabled) onClick() }, shape = shape, bleed = 0.dp, label = text, pressColor = colors.ink2),
+        contentAlignment = Alignment.Center,
     ) {
-        if (left != null) Hint(left, R.drawable.ph_caret_left, iconFirst = true, onClick = onLeft) else Spacer(Modifier.width(1.dp))
-        if (right != null) Hint(right, R.drawable.ph_caret_right, iconFirst = false, onClick = onRight)
+        Text(text, style = NotesType.row.copy(fontWeight = FontWeight.Medium), color = if (enabled) colors.onSolid else colors.muted)
+    }
+}
+
+/** A text-only button, for the second choice next to a [PillButton] or in a quiet line. */
+@Composable
+fun QuietButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, color: Color = NotesTheme.colors.ink) {
+    Box(
+        modifier.height(44.dp).pressable(onClick, shape = RoundedCornerShape(12.dp), bleed = 10.dp, label = text),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = NotesType.rowMeta.copy(fontWeight = FontWeight.Medium), color = color)
     }
 }
 

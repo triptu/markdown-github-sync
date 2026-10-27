@@ -7,7 +7,11 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import io.github.triptu.notes.library.ExpandedFolders
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.PinKeeper
+import io.github.triptu.notes.settings.SampleVault
 import io.github.triptu.notes.settings.SettingsStore
+import io.github.triptu.notes.sync.VaultFiles
+import io.github.triptu.notes.syncing.GitHubSync
+import io.github.triptu.notes.syncing.NoteImages
 import io.github.triptu.notes.vault.FileVaultStore
 import io.github.triptu.notes.vault.VaultChange
 import io.github.triptu.notes.vault.VaultIndex
@@ -26,10 +30,15 @@ class AppGraph(context: Context) {
     /** Outlives any screen. Final editor saves run here, on the main thread like the editor's state. */
     val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val vaultRoot = File(context.filesDir, "vault")
-    val store: VaultStore = FileVaultStore(vaultRoot)
+
+    /** The one writer of the vault folder, shared by the app and sync. Created off the main thread. */
+    val vaultFiles: Lazy<VaultFiles> = lazy { VaultFiles(vaultRoot) }
+    val store: VaultStore = FileVaultStore(vaultFiles)
     val index = VaultIndex(store, File(context.cacheDir, "vault-index.bin"), scope)
     val settings = SettingsStore(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val capture = CaptureService(store) { settings.capture.value }
+    val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope) { SampleVault.paths(context) }
+    val images = NoteImages(vaultFiles, sync, context.resources.displayMetrics.widthPixels)
     val expandedFolders = ExpandedFolders(
         PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },
         scope,
@@ -37,6 +46,7 @@ class AppGraph(context: Context) {
 
     fun start() {
         index.start()
+        sync.start()
         scope.launch { keepPinsAlive() }
         scope.launch {
             store.changes.collect { change ->

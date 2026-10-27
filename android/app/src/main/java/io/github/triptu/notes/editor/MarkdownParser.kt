@@ -28,7 +28,14 @@ data class ParsedMarkdown(
     val inline: List<InlineMark>,
     val quotes: List<LineRange>,
     val frontmatter: LineRange?,
+    /** `<<<<<<< `, `=======` and `>>>>>>> ` lines around both versions of lines edited on two devices. */
+    val conflictMarkers: List<LineRange> = emptyList(),
+    /** `![](path)` and `![[file]]` embeds, drawn below their line. */
+    val images: List<ImageMark> = emptyList(),
 )
+
+/** An embedded image: [lineStart]..[lineEnd] is its line, [target] the path or name as written. */
+data class ImageMark(val start: Int, val end: Int, val lineStart: Int, val lineEnd: Int, val target: String, val wiki: Boolean)
 
 /** Line-by-line parse of the Obsidian markdown the editor styles. Not a full CommonMark parser. */
 object MarkdownParser {
@@ -36,6 +43,14 @@ object MarkdownParser {
     private val Task = Regex("""^(\s*)[-*+] \[([ xX])\](?: |$)""")
     private val Bullet = Regex("""^(\s*)[-*+] """)
     private val Quote = Regex("""^\s*> ?""")
+    private val Image = Regex("""!\[\[([^\[\]\n]+?)]]|!\[[^\]\n]*]\(([^)\n]+)\)""")
+    private val ImageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif", "svg")
+
+    private fun isConflictMarker(line: String) = line.startsWith("<<<<<<< ") || line == "=======" || line.startsWith(">>>>>>> ")
+
+    /** True if [target] names a picture (embeds of notes or PDFs aren't drawn). */
+    fun isImage(target: String): Boolean = target.substringAfterLast('.', "").lowercase() in ImageExtensions
+
     private val Link = Regex("""\[\[([^\[\]\n]+?)]]""")
     private val Code = Regex("""`[^`\n]+`""")
     private val BoldItalic = Regex("""(?<![*\\])\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*(?!\*)""")
@@ -50,6 +65,8 @@ object MarkdownParser {
         val inline = ArrayList<InlineMark>()
         val quotes = ArrayList<LineRange>()
         val frontmatter = frontmatterRange(text)
+        val markers = ArrayList<LineRange>()
+        val images = ArrayList<ImageMark>()
 
         var lineStart = frontmatter?.end?.let { (it + 1).coerceAtMost(text.length) } ?: 0
         var inFence = false
@@ -59,14 +76,22 @@ object MarkdownParser {
             val line = text.substring(lineStart, lineEnd)
             if (line.trimStart().startsWith("```")) {
                 inFence = !inFence
+            } else if (!inFence && isConflictMarker(line)) {
+                markers += LineRange(lineStart, lineEnd)
             } else if (!inFence) {
                 parseLine(line, lineStart, lineEnd, headings, tasks, bullets, quotes)
                 parseInline(line, lineStart, links, inline)
+                for (m in Image.findAll(line)) {
+                    val wiki = m.groupValues[1].isNotEmpty()
+                    val raw = if (wiki) m.groupValues[1].substringBefore('|') else m.groupValues[2].trim().removePrefix("<").substringBefore('>').substringBefore(" \"")
+                    val target = (if (wiki) raw else runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrDefault(raw)).trim()
+                    if (target.isNotEmpty()) images += ImageMark(lineStart + m.range.first, lineStart + m.range.last + 1, lineStart, lineEnd, target, wiki)
+                }
             }
             if (newline < 0) break
             lineStart = newline + 1
         }
-        return ParsedMarkdown(headings, tasks, bullets, links, inline, quotes, frontmatter)
+        return ParsedMarkdown(headings, tasks, bullets, links, inline, quotes, frontmatter, markers, images)
     }
 
     private fun frontmatterRange(text: String): LineRange? {
@@ -107,7 +132,8 @@ object MarkdownParser {
             inline += InlineMark(InlineKind.Code, offset + m.range.first, offset + m.range.last + 1, 1)
         }
         for (m in Link.findAll(line)) {
-            if (!free(m.range)) continue
+            // `![[file]]` embeds a file; the editor draws it instead of linking.
+            if (!free(m.range) || (m.range.first > 0 && line[m.range.first - 1] == '!')) continue
             taken += m.range
             val inner = m.groupValues[1]
             val pipe = inner.indexOf('|')

@@ -57,6 +57,15 @@ class FileVaultStoreTest {
         assertNull(store.read(NotePath("a.md")))
         assertEquals("a", store.read(NotePath("c.md")))
     }
+
+    @Test
+    fun `new folders show in the listing, and a note can't become a folder`() = runTest {
+        val store = FileVaultStore(temp.newFolder("vault"), Dispatchers.Unconfined)
+        store.createFolder(FolderPath("Projects/Garden"))
+        assertEquals(setOf(FolderPath("Projects"), FolderPath("Projects/Garden")), store.list().folders)
+        store.write(NotePath("Ideas.md"), "x")
+        assertTrue(runCatching { store.write(NotePath("Ideas.md/inside.md"), "y") }.exceptionOrNull() is java.io.IOException)
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

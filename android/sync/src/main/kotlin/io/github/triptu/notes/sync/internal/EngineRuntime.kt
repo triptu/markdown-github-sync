@@ -55,6 +55,7 @@ internal class EngineRuntime(
     /** Calls `__api.call(method, args)`; returns the `ok` value or throws [EngineException]. */
     suspend fun call(method: String, args: Map<String, Any?> = emptyMap()): Any? = mutex.withLock {
         check(!closed) { "Sync engine is closed" }
+        log("call $method")
         withContext(dispatcher) {
             val runtime = js ?: start().also { js = it }
             val raw = runtime.evaluate<String>("await __api.call(${Json.quote(method)}, ${Json.quote(Json.write(args))})")
@@ -110,13 +111,20 @@ internal class EngineRuntime(
             function("vaultApply", sync { args ->
                 vault.apply(args[0] as String, args[1] as String?, args[2] as String?, args[3] as String?, args[4] == true)
             })
-            asyncFunction("sleep", async { args -> delay((args[0] as Number).toLong()) })
-            asyncFunction("http", async { args -> withContext(Dispatchers.IO) { http.request(args[0] as String) } })
+            asyncFunction("http", async { args ->
+                val spec = args[0] as String
+                val started = System.currentTimeMillis()
+                val reply = withContext(Dispatchers.IO) { http.request(spec) }
+                // Method, status and time only: URLs carry note paths.
+                log("http ${Json.parse(spec).obj().str("method") ?: "GET"} -> ${Json.parse(reply).obj()["status"]} in ${System.currentTimeMillis() - started} ms")
+                reply
+            })
             asyncFunction("archive", async { args ->
                 val reply = withContext(Dispatchers.IO) { http.archive(args[0] as String) }
                 listOf(reply.status, Json.write(reply.headers), reply.body.toUByteArray())
             })
             asyncFunction("token", async { token() })
+            asyncFunction("sleep", async { args -> delay((args[0] as Number).toLong()) })
         }
         try {
             runtime.evaluate<Any?>(bundle, "sync-engine.js", false)

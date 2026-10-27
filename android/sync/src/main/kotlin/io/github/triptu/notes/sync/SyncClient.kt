@@ -36,16 +36,19 @@ import java.util.UUID
 class SyncClient(
     /** App-private folder for this vault's journal, attachment cache and device id. */
     storageDir: File,
-    /** The app's private copy of the vault. */
-    vaultDir: File,
+    /**
+     * The app's private copy of the vault. Share one instance between the app
+     * and the client, so the app's writes and sync's take the same lock.
+     */
+    val vault: VaultFiles,
     private val config: SyncConfig,
     private val tokens: TokenProvider,
     /** The bundled engine: `context.assets.open("sync-engine.js")`, see [readEngineScript]. */
     engineScript: String,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Diagnostics: one line per engine call and GitHub request. Never shown to the user. */
+    private val log: (String) -> Unit = {},
 ) : Closeable {
-    val vault = VaultFiles(vaultDir)
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val http = GitHubHttp()
     private val lastSyncedFile = File(storageDir, "last-synced")
@@ -72,6 +75,7 @@ class SyncClient(
         http = http,
         token = { token() },
         progress = { done, total -> _status.value = SyncStatus.Syncing(done, total) },
+        log = log,
     )
     private val attachments = Attachments(File(storageDir, "attachments"), http, config.owner, config.repository, config.branch, { token() })
 
@@ -88,8 +92,10 @@ class SyncClient(
 
     val scheduler = SyncScheduler(scope, run = { runSync() }, onError = { report(it) }, clock = clock)
 
+    private val onLocalChange: () -> Unit = { if (enrolled) scheduler.edited() }
+
     init {
-        vault.onLocalChange = { if (enrolled) scheduler.edited() }
+        vault.onLocalChange = onLocalChange
         scope.launch {
             try { refresh() } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (error: Throwable) { report(error) }
         }
@@ -105,6 +111,19 @@ class SyncClient(
 
     /** Call after edits made outside [vault]'s write methods (normally not needed). */
     fun onEdited() = scheduler.edited()
+
+    /** True when app edits are waiting for their sync. */
+    val hasWaitingEdits: Boolean get() = scheduler.hasWaitingEdits
+
+    /**
+     * For background work: makes sure edits made so far reach GitHub. Waits for
+     * a running sync and runs another only if it failed or edits arrived since.
+     * Returns the resulting status.
+     */
+    suspend fun sendWaitingEdits(): SyncStatus {
+        scheduler.flush()
+        return status.value
+    }
 
     // ---- Setup ----------------------------------------------------------------
 
@@ -177,13 +196,6 @@ class SyncClient(
         }
     }
 
-    /** For a file sync couldn't update because it changed here: keep this device's version. */
-    suspend fun keepLocal(path: String) {
-        val value = guard { engine.call("keepLocal", mapOf("path" to path)).obj() }
-        if (value["kind"] != "recorded") throw SyncError(SyncError.Kind.Other, "Couldn't keep this version of $path.")
-        scope.launch { scheduler.now() }
-    }
-
     // ---- Attachments ------------------------------------------------------------
 
     /** True for files kept on GitHub and fetched with [fetchAttachment]. */
@@ -204,7 +216,19 @@ class SyncClient(
         }
     }
 
+    /** Every file path on GitHub at the branch head (one request), to find embeds by name. */
+    suspend fun remotePaths(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            attachments.paths()
+        } catch (error: Attachments.Failure) {
+            throw SyncError(if (error.status == 401 || error.status == 403) SyncError.Kind.Access else SyncError.Kind.Other, error.message ?: "Listing failed")
+        } catch (error: java.io.IOException) {
+            throw SyncError(SyncError.Kind.Offline, "Couldn't reach GitHub. Check your connection.")
+        }
+    }
+
     override fun close() {
+        if (vault.onLocalChange === onLocalChange) vault.onLocalChange = null
         scheduler.stop()
         scope.cancel()
         engine.close()
@@ -347,8 +371,10 @@ class SyncClient(
             kind = value.str("kind")!!,
             path = value.str("path") ?: paths.firstOrNull().orEmpty(),
             paths = paths,
-            choices = value["choices"]?.list()?.map { it as String }.orEmpty(),
+            choices = value["choices"]?.list()?.map { it as String }
+                ?: if (value["kind"] == "bulk-deletion") listOf("mine", "remote") else emptyList(),
             sibling = value.str("sibling"),
+            direction = value.str("direction"),
             base = version("base"),
             local = version("local"),
             remote = version("remote"),

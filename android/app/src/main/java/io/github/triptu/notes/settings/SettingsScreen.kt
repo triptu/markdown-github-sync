@@ -32,9 +32,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import io.github.triptu.notes.R
 import io.github.triptu.notes.capture.CaptureSettings
 import io.github.triptu.notes.capture.WeeklyNote
+import io.github.triptu.notes.syncing.GitHubSync
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.pressable
@@ -46,6 +54,8 @@ import java.time.LocalDateTime
 fun SettingsScreen(
     capture: CaptureSettings,
     onCapture: ((CaptureSettings) -> CaptureSettings) -> Unit,
+    sync: GitHubSync,
+    focusToken: Boolean,
     sampleVaultAvailable: Boolean,
     onLoadSampleVault: () -> Unit,
     onBack: () -> Unit,
@@ -63,6 +73,8 @@ fun SettingsScreen(
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PagePadding)) {
             Text("Settings", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+
+            SyncSection(sync, focusToken)
 
             Section("New note")
             Field("Folder", capture.newNoteFolder) { v -> onCapture { it.copy(newNoteFolder = v) } }
@@ -94,23 +106,31 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun Section(text: String) {
+internal fun Section(text: String) {
     Text(text, style = NotesType.section, color = NotesTheme.colors.muted, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
 }
 
 @Composable
-private fun Label(text: String) {
+internal fun Label(text: String) {
     Text(text, style = NotesType.rowMeta, color = NotesTheme.colors.ink2, modifier = Modifier.padding(top = 6.dp, bottom = 6.dp))
 }
 
 @Composable
-private fun Hint(text: String) {
+internal fun Hint(text: String) {
     Text(text, style = NotesType.rowMeta, color = NotesTheme.colors.muted, modifier = Modifier.padding(bottom = 6.dp))
 }
 
 /** A labelled text field that saves as you type. */
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit) {
+internal fun Field(
+    label: String,
+    value: String,
+    placeholder: String = "",
+    secret: Boolean = false,
+    focus: FocusRequester? = null,
+    modifier: Modifier = Modifier,
+    onChange: (String) -> Unit,
+) {
     val colors = NotesTheme.colors
     Label(label)
     BasicTextField(
@@ -119,8 +139,18 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit) {
         singleLine = true,
         textStyle = NotesType.field.copy(color = colors.ink),
         cursorBrush = SolidColor(colors.ink),
-        modifier = Modifier
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false)
+        else KeyboardOptions(autoCorrectEnabled = false, capitalization = KeyboardCapitalization.None),
+        decorationBox = { inner ->
+            Box {
+                if (value.isEmpty() && placeholder.isNotEmpty()) Text(placeholder, style = NotesType.field, color = colors.muted)
+                inner()
+            }
+        },
+        modifier = modifier
             .fillMaxWidth()
+            .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
             .padding(bottom = 6.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(colors.raised)

@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
@@ -84,6 +85,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.rememberTextMeasurer
 import io.github.triptu.notes.R
+import io.github.triptu.notes.syncing.ImageState
+import io.github.triptu.notes.syncing.NoteImages
+import io.github.triptu.notes.syncing.SyncCopy
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
@@ -94,7 +106,7 @@ import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EditorScreen(
     session: EditorSession,
@@ -103,6 +115,7 @@ fun EditorScreen(
     onTogglePin: () -> Unit,
     onOpenLink: (String) -> Unit,
     onDelete: () -> Unit,
+    images: NoteImages? = null,
 ) {
     val colors = NotesTheme.colors
     val bodyFocus = remember { FocusRequester() }
@@ -137,14 +150,18 @@ fun EditorScreen(
             val margin = with(LocalDensity.current) { (MicSize + MicMargin * 2).toPx() }
             val keepClearOfMic = remember(margin) { KeepClearBringIntoView(margin) }
             CompositionLocalProvider(LocalBringIntoViewSpec provides keepClearOfMic) {
+                // While typing, the text ends above the mic instead of scrolling under it, so the
+                // mic never covers the lines around the cursor.
+                val typing = WindowInsets.isImeVisible && speech != null
                 Column(
                     Modifier
                         .fillMaxSize()
+                        .padding(bottom = if (typing) MicSize + MicMargin * 2 else 0.dp)
                         .verticalScroll(scroll)
                         .padding(horizontal = PagePadding),
                 ) {
                     Title(session, onDone = { bodyFocus.requestFocus() })
-                    if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll)
+                    if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
                     // Tapping the empty space under the text puts the cursor at the end.
                     Spacer(
                         Modifier
@@ -299,7 +316,7 @@ private fun Title(session: EditorSession, onDone: () -> Unit) {
 }
 
 @Composable
-private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (String) -> Unit, scroll: ScrollState) {
+private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (String) -> Unit, scroll: ScrollState, images: NoteImages?) {
     val colors = NotesTheme.colors
     val density = LocalDensity.current
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -330,6 +347,41 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
 
     fun revealed(task: TaskMark) = focused && current.selection.min <= task.markerEnd - 1 && current.selection.max >= task.markerStart
 
+    // Embedded pictures: loaded once per target, drawn in the space their line reserves.
+    val pictures = remember(session) { mutableStateMapOf<String, ImageState>() }
+    val embeds = session.parsed.images.filter { MarkdownParser.isImage(it.target) && session.value.text.substring(it.lineStart, it.lineEnd).trim().length == it.end - it.start }
+    val targets = embeds.map { it.target to it.wiki }.toSet()
+    LaunchedEffect(targets, images) {
+        if (images == null) return@LaunchedEffect
+        for ((target, wiki) in targets) {
+            if (pictures[target] is ImageState.Ready || pictures[target] == ImageState.Loading) continue
+            pictures[target] = ImageState.Loading
+            launch { pictures[target] = images.load(session.path, target, wiki) }
+        }
+    }
+    var fieldWidth by remember { mutableStateOf(0) }
+    val gap = with(density) { 8.dp.toPx() }
+    val placeholder = with(density) { 44.dp.toPx() }
+    val maxHeight = with(density) { 420.dp.toPx() }
+    /** Where each picture goes: its size in px, by embed start. */
+    val boxes: Map<Int, Pair<ImageMark, androidx.compose.ui.geometry.Size>> = if (images == null || fieldWidth == 0) emptyMap() else embeds.mapNotNull { mark ->
+        val size = when (val state = pictures[mark.target]) {
+            is ImageState.Ready -> {
+                val bw = state.bitmap.width.toFloat()
+                val bh = state.bitmap.height.toFloat()
+                var w = minOf(fieldWidth.toFloat(), bw * density.density / 2f).coerceAtLeast(minOf(fieldWidth.toFloat(), bw))
+                var h = w * bh / bw
+                if (h > maxHeight) { w *= maxHeight / h; h = maxHeight }
+                androidx.compose.ui.geometry.Size(w, h)
+            }
+            null -> return@mapNotNull null
+            else -> androidx.compose.ui.geometry.Size(fieldWidth.toFloat(), placeholder)
+        }
+        mark.start to (mark to size)
+    }.toMap()
+    val imageSpace = boxes.mapValues { (_, box) -> with(density) { (box.second.height + gap * 2).toSp() } }
+    val labelStyle = NotesType.rowMeta.copy(color = colors.muted)
+
     var fieldTop by remember { mutableStateOf(0) }
     var fieldTopInContent by remember { mutableStateOf(0) }
     // Opened from a Recents card: scroll so that card's text sits near the top.
@@ -353,11 +405,12 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
         onValueChange = { session.onValueChange(it) },
         textStyle = NotesType.noteBody.copy(color = colors.ink),
         cursorBrush = SolidColor(colors.ink),
-        visualTransformation = LivePreview(session.parsed, session.value.selection, focused, colors, indentOf),
+        visualTransformation = LivePreview(session.parsed, session.value.selection, focused, colors, indentOf, imageSpace),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
+            .onSizeChanged { fieldWidth = it.width }
             .focusRequester(focus)
             .onFocusChanged {
                 focused = it.isFocused
@@ -393,6 +446,25 @@ private fun Body(session: EditorSession, focus: FocusRequester, onOpenLink: (Str
                 for (task in parsed.tasks) {
                     if (task.markerStart >= l.layoutInput.text.length || revealed(task)) continue
                     drawTaskBox(boxTopLeft(l, task), task.checked, colors)
+                }
+                for ((mark, size) in boxes.values) {
+                    if (mark.lineEnd > l.layoutInput.text.length) continue
+                    val bottom = l.getLineBottom(l.getLineForOffset(mark.lineEnd))
+                    val top = bottom - gap - size.height
+                    when (val state = pictures[mark.target]) {
+                        is ImageState.Ready -> drawImage(
+                            state.bitmap.asImageBitmap(),
+                            dstOffset = IntOffset(0, top.toInt()),
+                            dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                            filterQuality = FilterQuality.Medium,
+                        )
+                        else -> {
+                            drawRoundRect(colors.raised, Offset(0f, top), size, CornerRadius(gap * 1.5f))
+                            val label = (state as? ImageState.Unavailable)?.label ?: SyncCopy.ImageLoading
+                            val measured = measurer.measure(label, labelStyle)
+                            drawText(measured, topLeft = Offset(gap * 2, top + (size.height - measured.size.height) / 2))
+                        }
+                    }
                 }
             },
     )

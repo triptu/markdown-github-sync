@@ -8,10 +8,12 @@ object SnippetText {
     private val MarkdownLink = Regex("""\[([^\]]*)]\([^)]*\)""")
     private val Emphasis = Regex("""\*\*|__|(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)|`|==|~~""")
     private val Space = Regex("""\s+""")
+    private val ConflictMarker = Regex("""(?m)^(<<<<<<< .*|=======|>>>>>>> .*)$""")
 
     fun taskState(snippet: String): Boolean? = Task.find(snippet)?.let { it.groupValues[1] != " " }
 
     fun plain(snippet: String): String = snippet
+        .replace(ConflictMarker, "")
         .replace(Task, "")
         .replace(Prefix, "$1")
         .replace(Link) { m -> m.groupValues[2].ifEmpty { linkTitle(m.groupValues[1]) } }

@@ -46,6 +46,16 @@ internal class Attachments(
         return cached
     }
 
+    /** Every file path at the branch head, for finding `![[name.png]]` embeds by name. */
+    suspend fun paths(): List<String> {
+        val base = "https://api.github.com/repos/${encode(owner)}/${encode(repository)}"
+        val headers = mapOf("Authorization" to "Bearer ${token()}", "X-GitHub-Api-Version" to "2022-11-28", "Accept" to "application/vnd.github+json")
+        val reply = http.get("$base/git/trees/${encode(branch)}?recursive=1", headers, 64L * 1024 * 1024)
+        if (reply.status != 200) throw Failure(failureMessage(reply.status, branch), reply.status)
+        return Json.parse(reply.body.toString(Charsets.UTF_8)).obj()["tree"].list()
+            .map { it.obj() }.filter { it["type"] == "blob" }.mapNotNull { it.str("path") }
+    }
+
     private fun trim(keep: File) {
         val files = directory.listFiles().orEmpty().filter { it.isFile && it != keep }.sortedBy { it.lastModified() }
         var total = files.sumOf { it.length() } + keep.length()

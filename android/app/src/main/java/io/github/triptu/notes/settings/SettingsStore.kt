@@ -20,6 +20,17 @@ class SettingsStore(private val prefs: SharedPreferences) {
     private val _capture = MutableStateFlow(readCapture())
     val capture: StateFlow<CaptureSettings> = _capture.asStateFlow()
 
+    /** True while the debug sample vault fills the vault folder; setting up sync clears it. */
+    val sampleVaultLoaded: Boolean get() = prefs.getBoolean(Keys.SampleVault, false)
+
+    fun setSampleVaultLoaded(loaded: Boolean) = prefs.edit { putBoolean(Keys.SampleVault, loaded) }
+
+    /** Back to a fresh install's pins: just This week. */
+    fun resetPins() {
+        _pins.value = listOf(Pin.ThisWeek)
+        prefs.edit { remove(Keys.Pins) }
+    }
+
     fun isPinned(pin: Pin): Boolean = pin in _pins.value
 
     fun togglePin(pin: Pin) = setPins(if (isPinned(pin)) _pins.value - pin else _pins.value + pin)
@@ -64,6 +75,7 @@ class SettingsStore(private val prefs: SharedPreferences) {
 
     private object Keys {
         const val Pins = "pins"
+        const val SampleVault = "sampleVault"
         const val NewNoteFolder = "capture.newNoteFolder"
         const val WeeklyFolder = "capture.weeklyFolder"
         const val WeeklyFormat = "capture.weeklyFormat"
