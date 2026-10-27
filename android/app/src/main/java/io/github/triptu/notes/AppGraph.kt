@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import io.github.triptu.notes.library.ExpandedFolders
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.PinKeeper
+import io.github.triptu.notes.settings.SampleVault
 import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.sync.VaultFiles
 import io.github.triptu.notes.syncing.GitHubSync
@@ -36,7 +37,7 @@ class AppGraph(context: Context) {
     val index = VaultIndex(store, File(context.cacheDir, "vault-index.bin"), scope)
     val settings = SettingsStore(context.getSharedPreferences("settings", Context.MODE_PRIVATE))
     val capture = CaptureService(store) { settings.capture.value }
-    val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope)
+    val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope) { SampleVault.paths(context) }
     val images = NoteImages(vaultFiles, sync, context.resources.displayMetrics.widthPixels)
     val expandedFolders = ExpandedFolders(
         PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },

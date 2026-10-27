@@ -9,4 +9,7 @@ object SampleVault {
 
     @Suppress("UNUSED_PARAMETER")
     suspend fun load(context: Context, graph: AppGraph) = Unit
+
+    @Suppress("UNUSED_PARAMETER")
+    fun paths(context: Context): List<String> = emptyList()
 }

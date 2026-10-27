@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import io.github.triptu.notes.BuildConfig
 import io.github.triptu.notes.settings.SettingsStore
 import io.github.triptu.notes.sync.EnrollResult
 import io.github.triptu.notes.sync.EnrollmentPreview
@@ -26,7 +27,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -68,6 +68,8 @@ class GitHubSync(
     private val store: VaultStore,
     private val settings: SettingsStore,
     private val scope: CoroutineScope,
+    /** Vault paths of the debug sample notes (none in release builds). */
+    private val samplePaths: () -> List<String> = { emptyList() },
 ) {
     private val prefs = SyncPrefs(context.getSharedPreferences("sync", Context.MODE_PRIVATE))
     private val tokens = TokenVault(File(context.noBackupFilesDir, "github-token"))
@@ -79,8 +81,6 @@ class GitHubSync(
 
     private val _client = MutableStateFlow<SyncClient?>(null)
 
-    /** Debug builds only: a made-up status for screenshots of states that are hard to cause. */
-    private val demoStatus = MutableStateFlow<SyncStatus?>(null)
     private val _target = MutableStateFlow(prefs.target)
 
     /** Set while sync is set up. */
@@ -89,7 +89,6 @@ class GitHubSync(
     @OptIn(ExperimentalCoroutinesApi::class)
     val status: StateFlow<SyncStatus> = _client
         .flatMapLatest { it?.status ?: flowOf(SyncStatus.NotSetUp) }
-        .combine(demoStatus) { real, demo -> demo ?: real }
         .stateIn(scope, SharingStarted.Eagerly, SyncStatus.NotSetUp)
 
     private val _setup = MutableStateFlow<SetupState>(SetupState.Idle)
@@ -119,7 +118,7 @@ class GitHubSync(
     @Volatile private var trialToken: String? = null
     private var candidate: Candidate? = null
     private var clientJobs: Job? = null
-    private val settled = HashSet<String>()
+    private val settler = ConflictSettler()
 
     private class Candidate(val client: SyncClient, val target: SyncTarget, val token: String, val preview: EnrollmentPreview)
 
@@ -251,11 +250,11 @@ class GitHubSync(
         _setup.value = SetupState.Failed(message)
     }
 
-    /** The debug sample vault must never reach a real repository. */
+    /** The debug sample vault must never reach a real repository. Notes written since stay. */
     private suspend fun clearSampleVault() {
         val vault = files.value
-        for (entry in vault.list()) vault.delete(entry.path)
-        vault.root.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }?.forEach { it.deleteRecursively() }
+        // Deleting a note also removes folders it leaves empty.
+        for (path in samplePaths()) vault.delete(path)
         settings.setSampleVaultLoaded(false)
         settings.resetPins()
         store.notifyExternalChange()
@@ -309,7 +308,7 @@ class GitHubSync(
                 _deletion.value = null
                 _conflictProblem.value = null
                 _firstSync.value = false
-                settled.clear()
+                settler.reset()
             }
         }
     }
@@ -322,7 +321,7 @@ class GitHubSync(
         config = SyncConfig(owner = target.owner, repository = target.repository, branch = target.branch, deviceName = deviceName()),
         tokens = { trialToken ?: tokens.read() },
         engineScript = engine,
-        log = { Log.d(Tag, it) },
+        log = if (BuildConfig.DEBUG) ({ Log.d(Tag, it) }) else ({}),
     )
 
     private fun activate(client: SyncClient) {
@@ -337,7 +336,7 @@ class GitHubSync(
     }
 
     private suspend fun onStatus(client: SyncClient, status: SyncStatus) {
-        Log.i(Tag, if (status is SyncStatus.Error) "status: Error(${status.error.kind}, ${status.error.detail})" else "status: $status")
+        Log.i(Tag, "status: ${describe(status)}")
         if (status is SyncStatus.Conflict) settle(client, status.conflicts)
         if (status is SyncStatus.Idle) {
             _deletion.value = null
@@ -354,52 +353,10 @@ class GitHubSync(
         }
     }
 
-    /**
-     * The user's rule for conflicts: never block on a dialog. A note edited on both sides keeps
-     * both versions inline ([BothVersions]); an edit beats a deletion; other files keep both copies.
-     * Only a bulk deletion waits for a choice, and names differing in case wait for a rename.
-     */
     private suspend fun settle(client: SyncClient, conflicts: List<SyncConflict>) {
-        var deletion: DeletionDecision? = null
-        var problem: String? = null
-        for (conflict in conflicts) {
-            if (conflict.id in settled) continue
-            val resolution: Resolution? = when (conflict.kind) {
-                "content", "add-add" -> {
-                    val mine = conflict.local?.text
-                    val theirs = conflict.remote?.text
-                    when {
-                        mine != null && theirs != null && "edit" in conflict.choices ->
-                            Resolution.Edited(BothVersions.merge(conflict.base?.text, mine, theirs))
-                        "both" in conflict.choices -> Resolution.Both
-                        else -> null
-                    }
-                }
-                "local-deleted-remote-edited" -> Resolution.Theirs
-                "local-edited-remote-deleted" -> Resolution.Mine
-                "bulk-deletion" -> {
-                    deletion = deletion ?: DeletionDecision(conflict.id, conflict.direction, conflict.paths.size)
-                    null
-                }
-                "collision" -> {
-                    problem = problem ?: SyncCopy.collision(conflict.paths)
-                    null
-                }
-                else -> null
-            }
-            if (resolution == null) {
-                if (conflict.kind != "bulk-deletion" && conflict.kind != "collision") problem = problem ?: SyncCopy.needsChoice(conflict.path)
-                continue
-            }
-            settled += conflict.id
-            try {
-                client.resolve(conflict.id, resolution)
-            } catch (e: SyncError) {
-                // Stale or refused: the next sync reports it again with a new id.
-            }
-        }
-        _deletion.value = deletion
-        _conflictProblem.value = problem
+        val left = settler.settle(conflicts) { id, resolution -> client.resolve(id, resolution) }
+        _deletion.value = left.deletion
+        _conflictProblem.value = left.problem
     }
 
     /** [keepThisPhone]: this phone's side of the deletion; otherwise GitHub's. */
@@ -425,13 +382,6 @@ class GitHubSync(
         return client.fetchAttachment(path)
     }
 
-    /** Debug builds only: shows [status] instead of the real one (null: back to real), see MainActivity. */
-    fun demo(status: SyncStatus?, firstSync: Boolean = false, setup: SetupState? = null) {
-        demoStatus.value = status
-        _firstSync.value = firstSync
-        if (setup != null) _setup.value = setup
-    }
-
     @Volatile private var remoteListing: Pair<Long, List<String>>? = null
 
     /** Every path on GitHub, at most five minutes old. Throws [SyncError]. */
@@ -446,6 +396,16 @@ class GitHubSync(
 
     companion object {
         private const val Tag = "NotesSync"
+
+        /** For logs: the kind of status and counts, never note text or paths. */
+        fun describe(status: SyncStatus): String = when (status) {
+            is SyncStatus.Error -> "error (${status.error.kind})"
+            is SyncStatus.Conflict -> "conflict (${status.conflicts.size}: ${status.conflicts.joinToString { it.kind }})"
+            is SyncStatus.Syncing -> "syncing ${status.done ?: "-"}/${status.total ?: "-"}"
+            is SyncStatus.Idle -> "idle${if (status.notice != null) " with a notice" else ""}"
+            is SyncStatus.Offline -> "offline"
+            SyncStatus.NotSetUp -> "not set up"
+        }
 
         fun message(error: SyncError): String = when (error.kind) {
             SyncError.Kind.Offline -> SyncCopy.Offline

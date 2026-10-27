@@ -44,6 +44,22 @@ object SampleVault {
         )
     }
 
+    /** Vault paths of every sample note, so setting up sync can remove exactly those. */
+    fun paths(context: Context): List<String> {
+        val out = ArrayList<String>()
+        copyNames(context.assets, AssetRoot, "", out)
+        return out
+    }
+
+    private fun copyNames(assets: AssetManager, assetPath: String, relative: String, out: MutableList<String>) {
+        val children = assets.list(assetPath).orEmpty()
+        if (children.isEmpty()) {
+            if (relative.endsWith(NotePath.MD)) out += relative
+            return
+        }
+        for (child in children) copyNames(assets, "$assetPath/$child", if (relative.isEmpty()) child else "$relative/$child", out)
+    }
+
     private fun copy(assets: AssetManager, assetPath: String, relative: String = "", onFile: (String, ByteArray) -> Unit) {
         val children = assets.list(assetPath).orEmpty()
         if (children.isEmpty()) {

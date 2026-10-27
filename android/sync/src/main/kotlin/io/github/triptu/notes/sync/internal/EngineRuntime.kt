@@ -115,7 +115,8 @@ internal class EngineRuntime(
                 val spec = args[0] as String
                 val started = System.currentTimeMillis()
                 val reply = withContext(Dispatchers.IO) { http.request(spec) }
-                log("http ${Json.parse(spec).obj().let { "${it.str("method") ?: "GET"} ${it.str("url")?.substringAfter("api.github.com")}" }} -> ${reply.substring(0, minOf(14, reply.length))} in ${System.currentTimeMillis() - started} ms")
+                // Method, status and time only: URLs carry note paths.
+                log("http ${Json.parse(spec).obj().str("method") ?: "GET"} -> ${Json.parse(reply).obj()["status"]} in ${System.currentTimeMillis() - started} ms")
                 reply
             })
             asyncFunction("archive", async { args ->
