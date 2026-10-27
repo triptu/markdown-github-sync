@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.triptu.notes.capture.CaptureSettings
@@ -105,6 +106,10 @@ fun AppRoot(vm: MainViewModel) {
     var noteFocused by remember { mutableStateOf(false) }
     val typing = WindowInsets.isImeVisible && noteFocused
     val noteHost = Modifier.onFocusEvent { noteFocused = it.hasFocus }
+    // A screen opening over the note takes its cursor and keyboard, or the note's handles show through.
+    val cover = vm.overlays.cover
+    val focus = LocalFocusManager.current
+    LaunchedEffect(cover) { if (cover != null && cover !is Overlay.Editor) focus.clearFocus() }
 
     @Composable
     fun Screen(overlay: Overlay?, modifier: Modifier = Modifier, empty: @Composable () -> Unit = { Box(Modifier.fillMaxSize()) }) {
@@ -115,7 +120,7 @@ fun AppRoot(vm: MainViewModel) {
         when (panes) {
             Panes.One -> {
                 ListPages(vm, pager, ::go, pins, capture, Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
-                Screen(vm.overlays.cover, noteHost)
+                Screen(cover, noteHost)
             }
             Panes.Two -> {
                 Row(Modifier.fillMaxSize()) {
@@ -128,7 +133,7 @@ fun AppRoot(vm: MainViewModel) {
                     }
                     Screen(vm.overlays.note, Modifier.weight(1f).fillMaxHeight().then(noteHost), empty = { NoNote() })
                 }
-                Screen(vm.overlays.cover)
+                Screen(cover)
             }
         }
 
