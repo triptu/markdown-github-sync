@@ -1,6 +1,6 @@
 # Maintainer guide
 
-GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. Its one real user syncs the vault `notes` (repository `your-name/notes`) between a Mac and an Android phone. This repository, `triptu/cloud-vault-sync`, is the plugin's source.
+GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. This repository, `triptu/markdown-github-sync`, is the plugin's source. Personal details for the maintainer's own setup (vault paths, the vault repository, devices) live in `CLAUDE.local.md`, which git ignores; this repository is public, so keep them out of tracked files.
 
 ## Layout
 
@@ -30,11 +30,11 @@ Every device with the updater installs the new version within about 6 hours. You
 
 The updater itself never updates automatically, so keep it small and stable. To change it, bump `plugin/updater/manifest.json` and copy `dist/github-vault-sync-updater/*` into `.obsidian/plugins/github-vault-sync-updater/` on one device. Config sync carries it to the other devices once the change is approved under Obsidian settings.
 
-The updater reads the token through the sync plugin's `data.json` (`secretId`), from Obsidian's secret storage. The token is a fine-grained PAT. It needs Contents read/write on `your-name/notes` and Contents read on `triptu/cloud-vault-sync`. If the token expires, both sync and updates stop. Sync shows this in settings; the updater fails silently.
+The updater reads the token through the sync plugin's `data.json` (`secretId`), from Obsidian's secret storage. The token is a fine-grained PAT. It needs Contents read/write on the vault repository. The plugin repository is public, so updates need no extra access. If the token expires, both sync and updates stop. Sync shows this in settings; the updater fails silently.
 
 ## Testing on the phone
 
-The phone is an Android phone on wireless adb. Use `adb devices` to find its serial and set `ADB_SERIAL` if more than one device is listed. The vault is at `/sdcard/Documents/vault`.
+Test on an Android phone over wireless adb. Use `adb devices` to find its serial and set `ADB_SERIAL` if more than one device is listed. Set `VAULT_DIR` to the vault's folder on the phone (for example `/sdcard/Documents/<vault>`) before running `deploy.sh`.
 
 - `scripts/device/deploy.sh` installs `dist/` directly and restarts Obsidian.
 - `node scripts/device/cdp.mjs "$(scripts/device/connect.sh)" scripts/device/<probe>.mjs` evaluates code inside the running app over Chrome DevTools.
@@ -47,7 +47,7 @@ The phone is an Android phone on wireless adb. Use `adb devices` to find its ser
 
 When Android dozes or backgrounds Obsidian, it cuts the network. DNS failures (`UnknownHostException`) then look like "offline", and `document.hidden` is true, so background syncs are skipped by design. Wake the phone before concluding something is broken.
 
-The desktop vault is `~/vault`. Desktop Obsidian reads plugin files only on load, so reload the app after copying files in.
+Desktop Obsidian reads plugin files only on load, so reload the app after copying files in.
 
 ## Design rules the user cares about
 

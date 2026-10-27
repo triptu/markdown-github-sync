@@ -3,3 +3,4 @@ dist/
 *.log
 *.cpuprofile
 .DS_Store
+CLAUDE.local.md
