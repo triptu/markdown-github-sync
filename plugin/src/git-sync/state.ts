@@ -669,13 +669,19 @@ export async function parseState(value: unknown): Promise<StoredState> {
   // Bounded by one state's blob table; strings are shared with the parsed state.
   verifiedBlobs = checked;
 
-  const rawScope = object(field(raw, "scope"), `${at}.scope`, ["rules", "configDir", "gitignore", "digest"]);
+  const scopeObject = field(raw, "scope");
+  const hasExclusions = typeof scopeObject === "object" && scopeObject !== null && Object.hasOwn(scopeObject, "excludedExtensions");
+  const rawScope = object(scopeObject, `${at}.scope`, ["rules", "configDir", "gitignore", "digest", ...(hasExclusions ? ["excludedExtensions"] : [])]);
   const configDir = text(field(rawScope, "configDir"), `${at}.scope.configDir`);
   if (!isValidPath(configDir) || !configDir.startsWith(".") || configDir.includes("/")) fail(`${at}.scope.configDir`, "invalid config directory");
+  const extensions = hasExclusions ? field(rawScope, "excludedExtensions") : undefined;
+  if (hasExclusions && (!Array.isArray(extensions) || extensions.some((item) => typeof item !== "string")))
+    fail(`${at}.scope.excludedExtensions`, "expected a list of extensions");
   const scope: StoredState["scope"] = {
     rules: literal(field(rawScope, "rules"), `${at}.scope.rules`, ["config/1"] as const),
     configDir,
     gitignore: nullable(field(rawScope, "gitignore"), `${at}.scope.gitignore`, oid),
+    ...(Array.isArray(extensions) ? { excludedExtensions: extensions.slice() } : {}),
     digest: oid(field(rawScope, "digest"), `${at}.scope.digest`),
   };
   const deferred: StoredState["deferred"] = safeDictionary();

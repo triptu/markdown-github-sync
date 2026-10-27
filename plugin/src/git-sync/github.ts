@@ -43,6 +43,8 @@ export interface GitHubRepositoryOptions {
   now?: () => number;
   /** Vault configuration directory; defaults to `.obsidian`. */
   configDir?: string;
+  /** Device-local scope exclusion by file extension (see `ScopeRules.excludedExtensions`). */
+  excludedExtensions?: readonly string[];
   /**
    * Snapshot blob download progress: `(0, total)` before the first download,
    * then once per verified blob. Not called when every blob is already known.
@@ -537,7 +539,7 @@ export class GitHubRepository implements Repository {
       if (!rootIgnore || rootIgnore.mode !== "100644" && rootIgnore.mode !== "100755" || rootIgnore.size === undefined)
         throw new GitHubError("Unsupported root .gitignore entry");
       return decode(await this.blob(hash, size(rootIgnore.size)));
-    }, this.configDir);
+    }, this.configDir, this.options.excludedExtensions);
     if (this.scopeCache.size >= 256) {
       const oldest = this.scopeCache.keys().next();
       if (!oldest.done) this.scopeCache.delete(oldest.value);
@@ -776,7 +778,7 @@ export class GitHubRepository implements Repository {
     const ignoreText = rootIgnore === undefined ? await this.readRootGitignore(value.oid) :
       rootIgnore === null ? null : new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(decode(rootIgnore.data));
     const ignoreOid = rootIgnore === undefined ? parentScope.rules.gitignore : rootIgnore?.oid ?? null;
-    const candidateScope = await compileScope({ rules: "config/1", configDir: this.configDir, gitignore: ignoreOid }, ignoreText);
+    const candidateScope = await compileScope({ ...parentScope.rules, gitignore: ignoreOid }, ignoreText);
     for (const path of checked.keys()) if (!candidateScope.includes(path))
       throw new GitHubError("Change excluded by candidate .gitignore");
     assertNoNestedGitignore(Array.from(new Set([...items.map(item => item.path), ...checked.keys()])));
