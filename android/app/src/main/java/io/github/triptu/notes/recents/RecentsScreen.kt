@@ -32,6 +32,7 @@ import io.github.triptu.notes.home.PinIcons
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.ui.HomeSide
 import io.github.triptu.notes.ui.PageBar
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.pressable
@@ -49,7 +50,7 @@ private const val TaskGlyph = "task"
 @Composable
 fun RecentsScreen(feed: RecentsFeed, weeklyFolder: FolderPath, onHome: () -> Unit, onOpen: (RecentCard) -> Unit) {
     val colors = NotesTheme.colors
-    Column(Modifier.fillMaxSize()) {
+    ReadingColumn {
         PageBar("Recents", HomeSide.Start, onHome)
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (feed.isEmpty) {

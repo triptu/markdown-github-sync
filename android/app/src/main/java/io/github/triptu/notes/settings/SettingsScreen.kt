@@ -45,6 +45,7 @@ import io.github.triptu.notes.capture.WeeklyNote
 import io.github.triptu.notes.syncing.GitHubSync
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.ui.pressable
 import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
@@ -67,9 +68,8 @@ fun SettingsScreen(
     onVoiceSettings: ((VoiceSettings) -> VoiceSettings) -> Unit = {},
 ) {
     val colors = NotesTheme.colors
-    Column(
+    ReadingColumn(
         Modifier
-            .fillMaxSize()
             .background(colors.bg)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),

@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
@@ -104,6 +105,7 @@ import androidx.compose.ui.unit.IntSize
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
+import io.github.triptu.notes.ui.ReadingWidth
 import io.github.triptu.notes.ui.TaskBoxSize
 import io.github.triptu.notes.ui.drawTaskBox
 import io.github.triptu.notes.ui.pressable
@@ -171,29 +173,28 @@ fun EditorScreen(
         val defaultSpec = LocalBringIntoViewSpec.current
         CompositionLocalProvider(LocalBringIntoViewSpec provides keepClear) {
             Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .padding(top = TopBarHeight)
-                    .padding(horizontal = PagePadding),
+                Modifier.fillMaxSize().verticalScroll(scroll).padding(top = TopBarHeight),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 // Only the page keeps clear. The text field's own scroller can't move, so it would
                 // hand the margins up to the page as extra scrolling.
                 CompositionLocalProvider(LocalBringIntoViewSpec provides defaultSpec) {
-                    Title(session, onDone = { bodyFocus.requestFocus() })
-                    if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
-                    // Tapping the empty space under the text puts the cursor at the end. It is taller
-                    // than the mic, so the last lines can always scroll above it.
-                    Spacer(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 240.dp)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
-                                bodyFocus.requestFocus()
-                            },
-                    )
+                    Column(Modifier.widthIn(max = ReadingWidth).fillMaxWidth().padding(horizontal = PagePadding)) {
+                        Title(session, onDone = { bodyFocus.requestFocus() })
+                        if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
+                    }
                 }
+                // Tapping the empty space under the text puts the cursor at the end. It is taller
+                // than the mic, so the last lines can always scroll above it.
+                Spacer(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 240.dp)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
+                            bodyFocus.requestFocus()
+                        },
+                )
             }
         }
         // The bar floats over the text, so it can leave while typing without moving a line.
@@ -223,7 +224,7 @@ fun EditorScreen(
             exit = fadeOut(tween(90)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            LinkSuggestions(shownChoices[0], onPick = session::completeLink)
+            LinkSuggestions(shownChoices[0], onPick = session::completeLink, modifier = Modifier.widthIn(max = ReadingWidth))
         }
     }
 }

@@ -8,6 +8,9 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,6 +47,17 @@ import io.github.triptu.notes.ui.theme.NotesType
 
 /** Horizontal padding of every page, from the mockup. */
 val PagePadding = 20.dp
+
+/** Lines longer than this read badly, so a wide window centres each screen in a column of this width. */
+val ReadingWidth = 640.dp
+
+/** A full-height column centred in the window and no wider than [ReadingWidth]. On a phone it is the window. */
+@Composable
+fun ReadingColumn(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = ReadingWidth).fillMaxSize(), content = content)
+    }
+}
 
 @Composable
 fun PhIcon(@DrawableRes icon: Int, contentDescription: String?, size: Dp = 24.dp, tint: Color = NotesTheme.colors.ink2, modifier: Modifier = Modifier) {
