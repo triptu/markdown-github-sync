@@ -33,12 +33,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
@@ -68,6 +68,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -105,6 +107,7 @@ import androidx.compose.ui.unit.IntSize
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
+import io.github.triptu.notes.ui.ReadingWidth
 import io.github.triptu.notes.ui.TaskBoxSize
 import io.github.triptu.notes.ui.drawTaskBox
 import io.github.triptu.notes.ui.pressable
@@ -112,11 +115,13 @@ import io.github.triptu.notes.ui.theme.NotesTheme
 import io.github.triptu.notes.ui.theme.NotesType
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     session: EditorSession,
     isPinned: Boolean,
+    /** The keyboard is up for this note: the bar leaves and the text has the screen. */
+    typing: Boolean,
     onBack: () -> Unit,
     onTogglePin: () -> Unit,
     onOpenLink: (String) -> Unit,
@@ -145,7 +150,6 @@ fun EditorScreen(
     // Back closes the link suggestions before it closes the note.
     BackHandler(enabled = session.linkStart != null) { session.dismissLink() }
 
-    val typing = WindowInsets.isImeVisible
     val linkQuery = session.linkQuery.takeIf { typing }
     val linkChoices = remember(linkQuery?.query, session.path) { linkQuery?.let(session::linkChoices).orEmpty() }
     val linking = linkChoices.isNotEmpty()
@@ -171,31 +175,32 @@ fun EditorScreen(
         val defaultSpec = LocalBringIntoViewSpec.current
         CompositionLocalProvider(LocalBringIntoViewSpec provides keepClear) {
             Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .padding(top = TopBarHeight)
-                    .padding(horizontal = PagePadding),
+                Modifier.fillMaxSize().verticalScroll(scroll).padding(top = TopBarHeight),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 // Only the page keeps clear. The text field's own scroller can't move, so it would
                 // hand the margins up to the page as extra scrolling.
                 CompositionLocalProvider(LocalBringIntoViewSpec provides defaultSpec) {
-                    Title(session, onDone = { bodyFocus.requestFocus() })
-                    if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
-                    // Tapping the empty space under the text puts the cursor at the end. It is taller
-                    // than the mic, so the last lines can always scroll above it.
-                    Spacer(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 240.dp)
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                                session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
-                                bodyFocus.requestFocus()
-                            },
-                    )
+                    Column(Modifier.widthIn(max = ReadingWidth).fillMaxWidth().padding(horizontal = PagePadding)) {
+                        Title(session, onDone = { bodyFocus.requestFocus() })
+                        if (session.loaded) Body(session, bodyFocus, onOpenLink, scroll, images)
+                    }
                 }
+                // Tapping the empty space under the text puts the cursor at the end. It is taller
+                // than the mic, so the last lines can always scroll above it.
+                Spacer(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 240.dp)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            session.onValueChange(session.value.copy(selection = TextRange(session.value.text.length)))
+                            bodyFocus.requestFocus()
+                        },
+                )
             }
         }
+        // With the bar away, lines scrolling out at the top fade instead of being cut off.
+        Box(Modifier.fillMaxWidth().height(TopFade).background(Brush.verticalGradient(listOf(colors.bg, Color.Transparent))))
         // The bar floats over the text, so it can leave while typing without moving a line.
         AnimatedVisibility(
             visible = !typing,
@@ -223,12 +228,13 @@ fun EditorScreen(
             exit = fadeOut(tween(90)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            LinkSuggestions(shownChoices[0], onPick = session::completeLink)
+            LinkSuggestions(shownChoices[0], onPick = session::completeLink, modifier = Modifier.widthIn(max = ReadingWidth))
         }
     }
 }
 
 private val TopBarHeight = 48.dp
+private val TopFade = 24.dp
 private val MicSize = 56.dp
 private val MicMargin = 16.dp
 

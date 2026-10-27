@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -26,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpOffset
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.QuietButton
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.voice.VoiceCopy
 import io.github.triptu.notes.voice.VoiceDraft
 import androidx.compose.foundation.layout.Spacer
@@ -77,7 +77,7 @@ fun HomeScreen(
     onResurfaced: (NotePath) -> Unit = {},
     onPutAway: () -> Unit = {},
 ) {
-    Column(Modifier.fillMaxSize()) {
+    ReadingColumn {
         HintsRow(left = "Vault", right = "Recents", onLeft = onVault, onRight = onRecents) { OfflineMark(syncBar.offline) }
         SyncLines(syncBar.notices, onFixToken, onRetrySync, onOpenBothVersions, onDeletion)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {

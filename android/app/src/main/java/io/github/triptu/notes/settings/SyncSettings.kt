@@ -47,6 +47,7 @@ import io.github.triptu.notes.syncing.SyncCopy
 import io.github.triptu.notes.syncing.SyncTarget
 import io.github.triptu.notes.syncing.TokenState
 import io.github.triptu.notes.ui.PagePadding
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.PillButton
 import io.github.triptu.notes.ui.QuietButton
@@ -195,9 +196,8 @@ fun SetupScreen(sync: GitHubSync, onDone: () -> Unit) {
     val colors = NotesTheme.colors
     val setup by sync.setup.collectAsStateWithLifecycle()
     LaunchedEffect(setup) { if (setup == SetupState.Done) onDone() }
-    Column(
+    ReadingColumn(
         Modifier
-            .fillMaxSize()
             .background(colors.bg)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),

@@ -56,6 +56,7 @@ import androidx.core.content.ContextCompat
 import io.github.triptu.notes.R
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.ui.PhIcon
 import io.github.triptu.notes.ui.QuietButton
 import androidx.compose.ui.platform.LocalFocusManager
@@ -101,9 +102,8 @@ fun VoiceScreen(session: VoiceSession, onClose: () -> Unit, onSave: () -> Unit, 
         onDispose { view.keepScreenOn = false }
     }
 
-    Column(
+    ReadingColumn(
         Modifier
-            .fillMaxSize()
             .background(colors.bg)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars),

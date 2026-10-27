@@ -63,6 +63,7 @@ import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.ui.BarTarget
 import io.github.triptu.notes.ui.HomeSide
 import io.github.triptu.notes.ui.PageBar
+import io.github.triptu.notes.ui.ReadingColumn
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.ListRow
 import io.github.triptu.notes.ui.PagePadding
@@ -177,7 +178,7 @@ fun VaultScreen(
         null -> Unit
     }
 
-    Column(Modifier.fillMaxSize()) {
+    ReadingColumn {
         PageBar("Vault", HomeSide.End, onHome) {
             IconButton48(R.drawable.ph_gear_six, "Settings", onSettings, tint = colors.muted, size = BarTarget)
         }

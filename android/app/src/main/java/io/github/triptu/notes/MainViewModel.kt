@@ -2,7 +2,6 @@ package io.github.triptu.notes
 
 import android.app.Application
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -53,23 +52,11 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-/** A screen drawn over the pager. */
-sealed interface Overlay {
-    data class Editor(val session: EditorSession) : Overlay
-    /** [focusToken]: opened because GitHub refused the token. */
-    data class Settings(val focusToken: Boolean = false) : Overlay
-    /** First run: connect GitHub sync, or skip. */
-    data object Setup : Overlay
-
-    /** The speaking view. */
-    data class Voice(val session: VoiceSession) : Overlay
-}
-
 /** Navigation and screen state for the one activity. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     val graph = app.graph
 
-    val overlays = mutableStateListOf<Overlay>()
+    val overlays = Overlays(graph.mainScope)
 
     val vaultTree = VaultTreeModel(graph.index, graph.expandedFolders, viewModelScope)
 
@@ -163,15 +150,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A note that holds both versions of some lines: open it at the first one. */
     fun openBothVersions(path: NotePath) = openNote(path, reveal = BothVersions.Mine)
 
-    fun openNote(path: NotePath, reveal: String? = null) = push(EditorTarget.Open(path, reveal))
+    fun openNote(path: NotePath, reveal: String? = null) = show(EditorTarget.Open(path, reveal))
 
     /** A new note from Home, in the new-note folder. */
-    fun newNote() = push(EditorTarget.New(graph.capture.newNoteFolder))
+    fun newNote() = show(EditorTarget.New(graph.capture.newNoteFolder))
 
     /** A new note in a Vault folder. The folder is shown open when the user comes back. */
     fun newNoteIn(folder: FolderPath) {
         vaultTree.reveal(folder, scroll = false)
-        push(EditorTarget.New(folder))
+        show(EditorTarget.New(folder))
     }
 
     /** An action from a widget, the tile, a shortcut or the share sheet. An open speaking view keeps its words as a draft. */
@@ -254,7 +241,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val folder = (session.target as? VoiceTarget.NewNote)?.folder ?: graph.capture.newNoteFolder
-        push(EditorTarget.New(folder, text))
+        show(EditorTarget.New(folder, text))
     }
 
     /** X, Back, or the app closing the view: the words are kept as a draft for Home to offer. */
@@ -274,12 +261,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val (id, draft) = voiceDraft.value ?: return
         graph.voice.dropDraft(id)
         when (val target = draft.target) {
-            is VoiceTarget.NewNote -> push(EditorTarget.New(target.folder, draft.text))
+            is VoiceTarget.NewNote -> show(EditorTarget.New(target.folder, draft.text))
             is VoiceTarget.IntoNote -> viewModelScope.launch {
                 if (graph.store.exists(target.path)) {
-                    push(EditorTarget.Open(target.path, cursorAt = target.cursor, insert = draft.text))
+                    show(EditorTarget.Open(target.path, cursorAt = target.cursor, insert = draft.text))
                 } else {
-                    push(EditorTarget.New(graph.capture.newNoteFolder, draft.text))
+                    show(EditorTarget.New(graph.capture.newNoteFolder, draft.text))
                 }
             }
         }
@@ -353,11 +340,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         lastDeleted = null
     }
 
-    /** Opens the note a `[[link]]` names, creating it first if it doesn't exist. */
+    /** Opens the note a `[[link]]` names over the one holding the link, creating it first if it doesn't exist. */
     fun openLink(target: String) {
         val existing = VaultQueries.resolveLink(graph.index.snapshot.value, target)
-        if (existing != null) return openNote(existing)
-        viewModelScope.launch { openNote(graph.capture.createLinked(target)) }
+        if (existing != null) return push(EditorTarget.Open(existing))
+        viewModelScope.launch { push(EditorTarget.Open(graph.capture.createLinked(target))) }
     }
 
     /** Opens this week's note with the cursor where writing continues (see [WeeklyNote.writingPosition]). */
@@ -365,7 +352,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val path = graph.capture.ensureWeekly(LocalDateTime.now())
             val text = graph.store.read(path).orEmpty()
-            push(EditorTarget.Open(path, cursorAt = WeeklyNote.writingPosition(text)))
+            show(EditorTarget.Open(path, cursorAt = WeeklyNote.writingPosition(text)))
         }
     }
 
@@ -380,8 +367,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             dismissVoice()
             return true
         }
-        val top = overlays.removeLastOrNull() ?: return false
-        if (top is Overlay.Editor) top.session.close(graph.mainScope)
+        val top = overlays.lastOrNull() ?: return false
+        overlays.close(top)
         return true
     }
 
@@ -404,9 +391,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         overlays.filterIsInstance<Overlay.Editor>().forEach { graph.mainScope.launch { it.session.flush() } }
     }
 
+    /** A note opened from the list, a widget or the speaking view: see [Overlays.show]. */
+    private fun show(target: EditorTarget) = overlays.show(Overlay.Editor(session(target)))
+
+    /** A note opened from inside another stacks over it, so Back returns there. */
     private fun push(target: EditorTarget) {
-        overlays += Overlay.Editor(EditorSession(target, graph.store, graph.index, graph.capture, viewModelScope))
+        overlays += Overlay.Editor(session(target))
     }
+
+    private fun session(target: EditorTarget) = EditorSession(target, graph.store, graph.index, graph.capture, viewModelScope)
 
     override fun onCleared() {
         overlays.filterIsInstance<Overlay.Voice>().forEach { voice ->
