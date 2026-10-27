@@ -21,6 +21,19 @@ class VaultFilesTest {
     private fun data(text: String) = Base64.getEncoder().encodeToString(text.toByteArray())
 
     @Test
+    fun updateTextChangesInOneStep() {
+        var changes = 0
+        vault.onLocalChange = { changes++ }
+        assertEquals("a\n", vault.updateText("n.md") { it.orEmpty() + "a\n" })
+        assertEquals("a\nb\n", vault.updateText("n.md") { it + "b\n" })
+        // No change, or a refusal, writes nothing and tells no one.
+        assertEquals(null, vault.updateText("n.md") { it })
+        assertEquals(null, vault.updateText("n.md") { null })
+        assertEquals("a\nb\n", vault.readText("n.md"))
+        assertEquals(2, changes)
+    }
+
+    @Test
     fun applyIsCompareAndSwap() {
         assertEquals("applied", vault.apply("a/b.md", null, data("one"), oid("one"), false))
         assertEquals("one", vault.readText("a/b.md"))

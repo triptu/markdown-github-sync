@@ -65,6 +65,16 @@ class FileVaultStore(
         return stat
     }
 
+    override suspend fun update(path: NotePath, change: (String?) -> String?): String? {
+        val (text, stat) = withContext(io) {
+            val text = refusalsAsIo { files.updateText(path.value, change) } ?: return@withContext null to null
+            val target = fileOf(path)
+            text to NoteStat(path, target.lastModified(), target.length())
+        }
+        if (text != null && stat != null) _changes.emit(VaultChange.Written(path, text, stat))
+        return text
+    }
+
     override suspend fun rename(from: NotePath, to: NotePath) {
         if (from == to) return
         withContext(io) { refusalsAsIo { files.move(from.value, to.value) } }

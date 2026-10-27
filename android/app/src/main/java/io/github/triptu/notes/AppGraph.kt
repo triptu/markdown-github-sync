@@ -5,6 +5,8 @@ import io.github.triptu.notes.capture.CaptureService
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import io.github.triptu.notes.library.ExpandedFolders
+import io.github.triptu.notes.quick.NoteWidgets
+import io.github.triptu.notes.quick.PinnedNoteWidget
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.PinKeeper
 import io.github.triptu.notes.settings.SampleVault
@@ -41,6 +43,8 @@ class AppGraph(context: Context) {
     val sync = GitHubSync(context.applicationContext, vaultFiles, store, settings, scope) { SampleVault.paths(context) }
     val voice = Voice(context.applicationContext, store, capture, settings, scope)
     val images = NoteImages(vaultFiles, sync, context.resources.displayMetrics.widthPixels)
+    val noteWidgets = NoteWidgets(context.getSharedPreferences("widgets", Context.MODE_PRIVATE), store, capture)
+    private val appContext = context.applicationContext
     val expandedFolders = ExpandedFolders(
         PreferenceDataStoreFactory.create(scope = scope) { context.preferencesDataStoreFile("library") },
         scope,
@@ -50,6 +54,7 @@ class AppGraph(context: Context) {
         index.start()
         sync.start()
         scope.launch { keepPinsAlive() }
+        scope.launch { noteWidgets.follow { PinnedNoteWidget.refreshAll(appContext) } }
         scope.launch {
             store.changes.collect { change ->
                 if (change is VaultChange.Renamed) settings.onNoteRenamed(change.from, change.to)

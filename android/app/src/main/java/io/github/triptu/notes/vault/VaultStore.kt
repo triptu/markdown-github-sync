@@ -38,6 +38,13 @@ interface VaultStore {
     /** Replaces the note's text atomically: readers see the old text or the new text, never a mix. */
     suspend fun write(path: NotePath, text: String): NoteStat
 
+    /**
+     * Reads, changes and writes a note in one step, so a sync can't land in between. [change]
+     * gets null for a missing note; returning null or the same text writes nothing. Returns the
+     * text written, or null.
+     */
+    suspend fun update(path: NotePath, change: (String?) -> String?): String?
+
     /** Fails if [to] already exists. */
     suspend fun rename(from: NotePath, to: NotePath)
 

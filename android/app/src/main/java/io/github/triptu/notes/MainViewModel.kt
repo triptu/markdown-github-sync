@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.triptu.notes.capture.WeeklyNote
 import io.github.triptu.notes.editor.EditorSession
 import io.github.triptu.notes.editor.EditorTarget
+import io.github.triptu.notes.quick.QuickAction
 import io.github.triptu.notes.recents.RecentsFeed
 import io.github.triptu.notes.recents.RecentsFeedBuilder
 import io.github.triptu.notes.library.VaultTreeModel
@@ -143,6 +144,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun newNoteIn(folder: FolderPath) {
         vaultTree.reveal(folder, scroll = false)
         push(EditorTarget.New(folder))
+    }
+
+    /** An action from a widget, the tile, a shortcut or the share sheet. An open speaking view keeps its words as a draft. */
+    fun runQuick(action: QuickAction) {
+        if (action == QuickAction.Voice && overlays.lastOrNull() is Overlay.Voice) return
+        if (overlays.lastOrNull() is Overlay.Voice) dismissVoice()
+        // A new note left blank on top is reused by New note and closed by anything else.
+        val blank = (overlays.lastOrNull() as? Overlay.Editor)?.session?.takeIf { it.isNew && it.value.text.isBlank() }
+        if (blank != null && action != QuickAction.NewNote) back()
+        when (action) {
+            QuickAction.NewNote -> if (blank != null) blank.requestKeyboard() else newNote()
+            QuickAction.Voice -> speakNewNote()
+            QuickAction.ThisWeek -> openThisWeek()
+            is QuickAction.OpenNote -> openNote(action.path)
+        }
     }
 
     // ---- Speaking ----------------------------------------------------------------

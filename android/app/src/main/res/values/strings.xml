@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Notes</string>
+    <!-- Labels the system shows for the widgets, the tile and the share target. The rest is in quick/QuickCopy.kt. -->
+    <string name="capture_widget_label">New note</string>
+    <string name="capture_widget_description">Write or speak a new note in one tap</string>
+    <string name="pinned_widget_label">Pinned note</string>
+    <string name="pinned_widget_description">A note on your home screen, with tasks you can tick</string>
+    <string name="voice_tile_label">Voice note</string>
+    <string name="share_label">Notes</string>
+    <!-- Made-up lines for the pinned-note widget's preview in the widget picker. -->
+    <string name="pinned_preview_title">Groceries</string>
+    <string name="pinned_preview_done">Oat milk</string>
+    <string name="pinned_preview_open">Lemons</string>
 </resources>

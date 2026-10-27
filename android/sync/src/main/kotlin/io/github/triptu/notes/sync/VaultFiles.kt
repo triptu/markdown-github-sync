@@ -58,6 +58,25 @@ class VaultFiles(val root: File) {
         onLocalChange?.invoke()
     }
 
+    /**
+     * Reads, changes and writes a text file in one step under the write lock, so a sync can't
+     * land between the read and the write. [change] gets null for a missing file; returning null
+     * or the same text writes nothing. Returns the text written, or null.
+     */
+    fun updateText(path: String, change: (String?) -> String?): String? {
+        val written = lock.withLock {
+            val file = resolveBelow(root, path)
+            val current = if (file.isFile) file.readText(Charsets.UTF_8) else null
+            val next = change(current)?.takeIf { it != current } ?: return@withLock null
+            ensureParents(file)?.let { error(it) }
+            check(!file.isDirectory) { "A folder already exists at $path" }
+            atomicWrite(file, next.toByteArray(Charsets.UTF_8), executable = file.isFile && file.canExecute())
+            next
+        }
+        if (written != null) onLocalChange?.invoke()
+        return written
+    }
+
     /** Deletes a file; returns false when it did not exist. */
     fun delete(path: String): Boolean {
         val deleted = lock.withLock {
