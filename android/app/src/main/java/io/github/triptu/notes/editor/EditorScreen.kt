@@ -68,6 +68,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -197,6 +199,8 @@ fun EditorScreen(
                 )
             }
         }
+        // With the bar away, lines scrolling out at the top fade instead of being cut off.
+        Box(Modifier.fillMaxWidth().height(TopFade).background(Brush.verticalGradient(listOf(colors.bg, Color.Transparent))))
         // The bar floats over the text, so it can leave while typing without moving a line.
         AnimatedVisibility(
             visible = !typing,
@@ -230,6 +234,7 @@ fun EditorScreen(
 }
 
 private val TopBarHeight = 48.dp
+private val TopFade = 24.dp
 private val MicSize = 56.dp
 private val MicMargin = 16.dp
 
