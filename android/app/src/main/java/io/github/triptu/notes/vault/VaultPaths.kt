@@ -10,6 +10,9 @@ value class NotePath(val value: String) : Comparable<NotePath> {
     /** File name without `.md`. This is the note's title. */
     val name: String get() = value.substringAfterLast('/').removeSuffix(MD)
 
+    /** The name to show people: [name] without a leading `YYYYMMDDHH ` stamp. */
+    val displayName: String get() = NoteNames.display(name)
+
     val folder: FolderPath get() = FolderPath(value.substringBeforeLast('/', ""))
 
     fun renamed(newName: String): NotePath = folder.note(newName)
@@ -49,6 +52,16 @@ value class FolderPath(val value: String) {
     companion object {
         val Root = FolderPath("")
     }
+}
+
+/** Zettelkasten names start with a `YYYYMMDDHH ` stamp. It stays on disk and is hidden on screen. */
+object NoteNames {
+    private val Stamp = Regex("""^\d{10} (?=\S)""")
+
+    fun display(name: String): String = name.replaceFirst(Stamp, "")
+
+    /** The stamp with its trailing space, or "" if the name has none. */
+    fun stamp(name: String): String = Stamp.find(name)?.value.orEmpty()
 }
 
 /** Characters that can't appear in a note name on Android, Obsidian's link syntax, or other platforms. */

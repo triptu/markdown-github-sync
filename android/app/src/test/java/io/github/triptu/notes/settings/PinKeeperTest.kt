@@ -23,16 +23,17 @@ class PinKeeperTest {
             Pin.Folder(FolderPath("Writing")),
             Pin.Note(NotePath("Old.md")),
             Pin.Folder(FolderPath("Work")),
+            Pin.ThisWeek,
         )
         assertEquals(
-            listOf(Pin.Note(NotePath("Tasks.md")), Pin.Folder(FolderPath("Drafts")), Pin.Folder(FolderPath("Work"))),
+            listOf(Pin.Note(NotePath("Tasks.md")), Pin.Folder(FolderPath("Drafts")), Pin.Folder(FolderPath("Work")), Pin.ThisWeek),
             PinKeeper.reconcile(pins, before, after),
         )
     }
 
     @Test
     fun `pins round trip through their stored form and stay typed`() {
-        val pins = listOf(Pin.Note(NotePath("Writing.md")), Pin.Folder(FolderPath("Writing")))
+        val pins = listOf(Pin.Note(NotePath("Writing.md")), Pin.Folder(FolderPath("Writing")), Pin.ThisWeek)
         assertEquals(pins, pins.map(Pin::encode).map(Pin::decode))
     }
 }

@@ -59,13 +59,14 @@ fun Modifier.pressable(
     bleed: Dp = 12.dp,
     label: String? = null,
     pressColor: Color = NotesTheme.colors.press,
+    selected: Boolean = false,
 ): Modifier {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val haptics = LocalHapticFeedback.current
     return this
         .clip(shape)
-        .background(if (pressed) pressColor else Color.Transparent)
+        .background(if (pressed || selected) pressColor else Color.Transparent)
         .combinedClickable(
             interactionSource = interaction,
             indication = null,
@@ -121,6 +122,7 @@ fun ListRow(
     textStyle: TextStyle = NotesType.row,
     iconTint: Color = NotesTheme.colors.ink2,
     gap: Dp = 16.dp,
+    selected: Boolean = false,
 ) {
     val colors = NotesTheme.colors
     Row(
@@ -128,7 +130,7 @@ fun ListRow(
             .fillMaxWidth()
             .heightIn(min = height)
             .padding(horizontal = PagePadding - 12.dp)
-            .pressable(onClick, onLongClick),
+            .pressable(onClick, onLongClick, selected = selected),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PhIcon(icon, null, 24.dp, iconTint)

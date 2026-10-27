@@ -77,11 +77,11 @@ private fun Entry(entry: LatelyEntry, onOpen: (NotePath) -> Unit) {
         Modifier
             .fillMaxWidth()
             .padding(horizontal = PagePadding - 12.dp)
-            .pressable({ onOpen(entry.path) }, label = "Open ${entry.path.name}")
+            .pressable({ onOpen(entry.path) }, label = "Open ${entry.path.displayName}")
             .padding(top = 14.dp, bottom = 16.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(entry.path.name, style = NotesType.entryHead.copy(fontWeight = FontWeight.Medium), color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(entry.path.displayName, style = NotesType.entryHead.copy(fontWeight = FontWeight.Medium), color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Text(entry.time, style = NotesType.entryHead, color = colors.muted, modifier = Modifier.padding(start = 12.dp))
         }
         Row(verticalAlignment = Alignment.Top) {
@@ -110,7 +110,7 @@ private fun YearAgoCard(old: Resurfaced, onOpen: (NotePath) -> Unit) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(colors.raised)
-            .pressable({ onOpen(old.path) }, shape = RoundedCornerShape(16.dp), bleed = 16.dp, label = "Open ${old.path.name}", pressColor = colors.sunk)
+            .pressable({ onOpen(old.path) }, shape = RoundedCornerShape(16.dp), bleed = 16.dp, label = "Open ${old.path.displayName}", pressColor = colors.sunk)
             .padding(top = 14.dp, bottom = 16.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {

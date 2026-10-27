@@ -345,7 +345,7 @@ private fun LinkSuggestions(session: EditorSession, query: LinkQuery) {
     if (suggestions.isEmpty() && !showCreate) return
     Column(Modifier.fillMaxWidth().background(colors.raised).padding(vertical = 4.dp)) {
         for (path in suggestions) {
-            SuggestionRow(path.name, path.folder.value.ifEmpty { null }) {
+            SuggestionRow(path.displayName, path.folder.value.ifEmpty { null }) {
                 session.onValueChange(EditOps.completeLink(session.value, query, path.name), newUndoStep = true)
             }
         }

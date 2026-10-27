@@ -16,7 +16,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.DpOffset
+import io.github.triptu.notes.ui.PagePadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +51,7 @@ fun HomeScreen(
     onLibrary: () -> Unit,
     onLately: () -> Unit,
     onPin: (Pin) -> Unit,
+    onUnpin: (Pin) -> Unit,
     onCompose: () -> Unit,
     onVoice: () -> Unit,
 ) {
@@ -64,15 +73,33 @@ fun HomeScreen(
                     )
                 }
                 for (pin in pins) {
-                    ListRow(
-                        icon = PinIcons.of(pin, weeklyFolder),
-                        text = pin.label,
-                        onClick = { onPin(pin) },
-                        height = if (compact) 54.dp else 60.dp,
-                        textStyle = if (compact) NotesType.pinCompact else NotesType.pin,
-                        iconTint = NotesTheme.colors.muted,
-                        gap = 18.dp,
-                    )
+                    // Long-press offers Unpin; the row stays highlighted while the menu is open.
+                    var menu by remember { mutableStateOf(false) }
+                    Box {
+                        ListRow(
+                            icon = PinIcons.of(pin, weeklyFolder),
+                            text = pin.label,
+                            onClick = { onPin(pin) },
+                            onLongClick = { menu = true },
+                            height = if (compact) 54.dp else 60.dp,
+                            textStyle = if (compact) NotesType.pinCompact else NotesType.pin,
+                            iconTint = NotesTheme.colors.muted,
+                            gap = 18.dp,
+                            selected = menu,
+                        )
+                        DropdownMenu(
+                            menu, { menu = false },
+                            offset = DpOffset(PagePadding, 0.dp),
+                            containerColor = NotesTheme.colors.raised,
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Unpin", style = NotesType.row, color = NotesTheme.colors.ink) },
+                                leadingIcon = { PhIcon(R.drawable.ph_push_pin, null, 20.dp, NotesTheme.colors.ink2) },
+                                onClick = { menu = false; onUnpin(pin) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -82,8 +109,9 @@ fun HomeScreen(
 
 private val Pin.label: String
     get() = when (this) {
-        is Pin.Note -> path.name
+        is Pin.Note -> path.displayName
         is Pin.Folder -> path.name
+        Pin.ThisWeek -> "This week"
     }
 
 /** The "New note" pill with the round mic button. */

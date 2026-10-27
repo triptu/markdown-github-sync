@@ -8,7 +8,6 @@ import io.github.triptu.notes.vault.NotePath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.time.LocalDateTime
 
 /** Debug builds only: copies a made-up vault into the app's vault folder for testing and screenshots. */
 object SampleVault {
@@ -27,23 +26,16 @@ object SampleVault {
                 minutesAgo[relative]?.let { file.setLastModified(now - it * 60_000) }
             }
         }
-        val thisWeek = graph.capture.weeklyPath(LocalDateTime.now())
         graph.index.refresh()
         graph.settings.setPins(
             listOf(
                 Pin.Note(NotePath("Todos.md")),
-                Pin.Note(latestWeekly(graph, thisWeek)),
+                Pin.ThisWeek,
                 Pin.Note(NotePath("Ideas to build.md")),
                 Pin.Note(NotePath("Reading list.md")),
                 Pin.Folder(FolderPath("Writing")),
             ),
         )
-    }
-
-    /** This week's note if the sample has it, else the newest sample weekly note. */
-    private suspend fun latestWeekly(graph: AppGraph, thisWeek: NotePath): NotePath {
-        if (graph.store.exists(thisWeek)) return thisWeek
-        return graph.store.list().notes.map { it.path }.filter { it.folder.value.endsWith("weekly") }.maxByOrNull { it.value } ?: thisWeek
     }
 
     private fun copy(assets: AssetManager, assetPath: String, target: File, relative: String = "", onFile: (String, File) -> Unit) {

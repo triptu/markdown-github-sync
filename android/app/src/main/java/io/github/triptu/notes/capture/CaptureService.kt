@@ -47,6 +47,14 @@ class CaptureService(
 
     fun weeklyPath(at: LocalDateTime): NotePath = WeeklyNote.pathFor(at, settings())
 
+    /** This week's note, created from the template if it doesn't exist yet. */
+    suspend fun ensureWeekly(now: LocalDateTime): NotePath {
+        val s = settings()
+        val path = WeeklyNote.pathFor(now, s)
+        if (!store.exists(path)) store.write(path, newWeeklyNote(path, s, now))
+        return path
+    }
+
     /** The note a `[[link]]` to a missing note creates, in the new-note folder. */
     suspend fun createLinked(name: String): NotePath {
         val folder = FolderPath(settings().newNoteFolder.trim('/'))

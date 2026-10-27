@@ -61,6 +61,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { openNote(graph.capture.createLinked(target)) }
     }
 
+    fun openThisWeek() {
+        viewModelScope.launch { openNote(graph.capture.ensureWeekly(LocalDateTime.now())) }
+    }
+
     fun openSettings() {
         overlays += Overlay.Settings
     }

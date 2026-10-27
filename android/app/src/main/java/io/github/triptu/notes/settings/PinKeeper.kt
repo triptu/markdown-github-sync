@@ -16,6 +16,7 @@ object PinKeeper {
         when (pin) {
             is Pin.Note -> if (pin.path in current.notes) pin else movedNote(pin.path, previous, current)?.let(Pin::Note)
             is Pin.Folder -> if (pin.path in current.folders) pin else movedFolder(pin.path, previous, current)?.let(Pin::Folder)
+            Pin.ThisWeek -> pin
         }
     }.distinct()
 

@@ -8,6 +8,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.ZettelName
+import io.github.triptu.notes.vault.NoteNames
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultIndex
 import io.github.triptu.notes.vault.VaultQueries
@@ -75,9 +76,9 @@ class EditorSession(
     /** The note's name as shown in the title. Captures show where the text will go. */
     val title: String
         get() = when (destination) {
-            CaptureDestination.NewNote -> path?.name ?: ZettelName.of(startedAt, value.text)
-            CaptureDestination.ThisWeek -> capture.weeklyPath(startedAt).name
-            null -> path?.name.orEmpty()
+            CaptureDestination.NewNote -> NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text))
+            CaptureDestination.ThisWeek -> capture.weeklyPath(startedAt).displayName
+            null -> path?.displayName.orEmpty()
         }
 
     init {
@@ -144,8 +145,11 @@ class EditorSession(
     /** Renames an existing note. Returns false and keeps the old name if the new one is taken or empty. */
     suspend fun rename(newTitle: String): Boolean {
         val current = path ?: return false
-        val name = sanitizeNoteName(newTitle)
-        if (name.isEmpty() || name == current.name) return name == current.name
+        // The title shows the name without its stamp; the file keeps the stamp.
+        val shown = sanitizeNoteName(newTitle)
+        if (shown.isEmpty()) return false
+        val name = NoteNames.stamp(current.name) + shown
+        if (name == current.name) return true
         return try {
             flush()
             val renamed = current.renamed(name)

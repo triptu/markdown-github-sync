@@ -49,8 +49,11 @@ class SettingsStore(private val prefs: SharedPreferences) {
         }
     }
 
-    private fun readPins(): List<Pin> =
-        prefs.getString(Keys.Pins, null).orEmpty().lines().mapNotNull(Pin::decode)
+    /** Before the user has pinned anything, Home shows this week's note. */
+    private fun readPins(): List<Pin> {
+        val stored = prefs.getString(Keys.Pins, null) ?: return listOf(Pin.ThisWeek)
+        return stored.lines().mapNotNull(Pin::decode)
+    }
 
     private fun readCapture(): CaptureSettings {
         val d = CaptureSettings()

@@ -98,12 +98,14 @@ fun AppRoot(vm: MainViewModel) {
                     onPin = { pin ->
                         when (pin) {
                             is Pin.Note -> vm.openNote(pin.path)
+                            Pin.ThisWeek -> vm.openThisWeek()
                             is Pin.Folder -> {
                                 vm.openPinnedFolder(pin.path)
                                 go(Pages.Library)
                             }
                         }
                     },
+                    onUnpin = vm::togglePin,
                     onCompose = { vm.capture() },
                     onVoice = { vm.capture(voice = true) },
                 )

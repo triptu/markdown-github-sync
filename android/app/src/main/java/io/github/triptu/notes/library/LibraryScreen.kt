@@ -82,7 +82,7 @@ fun LibraryScreen(
                 items(results, key = { "hit:" + it.path.value }) { hit ->
                     ListRow(
                         icon = R.drawable.ph_file_text,
-                        text = hit.path.name,
+                        text = hit.path.displayName,
                         subtitle = hit.excerpt.ifBlank { hit.path.folder.value.ifEmpty { null } },
                         highlight = query,
                         onClick = { onOpenNote(hit.path) },
@@ -117,7 +117,7 @@ fun LibraryScreen(
                     val pin = Pin.Note(note)
                     ListRow(
                         icon = R.drawable.ph_file_text,
-                        text = note.name,
+                        text = note.displayName,
                         onClick = { onOpenNote(note) },
                         onLongClick = { onTogglePin(pin) },
                         trailing = if (pin in pins) R.drawable.ph_push_pin else null,

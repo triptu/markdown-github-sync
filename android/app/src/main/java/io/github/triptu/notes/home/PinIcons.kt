@@ -23,6 +23,7 @@ object PinIcons {
     @DrawableRes
     fun of(pin: Pin, weeklyFolder: FolderPath): Int = when (pin) {
         is Pin.Folder -> R.drawable.ph_folder_simple
+        Pin.ThisWeek -> R.drawable.ph_calendar_blank
         is Pin.Note -> when {
             WeeklyName.containsMatchIn(pin.path.name) || pin.path.folder.isWithin(weeklyFolder) && !weeklyFolder.isRoot -> R.drawable.ph_calendar_blank
             else -> ByKeyword.firstOrNull { it.first.containsMatchIn(pin.path.name) }?.second ?: R.drawable.ph_file_text
