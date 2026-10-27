@@ -6,43 +6,26 @@ import io.github.triptu.notes.vault.VaultStore
 import io.github.triptu.notes.vault.sanitizeNoteName
 import java.time.LocalDateTime
 
-/** Writes captured text to its destination. Each call is idempotent for the same inputs. */
+/** Creates notes: new ones from Home or a folder, this week's note, and notes a `[[link]]` names. */
 class CaptureService(
     private val store: VaultStore,
     private val settings: () -> CaptureSettings,
 ) {
+    val newNoteFolder: FolderPath get() = FolderPath(settings().newNoteFolder.trim('/'))
+
     /**
-     * Saves a new note named from its first words. While the first words change, the file follows
-     * them: [previous] is renamed. Blank text removes [previous]. Returns where the note now lives.
+     * Saves a new note in [folder], named from its first words. While the first words change, the
+     * file follows them: [previous] is renamed. Blank text removes [previous]. Returns where it now lives.
      */
-    suspend fun saveNewNote(previous: NotePath?, text: String, startedAt: LocalDateTime): NotePath? {
+    suspend fun saveNewNote(folder: FolderPath, previous: NotePath?, text: String, startedAt: LocalDateTime): NotePath? {
         if (text.isBlank()) {
             previous?.let { store.delete(it) }
             return null
         }
-        val folder = FolderPath(settings().newNoteFolder.trim('/'))
-        val wanted = ZettelName.of(startedAt, text)
-        val path = freePath(folder, wanted, previous)
+        val path = freePath(folder, ZettelName.of(startedAt, text), previous)
         if (previous != null && previous != path) store.rename(previous, path)
         store.write(path, text)
         return path
-    }
-
-    /**
-     * Puts the text in this week's note, as one entry in the configured section. [previousBlock] is
-     * the entry this capture wrote last time, so edits replace it rather than adding another.
-     * Returns the entry now in the note, or null if there is none.
-     */
-    suspend fun saveToWeekly(previousBlock: String?, text: String, startedAt: LocalDateTime): String? {
-        val s = settings()
-        val path = WeeklyNote.pathFor(startedAt, s)
-        val block = if (text.isBlank()) "" else WeeklyNote.entry(text, startedAt)
-        val existing = store.read(path)
-        if (existing == null && block.isEmpty()) return null
-        val base = existing ?: newWeeklyNote(path, s, startedAt)
-        val updated = WeeklyNote.upsert(base, s.weeklySection, previousBlock, block)
-        if (updated != existing) store.write(path, updated)
-        return block.ifEmpty { null }
     }
 
     fun weeklyPath(at: LocalDateTime): NotePath = WeeklyNote.pathFor(at, settings())
@@ -57,8 +40,7 @@ class CaptureService(
 
     /** The note a `[[link]]` to a missing note creates, in the new-note folder. */
     suspend fun createLinked(name: String): NotePath {
-        val folder = FolderPath(settings().newNoteFolder.trim('/'))
-        val path = freePath(folder, sanitizeNoteName(name).ifEmpty { "Untitled" }, null)
+        val path = freePath(newNoteFolder, sanitizeNoteName(name).ifEmpty { "Untitled" }, null)
         store.write(path, "")
         return path
     }

@@ -5,9 +5,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.ZettelName
+import io.github.triptu.notes.vault.DeletedNote
+import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.vault.LinkSuggestion
 import io.github.triptu.notes.vault.NoteNames
 import io.github.triptu.notes.vault.NotePath
@@ -31,9 +32,14 @@ import java.time.LocalDateTime
 
 /** What the editor was opened for. */
 sealed interface EditorTarget {
-    /** [reveal] is a bit of the note to scroll to, such as the snippet a Recents card showed. */
-    data class Open(val path: NotePath, val reveal: String? = null) : EditorTarget
-    data class Capture(val destination: CaptureDestination, val voice: Boolean) : EditorTarget
+    /**
+     * [reveal] is a bit of the note to scroll to, such as the snippet a Recents card showed.
+     * [cursorAt] puts the cursor there and opens the keyboard, as the This week pin does.
+     */
+    data class Open(val path: NotePath, val reveal: String? = null, val cursorAt: Int? = null) : EditorTarget
+
+    /** A new note in [folder], named `YYYYMMDDHH <first words>`. [voice] starts dictation. */
+    data class New(val folder: FolderPath, val voice: Boolean) : EditorTarget
 }
 
 /**
@@ -59,13 +65,10 @@ class EditorSession(
     /** The note on disk this editor writes, once it has one. */
     var path: NotePath? by mutableStateOf((target as? EditorTarget.Open)?.path)
         private set
-    var destination: CaptureDestination? by mutableStateOf((target as? EditorTarget.Capture)?.destination)
-        private set
-    private var weeklyBlock: String? = null
 
     var value by mutableStateOf(TextFieldValue(""))
         private set
-    var loaded by mutableStateOf(target is EditorTarget.Capture)
+    var loaded by mutableStateOf(target is EditorTarget.New)
         private set
     var canUndo by mutableStateOf(false)
         private set
@@ -83,17 +86,16 @@ class EditorSession(
     /** Where to scroll once the note is shown, from [EditorTarget.Open.reveal]. Cleared once used. */
     var revealAt: Int? by mutableStateOf(null)
         private set
-    private var revealPending = (target as? EditorTarget.Open)?.reveal != null
+    private var revealPending = (target as? EditorTarget.Open)?.let { it.reveal != null || it.cursorAt != null } == true
 
-    val isCapture: Boolean get() = target is EditorTarget.Capture
+    val isNew: Boolean get() = target is EditorTarget.New
 
-    /** The note's name as shown in the title. Captures show where the text will go. */
+    /** The folder shown in the top bar. */
+    val folder: FolderPath? get() = path?.folder ?: (target as? EditorTarget.New)?.folder
+
+    /** The note's name as shown in the title. A new note shows the name its first words will give it. */
     val title: String
-        get() = when (destination) {
-            CaptureDestination.NewNote -> NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text))
-            CaptureDestination.ThisWeek -> capture.weeklyPath(startedAt).displayName
-            null -> path?.displayName.orEmpty()
-        }
+        get() = if (isNew) NoteNames.display(path?.name ?: ZettelName.of(startedAt, value.text)) else path?.displayName.orEmpty()
 
     init {
         if (target is EditorTarget.Open) load(target.path)
@@ -147,9 +149,10 @@ class EditorSession(
     }
 
     private fun setLoaded(text: String) {
-        if (revealPending) revealAt = findReveal(text)
+        val cursorAt = (target as? EditorTarget.Open)?.cursorAt?.coerceIn(0, text.length)
+        if (revealPending) revealAt = cursorAt ?: findReveal(text)
         savedText = text
-        value = TextFieldValue(text, TextRange(0))
+        value = TextFieldValue(text, TextRange(cursorAt ?: 0))
         parsed = MarkdownParser.parse(text)
         loaded = true
     }
@@ -221,23 +224,6 @@ class EditorSession(
 
     fun toggleTask(task: TaskMark) = onValueChange(EditOps.toggleTask(value, task), newUndoStep = true)
 
-    /** Switches where a capture goes, moving anything already saved. */
-    fun switchDestination(to: CaptureDestination) {
-        if (destination == null || destination == to) return
-        scope.launch {
-            saveLock.withLock {
-                when (destination) {
-                    CaptureDestination.NewNote -> path = capture.saveNewNote(path, "", startedAt)
-                    CaptureDestination.ThisWeek -> weeklyBlock = capture.saveToWeekly(weeklyBlock, "", startedAt)
-                    null -> Unit
-                }
-                destination = to
-                savedText = null
-            }
-            save()
-        }
-    }
-
     /** Renames an existing note. Returns false and keeps the old name if the new one is taken or empty. */
     suspend fun rename(newTitle: String): Boolean {
         val current = path ?: return false
@@ -257,15 +243,15 @@ class EditorSession(
         }
     }
 
-    fun delete(onDone: () -> Unit) {
+    /** Deletes the note and hands back what was deleted, so it can be restored. */
+    fun delete(onDone: (DeletedNote?) -> Unit) {
         scope.launch {
             pendingSave?.cancel()
-            saveLock.withLock {
-                path?.let { store.delete(it) }
-                weeklyBlock?.let { capture.saveToWeekly(it, "", startedAt) }
+            val removed = saveLock.withLock {
                 deleted = true
+                path?.let { store.delete(it); DeletedNote(it, value.text) }
             }
-            onDone()
+            onDone(removed)
         }
     }
 
@@ -287,10 +273,11 @@ class EditorSession(
         if (!loaded || deleted) return@withLock
         val text = value.text
         if (text == savedText) return@withLock
-        when (destination) {
-            CaptureDestination.NewNote -> path = capture.saveNewNote(path, text, startedAt)
-            CaptureDestination.ThisWeek -> weeklyBlock = capture.saveToWeekly(weeklyBlock, text, startedAt)
-            null -> path?.let { store.write(it, text) }
+        val target = target
+        if (target is EditorTarget.New) {
+            path = capture.saveNewNote(target.folder, path, text, startedAt)
+        } else {
+            path?.let { store.write(it, text) }
         }
         savedText = text
     }

@@ -115,19 +115,25 @@ enum class HomeSide { Start, End }
 @Composable
 fun PageBar(title: String, homeSide: HomeSide, onHome: () -> Unit, actions: @Composable () -> Unit = {}) {
     val colors = NotesTheme.colors
+    // 44dp targets around 22dp icons: start/end padding keeps the icons on the 20dp page margin.
+    val edge = PagePadding - (BarTarget - BarIcon) / 2
     Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp),
+        Modifier.fillMaxWidth().height(48.dp).padding(start = if (homeSide == HomeSide.Start) edge else PagePadding, end = edge),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (homeSide == HomeSide.Start) IconButton48(R.drawable.ph_caret_left, "Back to Home", onHome, tint = colors.muted)
+        if (homeSide == HomeSide.Start) IconButton48(R.drawable.ph_caret_left, "Back to Home", onHome, tint = colors.muted, size = BarTarget)
         Text(
-            title, style = NotesType.title, color = colors.ink, maxLines = 1,
-            modifier = Modifier.weight(1f).padding(start = if (homeSide == HomeSide.Start) 4.dp else 12.dp),
+            title, style = NotesType.barTitle, color = colors.ink, maxLines = 1,
+            modifier = Modifier.weight(1f).padding(start = if (homeSide == HomeSide.Start) 4.dp else 0.dp),
         )
         actions()
-        if (homeSide == HomeSide.End) IconButton48(R.drawable.ph_caret_right, "Back to Home", onHome, tint = colors.muted)
+        if (homeSide == HomeSide.End) IconButton48(R.drawable.ph_caret_right, "Back to Home", onHome, tint = colors.muted, size = BarTarget)
     }
 }
+
+/** Touch target and icon size for buttons in a [PageBar]. */
+val BarTarget = 44.dp
+val BarIcon = 22.dp
 
 /** One list row: icon and name, optional second line and trailing icon. */
 @Composable
@@ -173,11 +179,19 @@ fun ListRow(
 
 /** A small round icon button with a 48dp target. */
 @Composable
-fun IconButton48(@DrawableRes icon: Int, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color = NotesTheme.colors.ink2, enabled: Boolean = true) {
+fun IconButton48(
+    @DrawableRes icon: Int,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = NotesTheme.colors.ink2,
+    enabled: Boolean = true,
+    size: Dp = 48.dp,
+) {
     Box(
         modifier
-            .size(48.dp)
-            .pressable(onClick = { if (enabled) onClick() }, shape = RoundedCornerShape(24.dp), bleed = 0.dp, label = description),
+            .size(size)
+            .pressable(onClick = { if (enabled) onClick() }, shape = RoundedCornerShape(size / 2), bleed = 0.dp, label = description),
         contentAlignment = Alignment.Center,
     ) {
         PhIcon(icon, description, 22.dp, if (enabled) tint else tint.copy(alpha = 0.35f))

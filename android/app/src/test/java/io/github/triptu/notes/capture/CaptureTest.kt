@@ -26,69 +26,24 @@ class WeeklyNoteTest {
     }
 
     @Test
-    fun `text goes at the end of the section, before the next heading`() {
-        val note = """
-            # W44
-            ## Plan
-            - [ ] call the bank
-
-            ## Notes and Ramblings
-
-            *09:10*
-            first thought
-
-            ## Done
-            - nothing yet
-        """.trimIndent()
-        val result = WeeklyNote.upsert(note, "## Notes and Ramblings", null, "*21:40*\nsecond thought")
-        assertEquals(
-            """
-            # W44
-            ## Plan
-            - [ ] call the bank
-
-            ## Notes and Ramblings
-
-            *09:10*
-            first thought
-
-            *21:40*
-            second thought
-
-            ## Done
-            - nothing yet
-            """.trimIndent(),
-            result,
-        )
+    fun `cursor goes after the last line written in the section, before the next heading`() {
+        val note = "# W44\n## Plan\n- [ ] call\n\n## Notes and Ramblings\n\n*09:10*\nfirst thought\n\n## Done\n- x\n"
+        val at = WeeklyNote.writingPosition(note)
+        assertEquals("first thought", note.substring(0, at).substringAfterLast('\n'))
+        assertEquals("\n\n## Done\n- x\n", note.substring(at))
     }
 
     @Test
-    fun `an empty section at the end of the note gets the text`() {
-        val result = WeeklyNote.upsert("## Plan\n\n## Notes and Ramblings\n", "## Notes and Ramblings", null, "*08:00*\nhello")
-        assertEquals("## Plan\n\n## Notes and Ramblings\n\n*08:00*\nhello\n", result)
+    fun `an empty section puts the cursor at the end of its heading, subheadings stay inside`() {
+        val empty = "## Notes and Ramblings\n\n## Done\n"
+        assertEquals("## Notes and Ramblings".length, WeeklyNote.writingPosition(empty))
+        val nested = "## Notes and Ramblings\n### Monday\nran\n## Done\n"
+        assertEquals(nested.indexOf("ran") + 3, WeeklyNote.writingPosition(nested))
     }
 
     @Test
-    fun `subheadings stay inside the section`() {
-        val note = "## Notes and Ramblings\n### Monday\nran\n## Done\n"
-        val result = WeeklyNote.upsert(note, "## Notes and Ramblings", null, "x")
-        assertEquals("## Notes and Ramblings\n### Monday\nran\n\nx\n\n## Done\n", result)
-    }
-
-    @Test
-    fun `a missing section is added at the end`() {
-        val result = WeeklyNote.upsert("# W44\n\n## Plan\n", "## Notes and Ramblings", null, "x")
-        assertEquals("# W44\n\n## Plan\n\n## Notes and Ramblings\n\nx\n", result)
-    }
-
-    @Test
-    fun `editing a capture replaces its block, and clearing it removes the block`() {
-        val note = "## Notes and Ramblings\n\n## Done\n"
-        val first = WeeklyNote.upsert(note, "## Notes and Ramblings", null, "*10:00*\nhel")
-        val second = WeeklyNote.upsert(first, "## Notes and Ramblings", "*10:00*\nhel", "*10:00*\nhello there")
-        assertEquals("## Notes and Ramblings\n\n*10:00*\nhello there\n\n## Done\n", second)
-        val cleared = WeeklyNote.upsert(second, "## Notes and Ramblings", "*10:00*\nhello there", "")
-        assertEquals(note, cleared)
+    fun `without the section the cursor goes to the end of the note`() {
+        assertEquals("# W44\n\nhello".length, WeeklyNote.writingPosition("# W44\n\nhello\n\n"))
     }
 
     @Test

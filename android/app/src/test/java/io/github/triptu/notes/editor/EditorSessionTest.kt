@@ -5,6 +5,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import io.github.triptu.notes.capture.CaptureService
 import io.github.triptu.notes.capture.CaptureSettings
 import io.github.triptu.notes.vault.FileVaultStore
+import io.github.triptu.notes.vault.FolderPath
+import java.time.LocalDateTime
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultIndex
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +61,30 @@ class EditorSessionTest {
         advanceUntilIdle()
         assertEquals("milk\ntea\n", session.value.text)
         assertEquals("milk\ntea\n", File(root, path.value).readText())
+        session.close(CoroutineScope(Dispatchers.Unconfined))
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class NewNoteTest {
+    @get:Rule val temp = TemporaryFolder()
+
+    @Test
+    fun `a new note in a folder is named by the hour and its first words, following them as they change`() = runTest {
+        val root = temp.newFolder("vault")
+        val store = FileVaultStore(root, Dispatchers.Unconfined)
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val index = VaultIndex(store, File(temp.root, "index"), scope, Dispatchers.Unconfined)
+        val session = EditorSession(
+            EditorTarget.New(FolderPath("Writing"), voice = false), store, index,
+            CaptureService(store) { CaptureSettings() }, scope, now = { LocalDateTime.of(2026, 10, 27, 9, 41) },
+        )
+        session.onValueChange(TextFieldValue("Draft about"))
+        advanceUntilIdle()
+        session.onValueChange(TextFieldValue("Draft about rivers"))
+        advanceUntilIdle()
+        assertEquals(listOf("2026102709 Draft about rivers.md"), File(root, "Writing").list()!!.toList())
+        assertEquals("Draft about rivers", session.title)
         session.close(CoroutineScope(Dispatchers.Unconfined))
     }
 }

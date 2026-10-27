@@ -33,10 +33,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import io.github.triptu.notes.R
-import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.capture.CaptureSettings
 import io.github.triptu.notes.capture.WeeklyNote
-import io.github.triptu.notes.editor.label
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.pressable
@@ -66,27 +64,16 @@ fun SettingsScreen(
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PagePadding)) {
             Text("Settings", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
 
-            Section("When you write from Home")
-            Label("Saves to")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 6.dp)) {
-                for (d in CaptureDestination.entries) {
-                    Choice(d.label, selected = capture.defaultDestination == d) { onCapture { it.copy(defaultDestination = d) } }
-                }
-            }
-            Hint("You can switch for each note from the top of the editor.")
-
             Section("New note")
             Field("Folder", capture.newNoteFolder) { v -> onCapture { it.copy(newNoteFolder = v) } }
             Hint("Named by the hour and the first words, like “2026102709 Call the bank”.")
 
-            Section("This week's note")
+            Section("This week")
             Field("Folder", capture.weeklyFolder) { v -> onCapture { it.copy(weeklyFolder = v) } }
             Field("Name format", capture.weeklyFormat) { v -> onCapture { it.copy(weeklyFormat = v) } }
             Hint("Same format as Obsidian's Periodic Notes. This week: ${runCatching { WeeklyNote.pathFor(LocalDateTime.now(), capture).value }.getOrDefault("–")}")
             Field("Template", capture.weeklyTemplate) { v -> onCapture { it.copy(weeklyTemplate = v) } }
-            Hint("Used when this week's note doesn't exist yet.")
-            Field("Add text under", capture.weeklySection) { v -> onCapture { it.copy(weeklySection = v) } }
-            Hint("Each entry goes at the end of this section, after a small time stamp.")
+            Hint("Used when this week's note doesn't exist yet. The This week pin opens it at the end of “Notes and Ramblings”.")
 
             if (sampleVaultAvailable) {
                 Section("Testing")
@@ -119,23 +106,6 @@ private fun Label(text: String) {
 @Composable
 private fun Hint(text: String) {
     Text(text, style = NotesType.rowMeta, color = NotesTheme.colors.muted, modifier = Modifier.padding(bottom = 6.dp))
-}
-
-@Composable
-private fun Choice(text: String, selected: Boolean, onClick: () -> Unit) {
-    val colors = NotesTheme.colors
-    val shape = RoundedCornerShape(20.dp)
-    Box(
-        Modifier
-            .height(48.dp)
-            .padding(vertical = 4.dp)
-            .clip(shape)
-            .background(if (selected) colors.solid else colors.raised)
-            .pressable(onClick, shape = shape, bleed = 16.dp, pressColor = if (selected) colors.ink2 else colors.sunk),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text, style = NotesType.path, color = if (selected) colors.onSolid else colors.ink)
-    }
 }
 
 /** A labelled text field that saves as you type. */

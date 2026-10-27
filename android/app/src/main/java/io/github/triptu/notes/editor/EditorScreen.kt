@@ -84,7 +84,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.rememberTextMeasurer
 import io.github.triptu.notes.R
-import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.ui.IconButton48
 import io.github.triptu.notes.ui.PagePadding
 import io.github.triptu.notes.ui.PhIcon
@@ -103,15 +102,21 @@ fun EditorScreen(
     onBack: () -> Unit,
     onTogglePin: () -> Unit,
     onOpenLink: (String) -> Unit,
+    onDelete: () -> Unit,
 ) {
     val colors = NotesTheme.colors
     val bodyFocus = remember { FocusRequester() }
     val speech = rememberSpeechInput { spoken -> session.onValueChange(EditOps.insertText(session.value, spoken), newUndoStep = true) }
 
-    LaunchedEffect(session) {
-        val capture = session.target as? EditorTarget.Capture ?: return@LaunchedEffect
-        bodyFocus.requestFocus()
-        if (capture.voice) speech?.invoke()
+    LaunchedEffect(session, session.loaded) {
+        if (!session.loaded) return@LaunchedEffect
+        when (val target = session.target) {
+            is EditorTarget.New -> {
+                bodyFocus.requestFocus()
+                if (target.voice) speech?.invoke()
+            }
+            is EditorTarget.Open -> if (target.cursorAt != null) bodyFocus.requestFocus()
+        }
     }
 
     val scroll = rememberScrollState()
@@ -126,7 +131,7 @@ fun EditorScreen(
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
     ) {
-        TopBar(session, isPinned, onBack, onTogglePin)
+        TopBar(session, isPinned, onBack, onTogglePin, onDelete)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // Keeps the line being typed above the floating mic.
             val margin = with(LocalDensity.current) { (MicSize + MicMargin * 2).toPx() }
@@ -192,57 +197,33 @@ private fun FloatingMic(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit, onTogglePin: () -> Unit) {
+private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit, onTogglePin: () -> Unit, onDelete: () -> Unit) {
     val colors = NotesTheme.colors
     var menu by remember { mutableStateOf(false) }
-    var confirmDelete by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().height(48.dp).padding(horizontal = PagePadding - 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton48(R.drawable.ph_arrow_left, "Back", onBack)
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            val destination = session.destination
-            if (destination != null) {
-                DestinationChip(destination, session::switchDestination)
-            } else {
-                Text(
-                    session.path?.folder?.value.orEmpty(),
-                    style = NotesType.path, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                session.folder?.value.orEmpty(),
+                style = NotesType.path, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         UndoButton(session)
         Box {
             IconButton48(R.drawable.ph_dots_three_vertical, "More", { menu = true })
             DropdownMenu(menu, { menu = false }, containerColor = colors.raised, shape = RoundedCornerShape(14.dp)) {
-                if (!session.isCapture) {
+                if (session.path != null) {
                     MenuItem(if (isPinned) "Unpin from Home" else "Pin to Home", R.drawable.ph_push_pin) { menu = false; onTogglePin() }
                 }
-                MenuItem(if (session.destination == CaptureDestination.ThisWeek) "Discard" else "Delete note", R.drawable.ph_trash) {
+                MenuItem("Delete note", R.drawable.ph_trash) {
                     menu = false
-                    confirmDelete = true
+                    onDelete()
                 }
             }
         }
-    }
-    if (confirmDelete) {
-        val discard = session.destination == CaptureDestination.ThisWeek
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            containerColor = colors.bg,
-            title = { Text(if (discard) "Discard this entry?" else "Delete “${session.title}”?", style = NotesType.row.copy(fontWeight = FontWeight.SemiBold), color = colors.ink) },
-            text = {
-                Text(
-                    if (discard) "It will be removed from this week's note." else "The note is deleted from this phone's vault.",
-                    style = NotesType.rowMeta, color = colors.ink2,
-                )
-            },
-            confirmButton = {
-                TextButton({ confirmDelete = false; session.delete(onBack) }) { Text(if (discard) "Discard" else "Delete", color = colors.ink) }
-            },
-            dismissButton = { TextButton({ confirmDelete = false }) { Text("Keep", color = colors.ink2) } },
-        )
     }
 }
 
@@ -285,51 +266,13 @@ private fun MenuItem(label: String, icon: Int, onClick: () -> Unit) {
     )
 }
 
-/** Where a new capture goes. Tapping it offers the other destination. */
-@Composable
-private fun DestinationChip(destination: CaptureDestination, onPick: (CaptureDestination) -> Unit) {
-    val colors = NotesTheme.colors
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier
-                .height(48.dp)
-                .pressable({ open = true }, shape = RoundedCornerShape(24.dp), bleed = 14.dp, label = "Change where this saves"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Saves to ${destination.label}", style = NotesType.path, color = colors.ink2)
-            PhIcon(R.drawable.ph_caret_down, null, 14.dp, colors.ink2)
-        }
-        DropdownMenu(open, { open = false }, containerColor = colors.raised, shape = RoundedCornerShape(14.dp)) {
-            for (d in CaptureDestination.entries) {
-                DropdownMenuItem(
-                    text = {
-                        val current = d == destination
-                        Text(d.label, style = NotesType.row.copy(fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal), color = colors.ink)
-                    },
-                    leadingIcon = { PhIcon(if (d == CaptureDestination.NewNote) R.drawable.ph_file_text else R.drawable.ph_calendar_blank, null, 20.dp, colors.ink2) },
-                    onClick = { open = false; onPick(d) },
-                )
-            }
-        }
-    }
-}
-
-val CaptureDestination.label: String
-    get() = when (this) {
-        CaptureDestination.NewNote -> "New note"
-        CaptureDestination.ThisWeek -> "This week"
-    }
-
 @Composable
 private fun Title(session: EditorSession, onDone: () -> Unit) {
     val colors = NotesTheme.colors
     val style = NotesType.noteTitle
     val modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 14.dp)
-    if (session.isCapture) {
-        val saved = session.path != null || session.destination == CaptureDestination.ThisWeek
-        Text(session.title, style = style, color = if (saved) colors.ink else colors.muted, modifier = modifier)
+    if (session.isNew) {
+        Text(session.title, style = style, color = if (session.path != null) colors.ink else colors.muted, modifier = modifier)
         return
     }
     val scope = rememberCoroutineScope()

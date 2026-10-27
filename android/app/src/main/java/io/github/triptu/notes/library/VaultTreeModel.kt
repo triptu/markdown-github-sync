@@ -40,11 +40,13 @@ class VaultTreeModel(index: VaultIndex, private val expanded: ExpandedFolders, s
 
     fun toggle(folder: FolderPath) = expanded.toggle(folder)
 
-    /** Opens [folder] and the folders above it, and asks the screen to bring it to the top. */
-    fun reveal(folder: FolderPath) {
-        _query.value = ""
+    /** Opens [folder] and the folders above it, and (with [scroll]) asks the screen to bring it to the top. */
+    fun reveal(folder: FolderPath, scroll: Boolean = true) {
         expanded.open(VaultTree.withAncestors(folder))
-        _scrollTo.value = folder
+        if (scroll) {
+            _query.value = ""
+            _scrollTo.value = folder
+        }
     }
 
     fun scrolled() {

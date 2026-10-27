@@ -88,6 +88,11 @@ class FileVaultStore(
         _changes.emit(VaultChange.Deleted(path))
     }
 
+    override suspend fun createFolder(folder: FolderPath) {
+        withContext(io) { File(root, folder.value).mkdirs() }
+        _changes.emit(VaultChange.External)
+    }
+
     override suspend fun notifyExternalChange() {
         _changes.emit(VaultChange.External)
     }

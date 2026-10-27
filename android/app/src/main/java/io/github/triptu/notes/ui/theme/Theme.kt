@@ -62,6 +62,7 @@ object NotesType {
     val pinCompact = TextStyle(fontFamily = Inter, fontSize = 17.sp, fontWeight = FontWeight.Medium)
     val row = TextStyle(fontFamily = Inter, fontSize = 16.sp)
     val rowMeta = TextStyle(fontFamily = Inter, fontSize = 14.sp)
+    val barTitle = TextStyle(fontFamily = Inter, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     val title = TextStyle(fontFamily = Inter, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.01).em)
     val field = TextStyle(fontFamily = Inter, fontSize = 16.sp)
     val day = TextStyle(fontFamily = Inter, fontSize = 13.sp, fontWeight = FontWeight.Medium)

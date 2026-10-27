@@ -2,6 +2,9 @@ package io.github.triptu.notes.vault
 
 import kotlinx.coroutines.flow.SharedFlow
 
+/** A note that was just deleted, kept so the deletion can be undone. */
+data class DeletedNote(val path: NotePath, val text: String)
+
 /** What a scan sees on disk: every note with its size and modified time, and every folder. */
 data class VaultListing(val notes: List<NoteStat>, val folders: Set<FolderPath>)
 
@@ -39,6 +42,9 @@ interface VaultStore {
     suspend fun rename(from: NotePath, to: NotePath)
 
     suspend fun delete(path: NotePath)
+
+    /** Creates an empty folder (and any missing parents). */
+    suspend fun createFolder(folder: FolderPath)
 
     suspend fun notifyExternalChange()
 }

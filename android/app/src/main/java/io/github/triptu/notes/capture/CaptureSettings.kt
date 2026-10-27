@@ -1,18 +1,12 @@
 package io.github.triptu.notes.capture
 
-/** Where text typed into the composer ends up. */
-enum class CaptureDestination { NewNote, ThisWeek }
-
 data class CaptureSettings(
-    /** Folder for new notes, named `YYYYMMDDHH <first words>`. */
+    /** Folder for new notes from Home, named `YYYYMMDDHH <first words>`. */
     val newNoteFolder: String = "Zettelkasten",
-    /** Folder holding weekly notes. */
+    /** Folder holding weekly notes, used by the This week pin. */
     val weeklyFolder: String = "journal",
     /** moment.js format of a weekly note's path inside [weeklyFolder], applied to the week's Monday. */
     val weeklyFormat: String = "GGGG/[weekly]/[W]WW Do MMM, GGGG",
     /** Note used to create a missing weekly note. Empty means start from an empty note. */
     val weeklyTemplate: String = "templates/Weekly Template.md",
-    /** Heading whose section receives appended text. */
-    val weeklySection: String = "## Notes and Ramblings",
-    val defaultDestination: CaptureDestination = CaptureDestination.NewNote,
 )

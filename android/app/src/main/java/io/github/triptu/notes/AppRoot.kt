@@ -9,6 +9,22 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import io.github.triptu.notes.ui.pressable
+import io.github.triptu.notes.ui.theme.NotesType
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
@@ -78,6 +94,10 @@ fun AppRoot(vm: MainViewModel) {
                     onOpenNote = vm::openNote,
                     onTogglePin = vm::togglePin,
                     onSettings = vm::openSettings,
+                    onNewNoteIn = vm::newNoteIn,
+                    onNewFolder = vm::createFolder,
+                    onRename = vm::renameNote,
+                    onDelete = vm::deleteNote,
                 )
                 Pages.Home -> HomeScreen(
                     pins = pins,
@@ -95,8 +115,8 @@ fun AppRoot(vm: MainViewModel) {
                         }
                     },
                     onUnpin = vm::togglePin,
-                    onCompose = { vm.capture() },
-                    onVoice = { vm.capture(voice = true) },
+                    onCompose = { vm.newNote() },
+                    onVoice = { vm.newNote(voice = true) },
                 )
                 else -> RecentsScreen(recents, FolderPath(capture.weeklyFolder.trim('/')), onHome = { go(Pages.Home) }, onOpen = { vm.openNote(it.path, reveal = it.source) })
             }
@@ -126,6 +146,7 @@ fun AppRoot(vm: MainViewModel) {
                         onBack = { vm.back() },
                         onTogglePin = { path?.let { vm.togglePin(Pin.Note(it)) } },
                         onOpenLink = vm::openLink,
+                        onDelete = vm::deleteOpenNote,
                     )
                 }
                 Overlay.Settings -> SettingsScreen(
@@ -138,5 +159,45 @@ fun AppRoot(vm: MainViewModel) {
                 null -> Box(Modifier.fillMaxSize())
             }
         }
+
+        vm.lastDeleted?.let { deleted ->
+            UndoBar(
+                text = "Deleted “${deleted.path.displayName}”",
+                onUndo = vm::undoDelete,
+                onTimeout = vm::dismissUndo,
+                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing),
+            )
+        }
     }
 }
+
+/** A short-lived bar offering Undo. It goes away on its own after a few seconds. */
+@Composable
+private fun UndoBar(text: String, onUndo: () -> Unit, onTimeout: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = NotesTheme.colors
+    LaunchedEffect(text) {
+        delay(UndoMs)
+        onTimeout()
+    }
+    Row(
+        modifier
+            .padding(start = 16.dp, end = 16.dp, bottom = 80.dp)
+            .fillMaxWidth()
+            .height(52.dp)
+            .shadow(6.dp, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.solid)
+            .padding(start = 18.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = NotesType.row, color = colors.onSolid, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Box(
+            Modifier.height(44.dp).pressable(onUndo, shape = RoundedCornerShape(12.dp), bleed = 14.dp, label = "Undo delete", pressColor = colors.ink2),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Undo", style = NotesType.row.copy(fontWeight = FontWeight.SemiBold), color = colors.onSolid)
+        }
+    }
+}
+
+private const val UndoMs = 5_000L

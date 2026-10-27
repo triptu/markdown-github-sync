@@ -2,7 +2,6 @@ package io.github.triptu.notes.settings
 
 import android.content.SharedPreferences
 import androidx.core.content.edit
-import io.github.triptu.notes.capture.CaptureDestination
 import io.github.triptu.notes.capture.CaptureSettings
 import io.github.triptu.notes.vault.NotePath
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,8 +43,6 @@ class SettingsStore(private val prefs: SharedPreferences) {
             putString(Keys.WeeklyFolder, c.weeklyFolder)
             putString(Keys.WeeklyFormat, c.weeklyFormat)
             putString(Keys.WeeklyTemplate, c.weeklyTemplate)
-            putString(Keys.WeeklySection, c.weeklySection)
-            putString(Keys.DefaultDestination, c.defaultDestination.name)
         }
     }
 
@@ -62,10 +59,6 @@ class SettingsStore(private val prefs: SharedPreferences) {
             weeklyFolder = prefs.getString(Keys.WeeklyFolder, null) ?: d.weeklyFolder,
             weeklyFormat = prefs.getString(Keys.WeeklyFormat, null) ?: d.weeklyFormat,
             weeklyTemplate = prefs.getString(Keys.WeeklyTemplate, null) ?: d.weeklyTemplate,
-            weeklySection = prefs.getString(Keys.WeeklySection, null) ?: d.weeklySection,
-            defaultDestination = prefs.getString(Keys.DefaultDestination, null)
-                ?.let { name -> CaptureDestination.entries.firstOrNull { it.name == name } }
-                ?: d.defaultDestination,
         )
     }
 
@@ -75,7 +68,5 @@ class SettingsStore(private val prefs: SharedPreferences) {
         const val WeeklyFolder = "capture.weeklyFolder"
         const val WeeklyFormat = "capture.weeklyFormat"
         const val WeeklyTemplate = "capture.weeklyTemplate"
-        const val WeeklySection = "capture.weeklySection"
-        const val DefaultDestination = "capture.defaultDestination"
     }
 }

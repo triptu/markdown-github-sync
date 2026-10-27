@@ -1,10 +1,13 @@
 package io.github.triptu.notes
 
 import android.app.Application
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.triptu.notes.capture.CaptureDestination
+import io.github.triptu.notes.capture.WeeklyNote
 import io.github.triptu.notes.editor.EditorSession
 import io.github.triptu.notes.editor.EditorTarget
 import io.github.triptu.notes.recents.RecentsFeed
@@ -12,7 +15,10 @@ import io.github.triptu.notes.recents.RecentsFeedBuilder
 import io.github.triptu.notes.library.VaultTreeModel
 import io.github.triptu.notes.settings.Pin
 import io.github.triptu.notes.settings.SampleVault
+import io.github.triptu.notes.vault.DeletedNote
 import io.github.triptu.notes.vault.FolderPath
+import io.github.triptu.notes.vault.NoteNames
+import io.github.triptu.notes.vault.sanitizeNoteName
 import io.github.triptu.notes.vault.NotePath
 import io.github.triptu.notes.vault.VaultQueries
 import kotlinx.coroutines.Dispatchers
@@ -51,8 +57,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openNote(path: NotePath, reveal: String? = null) = push(EditorTarget.Open(path, reveal))
 
-    fun capture(destination: CaptureDestination = capture.value.defaultDestination, voice: Boolean = false) =
-        push(EditorTarget.Capture(destination, voice))
+    /** A new note from Home, in the new-note folder. */
+    fun newNote(voice: Boolean = false) = push(EditorTarget.New(graph.capture.newNoteFolder, voice))
+
+    /** A new note in a Vault folder. The folder is shown open when the user comes back. */
+    fun newNoteIn(folder: FolderPath) {
+        vaultTree.reveal(folder, scroll = false)
+        push(EditorTarget.New(folder, voice = false))
+    }
+
+    fun createFolder(parent: FolderPath, name: String) {
+        val clean = sanitizeNoteName(name)
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            graph.store.createFolder(parent.child(clean))
+            vaultTree.reveal(parent, scroll = false)
+        }
+    }
+
+    /** Renames a note to [title], keeping a Zettelkasten stamp if it has one. */
+    fun renameNote(path: NotePath, title: String) {
+        val clean = sanitizeNoteName(title)
+        if (clean.isEmpty()) return
+        val target = path.renamed(NoteNames.stamp(path.name) + clean)
+        if (target == path) return
+        viewModelScope.launch { runCatching { graph.store.rename(path, target) } }
+    }
+
+    /** The note just deleted, while its Undo is offered. */
+    var lastDeleted by mutableStateOf<DeletedNote?>(null)
+        private set
+
+    fun deleteNote(path: NotePath) {
+        viewModelScope.launch {
+            val text = graph.store.read(path) ?: return@launch
+            graph.store.delete(path)
+            lastDeleted = DeletedNote(path, text)
+        }
+    }
+
+    /** Deletes the note in the top editor and closes it. */
+    fun deleteOpenNote() {
+        val top = overlays.lastOrNull() as? Overlay.Editor ?: return
+        top.session.delete { removed ->
+            back()
+            lastDeleted = removed
+        }
+    }
+
+    fun undoDelete() {
+        val note = lastDeleted ?: return
+        lastDeleted = null
+        viewModelScope.launch { graph.store.write(note.path, note.text) }
+    }
+
+    fun dismissUndo() {
+        lastDeleted = null
+    }
 
     /** Opens the note a `[[link]]` names, creating it first if it doesn't exist. */
     fun openLink(target: String) {
@@ -61,8 +122,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { openNote(graph.capture.createLinked(target)) }
     }
 
+    /** Opens this week's note with the cursor where writing continues (see [WeeklyNote.writingPosition]). */
     fun openThisWeek() {
-        viewModelScope.launch { openNote(graph.capture.ensureWeekly(LocalDateTime.now())) }
+        viewModelScope.launch {
+            val path = graph.capture.ensureWeekly(LocalDateTime.now())
+            val text = graph.store.read(path).orEmpty()
+            push(EditorTarget.Open(path, cursorAt = WeeklyNote.writingPosition(text)))
+        }
     }
 
     fun openSettings() {
