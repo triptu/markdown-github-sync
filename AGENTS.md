@@ -19,6 +19,20 @@ Gitless Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub 
 
 The Android app, Notes for Android, lives in [triptu/notes](https://github.com/triptu/notes) and consumes this repository's engine (`plugin/src/git-sync`, plus `plugin/src/ui/copy.ts`) as a git submodule, so keep engine changes working under its QuickJS bundle too.
 
+## Working on the code
+
+Requires Node 22 or newer and npm. Run these from the repository root:
+
+```sh
+npm run setup     # install dependencies
+npm run check     # typecheck, lint, test, build and check release metadata
+npm run build     # build the plugin into dist/github-vault-sync/
+```
+
+`check` already builds. To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` (create `plugins/` if it's missing, and keep the folder name, which is the plugin id). Ask for the vault path if you don't know it; for a throwaway vault, any folder with an empty `.obsidian/` will do. Then the person reloads Obsidian and enables the plugin under Settings → Community plugins. Desktop Obsidian reads plugin files only on load. For a phone, see "Testing on the phone" below.
+
+The README is the plugin's product page; Obsidian's plugin directory shows it. Keep commands and internals out of it. User-facing detail (when sync runs, what doesn't sync, troubleshooting) goes in `docs/guide.md`; anything for working on the code goes here.
+
 ## Releasing
 
 1. Bump the version in `package.json`, `plugin/package.json`, `package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version --workspaces --include-workspace-root`, run at the root, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
@@ -51,8 +65,6 @@ Test on an Android phone over wireless adb. Use `adb devices` to find its serial
 - To keep the screen on while testing, run `adb shell svc power stayon true`. Undo it with `svc power stayon false`.
 
 When Android dozes or backgrounds Obsidian, it cuts the network. DNS failures (`UnknownHostException`) then look like "offline", and `document.hidden` is true, so background syncs are skipped by design. Wake the phone before concluding something is broken.
-
-Desktop Obsidian reads plugin files only on load, so reload the app after copying files in.
 
 ## Design rules the user cares about
 

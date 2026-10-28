@@ -10,6 +10,8 @@ The [README](../README.md) covers what the plugin is and how to set it up. This 
 - Repeat the setup on each device. Don't copy the `.git-vault-sync/` folder between devices.
 - If the vault already has a `.git` folder, it's left alone and never synced. Once connected, stop using Git in that folder.
 
+The plugin's page in Obsidian opens with the link `obsidian://show-plugin?id=github-vault-sync`.
+
 ### Installing from a release
 
 Instead of the community plugin directory, you can download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into `.obsidian/plugins/github-vault-sync/` in your vault.
@@ -53,14 +55,4 @@ Git LFS, symlinks, submodules and nested `.gitignore` files aren't supported. Ne
 
 ## Development
 
-Requires Node 22 or newer and npm.
-
-```sh
-npm run setup     # install dependencies
-npm run check     # typecheck, lint, test, build and check release metadata
-npm run build     # build the plugin into dist/github-vault-sync/
-```
-
-To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` and reload Obsidian.
-
-Maintainer notes, release steps and design rules are in [AGENTS.md](../AGENTS.md). Release notes are in [releases](releases/).
+Building, testing and releasing are described for coding agents in [AGENTS.md](../AGENTS.md). Release notes are in [releases](releases/).
