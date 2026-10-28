@@ -129,6 +129,8 @@ fun EditorScreen(
     images: NoteImages? = null,
     /** Opens the speaking view to add words at the cursor; null when the phone can't recognize speech. */
     onSpeak: (() -> Unit)? = null,
+    /** Hides or shows the list beside the note; null in one pane. */
+    list: ListToggle? = null,
 ) {
     val colors = NotesTheme.colors
     val bodyFocus = remember { FocusRequester() }
@@ -207,7 +209,7 @@ fun EditorScreen(
             enter = fadeIn(tween(160)) + slideInVertically(tween(160)) { -it },
             exit = fadeOut(tween(120)) + slideOutVertically(tween(120)) { -it },
         ) {
-            TopBar(session, isPinned, onBack, onTogglePin, onDelete)
+            TopBar(session, isPinned, list, onBack, onTogglePin, onDelete)
         }
         if (speech != null) {
             AnimatedVisibility(
@@ -232,6 +234,9 @@ fun EditorScreen(
         }
     }
 }
+
+/** The list beside the note in two panes: whether it shows, and the button that puts it away or back. */
+class ListToggle(val shown: Boolean, val toggle: () -> Unit)
 
 private val TopBarHeight = 48.dp
 private val TopFade = 24.dp
@@ -272,7 +277,7 @@ private fun FloatingMic(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit, onTogglePin: () -> Unit, onDelete: () -> Unit) {
+private fun TopBar(session: EditorSession, isPinned: Boolean, list: ListToggle?, onBack: () -> Unit, onTogglePin: () -> Unit, onDelete: () -> Unit) {
     val colors = NotesTheme.colors
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -280,6 +285,7 @@ private fun TopBar(session: EditorSession, isPinned: Boolean, onBack: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton48(R.drawable.ph_arrow_left, "Back", onBack)
+        if (list != null) IconButton48(R.drawable.ph_sidebar_simple, if (list.shown) "Hide list" else "Show list", list.toggle)
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             Text(
                 session.folder?.value.orEmpty(),

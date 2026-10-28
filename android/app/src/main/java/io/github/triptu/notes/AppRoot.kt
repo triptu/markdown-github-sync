@@ -64,6 +64,8 @@ import io.github.triptu.notes.vault.FolderPath
 import io.github.triptu.notes.voice.VoiceScreen
 import android.speech.SpeechRecognizer
 import androidx.compose.runtime.remember
+import io.github.triptu.notes.editor.ListToggle
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
@@ -111,9 +113,18 @@ fun AppRoot(vm: MainViewModel) {
     val focus = LocalFocusManager.current
     LaunchedEffect(cover) { if (cover != null && cover !is Overlay.Editor) focus.clearFocus() }
 
+    // In two panes the list can be put away, so a note has the whole window to read. It stays away
+    // across notes until brought back.
+    var listAway by rememberSaveable { mutableStateOf(false) }
+
     @Composable
-    fun Screen(overlay: Overlay?, modifier: Modifier = Modifier, empty: @Composable () -> Unit = { Box(Modifier.fillMaxSize()) }) {
-        OverlayScreen(vm, overlay, pins, capture, sampleVaultAvailable, canSpeak, typing, modifier, empty)
+    fun Screen(
+        overlay: Overlay?,
+        modifier: Modifier = Modifier,
+        list: ListToggle? = null,
+        empty: @Composable () -> Unit = { Box(Modifier.fillMaxSize()) },
+    ) {
+        OverlayScreen(vm, overlay, pins, capture, sampleVaultAvailable, canSpeak, typing, list, modifier, empty)
     }
 
     Box(Modifier.fillMaxSize().background(colors.bg)) {
@@ -125,13 +136,18 @@ fun AppRoot(vm: MainViewModel) {
             Panes.Two -> {
                 Row(Modifier.fillMaxSize()) {
                     // The list leaves while the note is typed into, so the writing has the window.
-                    AnimatedVisibility(visible = !typing, enter = expandHorizontally(tween(200)), exit = shrinkHorizontally(tween(160))) {
+                    AnimatedVisibility(visible = !typing && !(listAway && vm.overlays.note != null), enter = expandHorizontally(tween(200)), exit = shrinkHorizontally(tween(160))) {
                         Row {
                             ListPages(vm, pager, ::go, pins, capture, Modifier.width(ListPaneWidth).fillMaxHeight().windowInsetsPadding(WindowInsets.safeDrawing))
                             Box(Modifier.fillMaxHeight().width(1.dp).background(colors.line))
                         }
                     }
-                    Screen(vm.overlays.note, Modifier.weight(1f).fillMaxHeight().then(noteHost), empty = { NoNote() })
+                    Screen(
+                        vm.overlays.note,
+                        Modifier.weight(1f).fillMaxHeight().then(noteHost),
+                        list = ListToggle(shown = !listAway, toggle = { listAway = !listAway }),
+                        empty = { NoNote() },
+                    )
                 }
                 Screen(cover)
             }
@@ -224,6 +240,7 @@ private fun OverlayScreen(
     sampleVaultAvailable: Boolean,
     canSpeak: Boolean,
     typing: Boolean,
+    list: ListToggle?,
     modifier: Modifier,
     empty: @Composable () -> Unit,
 ) {
@@ -257,6 +274,7 @@ private fun OverlayScreen(
                     onDelete = vm::deleteOpenNote,
                     images = vm.graph.images,
                     onSpeak = if (canSpeak) ({ vm.speakInto(shown.session) }) else null,
+                    list = list,
                 )
             }
             is Overlay.Settings -> SettingsScreen(
