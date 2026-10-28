@@ -6,7 +6,7 @@ Sync your Obsidian vault through ordinary commits in a private GitHub repository
 
 [![A forty-second film of the plugin in Obsidian. Click to watch it on vaultsync.tushar.ai.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/poster.jpg)](https://vaultsync.tushar.ai/)
 
-Writing on Android? [Notes for Android](https://notes.tushar.ai/) edits the same vault and syncs through the same engine.
+Writing on Android? [Notes for Android](https://notes.tushar.ai/) ([source](https://github.com/triptu/notes)) edits the same vault and syncs through the same engine.
 
 ## What it does
 
