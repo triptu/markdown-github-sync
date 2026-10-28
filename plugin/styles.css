@@ -1,4 +1,6 @@
-.git-sync-panel { max-width: 900px; margin-inline: auto; }
+.git-sync-panel { max-width: 900px; margin-inline: auto; width: 100%; }
+/* Modal rows have no horizontal padding, so headings drop theirs to line up. */
+.modal:not(.mod-settings) .git-sync-panel .setting-item-heading { padding-inline: 0; }
 .git-sync-muted { color: var(--text-muted); font-size: var(--font-ui-small); }
 .git-sync-code { font-family: var(--font-monospace); color: var(--text-normal); overflow-wrap: anywhere; }
 .git-sync-selectable { user-select: text; -webkit-user-select: text; cursor: text; }
