@@ -36,7 +36,7 @@ In Obsidian, go to Settings → Community plugins → Browse and search for Gitl
 2. Click Create token. GitHub's token form opens with the permissions filled in (Contents read and write). Pick just that repository on the form, and paste the token back into settings.
 3. Click Connect, look over what the first sync will do, and click Start syncing.
 
-The plugin is in beta and works only with private GitHub repositories. The [guide](docs/guide.md) has the limits, what doesn't sync, and troubleshooting.
+The [guide](docs/guide.md) covers what doesn't sync and troubleshooting.
 
 ## Privacy
 
