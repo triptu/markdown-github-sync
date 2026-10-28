@@ -38,8 +38,12 @@ The README is the plugin's product page; Obsidian's plugin directory shows it. K
 1. Bump the version in `package.json`, `plugin/package.json`, `package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version --workspaces --include-workspace-root`, run at the root, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
 2. Add `docs/releases/<version>.md`.
 3. Run `npm run check`. It typechecks, lints, tests and builds, and fails if the version fields or `versions.json` disagree.
-4. Commit and push.
-5. Run `git tag <version> && git push origin <version>`. The tag is the bare version with no `v`.
+4. Commit the bump, but don't push `main` yet.
+5. Run `git tag <version> && git push origin <version>`. The tag is the bare version with no `v`. Pushing only the tag uploads the commit without moving `main`.
+6. Wait for the Release workflow to publish (`gh run watch`, or `gh release view <version>` until it exists).
+7. Push `main`.
+
+Obsidian's plugin directory reads `manifest.json` from `main` and looks for a release with that version, so `main` must move only after the release exists; pushing both together leaves a window in which the directory reports that no release matches the manifest.
 
 Pushing the tag runs `.github/workflows/release.yml`. It checks the tag matches `manifest.json`, runs `npm run check`, attests `main.js`, `manifest.json` and `styles.css` with GitHub artifact attestations, and publishes a full release, marked latest, with only those three files and the notes from `docs/releases/<version>.md`.
 
