@@ -152,7 +152,7 @@ fun VoiceScreen(session: VoiceSession, onClose: () -> Unit, onSave: () -> Unit, 
         Spacer(Modifier.height(28.dp))
         Row(
             Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                 if (listening) {
@@ -202,13 +202,11 @@ private fun Waveform(levels: List<Float>, active: Boolean, modifier: Modifier = 
 private fun SideButton(@DrawableRes icon: Int, label: String, onClick: () -> Unit) {
     val colors = NotesTheme.colors
     Column(
-        Modifier.widthIn(min = 72.dp).height(64.dp).pressable(onClick, shape = RoundedCornerShape(16.dp), bleed = 0.dp, label = label),
+        Modifier.widthIn(min = 72.dp).pressable(onClick, shape = RoundedCornerShape(16.dp), bleed = 0.dp, label = label),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
-        Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) { PhIcon(icon, null, 24.dp, colors.ink2) }
-        Spacer(Modifier.height(2.dp))
-        Text(label, style = NotesType.hint.copy(fontSize = 12.5.sp), color = colors.muted)
+        Box(Modifier.size(SaveSize), contentAlignment = Alignment.Center) { PhIcon(icon, null, 24.dp, colors.ink2) }
+        Text(label, style = ButtonLabel, color = colors.muted, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
     }
 }
 
@@ -219,10 +217,13 @@ private fun SaveButton(onSave: () -> Unit) {
         Modifier.width(96.dp).pressable(onSave, shape = RoundedCornerShape(20.dp), bleed = 0.dp, label = VoiceCopy.Save),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(72.dp).clip(CircleShape).background(colors.solid), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(SaveSize).clip(CircleShape).background(colors.solid), contentAlignment = Alignment.Center) {
             PhIcon(R.drawable.ph_check, null, 30.dp, colors.onSolid)
         }
-        Spacer(Modifier.height(6.dp))
-        Text(VoiceCopy.Save, style = NotesType.hint.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium), color = colors.ink)
+        Text(VoiceCopy.Save, style = ButtonLabel.copy(fontWeight = FontWeight.Medium), color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 4.dp))
     }
 }
+
+/** Pause, Save and Type share one height, so their labels sit on one line. */
+private val SaveSize = 72.dp
+private val ButtonLabel = NotesType.hint.copy(fontSize = 13.sp)
