@@ -7,7 +7,7 @@
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:layout_gravity="center_vertical"
-        android:background="@drawable/widget_preview_bg"
+        android:background="@drawable/widget_preview_pill"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="17dp"
@@ -17,15 +17,11 @@
             android:layout_height="22dp"
             android:src="@drawable/ph_note_pencil"
             android:tint="@color/quick_ink2" />
-        <TextView
+        <!-- The picker shows the 2x1 size, where the widget leaves the label out. -->
+        <FrameLayout
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:layout_weight="1"
-            android:maxLines="1"
-            android:text="@string/capture_widget_label"
-            android:textColor="@color/quick_muted"
-            android:textSize="16sp" />
+            android:layout_height="0dp"
+            android:layout_weight="1" />
         <FrameLayout
             android:layout_width="44dp"
             android:layout_height="44dp"
