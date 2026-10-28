@@ -95,6 +95,3 @@ To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/`
 
 Maintainer notes, release steps and design rules are in [AGENTS.md](AGENTS.md). Release notes are in [docs/releases](docs/releases/).
 
-## License
-
-MIT. See [LICENSE](LICENSE).
