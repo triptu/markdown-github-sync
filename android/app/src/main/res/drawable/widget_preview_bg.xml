@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Widget picker previews: the widget's own background. -->
+<!-- Widget picker preview: the capture bar's pill. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/quick_bg" />
-    <corners android:radius="24dp" />
+    <solid android:color="@color/quick_raised" />
+    <corners android:radius="28dp" />
 </shape>
