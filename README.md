@@ -1,10 +1,10 @@
 # Gitless Vault Sync
 
-![Your vault, in your own repo. Gitless Vault Sync syncs an Obsidian vault between your computer and your phone through a private GitHub repository you own.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/og.png)
-
 Sync your Obsidian vault through ordinary commits in a private GitHub repository, on desktop and mobile. No server, no local Git. The plugin talks to the GitHub API directly, and your history is plain Git you can browse on GitHub.
 
 [Website](https://vaultsync.tushar.ai/) · [Install in Obsidian](https://community.obsidian.md/plugins/github-vault-sync) · [Latest release](https://github.com/triptu/markdown-github-sync/releases/latest) · [Guide](docs/guide.md)
+
+[![A forty-second film of the plugin in Obsidian. Click to watch it on vaultsync.tushar.ai.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/poster.jpg)](https://vaultsync.tushar.ai/)
 
 Writing on Android? [Notes for Android](https://notes.tushar.ai/) edits the same vault and syncs through the same engine.
 

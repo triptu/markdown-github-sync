@@ -22,8 +22,6 @@
     --muted: #64635f;
     --faint: #9b9993;
     --line: rgba(20, 20, 20, 0.09);
-    --ui: #fdfcfa;
-    --ui-side: #f2f1ec;
     --shadow: 0 40px 80px -36px rgba(30, 28, 24, 0.38), 0 14px 30px -18px rgba(30, 28, 24, 0.22);
     --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
     --sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -33,14 +31,14 @@
   @media (prefers-color-scheme: dark) {
     :root:not(.light) {
       --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
-      --line: rgba(255, 255, 255, 0.09); --ui: #181818; --ui-side: #121212;
+      --line: rgba(255, 255, 255, 0.09);
       --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
       color-scheme: dark;
     }
   }
   :root.dark {
     --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
-    --line: rgba(255, 255, 255, 0.09); --ui: #181818; --ui-side: #121212;
+    --line: rgba(255, 255, 255, 0.09);
     --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
     color-scheme: dark;
   }
@@ -91,29 +89,12 @@
   .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
   .btn svg { width: 18px; height: 18px; }
 
-  /* A drawn Obsidian window: made-up note, the plugin's real status wording. */
-  .win {
-    max-width: 960px; margin: 24px auto 0; border-radius: 14px; background: var(--ui); border: 1px solid var(--line);
-    box-shadow: var(--shadow); overflow: hidden; font: 400 14px/1.5 var(--sans); text-align: left;
+  .film { margin: 24px auto 0; max-width: 1040px; }
+  .film video {
+    display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 20px; background: var(--card);
+    box-shadow: var(--shadow);
   }
-  .win-bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--ui-side); }
-  .win-bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line); border: 1px solid var(--line); }
-  .win-bar span { margin-left: 10px; font-size: 12.5px; color: var(--faint); }
-  .app { display: grid; grid-template-columns: 210px 1fr; min-height: 380px; }
-  .app aside { background: var(--ui-side); border-right: 1px solid var(--line); padding: 16px 12px; font-size: 13.5px; color: var(--muted); }
-  .app aside p { margin: 0; padding: 3px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .app aside .dir::before { content: '\25BE  '; color: var(--faint); }
-  .app aside .in { padding-left: 24px; }
-  .app aside .on { background: var(--line); color: var(--ink); }
-  .app main { display: flex; flex-direction: column; min-width: 0; }
-  .app .page { flex: 1; padding: 34px 44px 24px; }
-  .app .page h4 { margin: 0 0 14px; font: 600 26px/1.2 var(--sans); }
-  .app .page p { margin: 0 0 10px; color: var(--ink); }
-  .app .page .task { color: var(--muted); }
-  .app .page .task::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 10px; border: 1.5px solid var(--faint); border-radius: 3px; vertical-align: -1px; }
-  .app .page .task.done::before { background: var(--muted); border-color: var(--muted); }
-  .status { display: flex; justify-content: flex-end; gap: 16px; padding: 6px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); background: var(--ui-side); }
-  .status b { font-weight: 500; color: var(--ink); }
+  .film p { text-align: center; font-size: 14px; color: var(--faint); margin: 16px 0 0; }
 
   .beats {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px;
@@ -167,6 +148,7 @@
     .wrap { padding: 0 20px; }
     .hero { padding: 40px 0 36px; }
     .lede { font-size: 18px; }
+    .film video { border-radius: 12px; }
     .beats { grid-template-columns: 1fr; gap: 36px; margin-top: 56px; padding: 44px 0; }
     .install { padding-top: 56px; }
     .top nav .hide-sm { display: none; }
@@ -174,13 +156,6 @@
     .pair .pair-mark { width: 44px; height: 44px; border-radius: 12px; }
     .pair .arrow { display: none; }
     footer { padding: 56px 0 48px; }
-  }
-  @media (max-width: 640px) {
-    .app { grid-template-columns: 1fr; min-height: 0; }
-    .app aside { display: none; }
-    .app .page { padding: 22px 20px 16px; }
-    .app .page h4 { font-size: 22px; }
-    .status span:not(:last-child) { display: none; }
   }
 </style>
 </head>
@@ -213,34 +188,10 @@
     </div>
   </section>
 
-  <div class="win reveal" role="img" aria-label="An Obsidian window with a note open and GitHub: Synced at 10:42 in the status bar">
-    <div class="win-bar"><i></i><i></i><i></i><span>Trip to the hills</span></div>
-    <div class="app">
-      <aside>
-        <p class="dir">Plans</p>
-        <p class="in on">Trip to the hills</p>
-        <p class="in">Garden</p>
-        <p class="dir">Writing</p>
-        <p class="in">Drafts</p>
-        <p>Ideas to build</p>
-        <p>Reading list</p>
-        <p>This week</p>
-        <p>Todos</p>
-      </aside>
-      <main>
-        <div class="page">
-          <h4>Trip to the hills</h4>
-          <p><b>When.</b> The long weekend in November, back by Monday night.</p>
-          <p><b>Plan.</b> Train up on Friday, two nights at the lake, walk to the ridge on Sunday.</p>
-          <p class="task done">Book the train</p>
-          <p class="task done">Rain jacket</p>
-          <p class="task">Two warm layers</p>
-          <p class="task">Torch and spare batteries</p>
-        </div>
-        <div class="status"><span>214 words</span><span>1,302 characters</span><b>GitHub: Synced at 10:42</b></div>
-      </main>
-    </div>
-  </div>
+  <section class="film" id="film">
+    <video src="vaultsync-launch.mp4" poster="poster.jpg" autoplay muted loop playsinline controls preload="auto" aria-label="A short film of Gitless Vault Sync in Obsidian: typing in a note, an edit arriving from a phone, resolving a conflict, restoring an old version and reviewing settings from another device"></video>
+    <p>Forty seconds, recorded in Obsidian with made-up notes.</p>
+  </section>
 
   <section class="beats">
     <div class="reveal">
@@ -284,7 +235,7 @@
       <a class="btn primary" href="https://community.obsidian.md/plugins/github-vault-sync">Get it for Obsidian</a>
       <a class="btn" href="https://github.com/triptu/markdown-github-sync">Source on GitHub</a>
     </div>
-    <p class="fine">The window above is drawn with made-up notes.</p>
+    <p class="fine">The film is recorded in Obsidian with made-up notes.</p>
   </footer>
 </div>
 <script>
