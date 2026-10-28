@@ -36,5 +36,3 @@ Repeat on each device. The [guide](docs/guide.md) covers when sync runs, what do
 - It uses base64 (`atob` and `btoa`) only because GitHub's API sends and receives file contents as base64. Nothing is hidden or obfuscated; the code is open source.
 - It writes to the clipboard only when you tap **Copy link** next to the token field, and never reads it.
 - No telemetry, analytics or ads. It's free and open source.
-
-The plugin was called GitHub Vault Sync before 0.4.1.
