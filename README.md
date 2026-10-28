@@ -4,7 +4,7 @@ Sync your Obsidian vault with a GitHub repository, on desktop and mobile. No ser
 
 [Install in Obsidian](https://community.obsidian.md/plugins/github-vault-sync) · [Website](https://vaultsync.tushar.ai/) · [Guide](docs/guide.md)
 
-[![A short film of the plugin in Obsidian: typing in a note, an edit arriving from a phone, resolving a conflict and restoring an old version. Click to watch it.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/poster.jpg)](https://vaultsync.tushar.ai/)
+[![The film's poster: a laptop's edit and a phone's edit landing in one note, under the word Both. Click to watch it.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/poster-v2.jpg)](https://vaultsync.tushar.ai/)
 
 Your notes stay in a repository you own, with history you can browse on GitHub.
 
