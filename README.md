@@ -38,6 +38,12 @@ In Obsidian, go to Settings → Community plugins → Browse and search for Gitl
 
 The [guide](docs/guide.md) covers what doesn't sync and troubleshooting.
 
-## Privacy
+## Privacy and network use
 
-The plugin connects only to GitHub. GitHub can read your notes; they aren't end-to-end encrypted. It sends no telemetry. The [guide](docs/guide.md#privacy-and-network-use) lists every host and folder it touches.
+- The plugin connects only to GitHub: `api.github.com` (REST and GraphQL) for the repository, and `codeload.github.com` to download a commit's files in one go.
+- `github.com` is only opened in your browser, when you click the link to create a token or to view a commit. The plugin makes no requests to it.
+- Your token stays in Obsidian's secret storage on each device and is sent only to GitHub.
+- It uploads your notes and the Obsidian settings that sync to the repository you choose. It reads only files inside the vault, and keeps its journal in `.git-vault-sync/` there.
+- It uses base64 (`atob` and `btoa`) only because GitHub's API sends and receives file contents as base64. Nothing is hidden or obfuscated; the code is open source.
+- It writes to the clipboard only when you tap **Copy link** next to the token field, and never reads it.
+- No telemetry, analytics or ads. It's free and open source.

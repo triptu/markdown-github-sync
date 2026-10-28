@@ -31,7 +31,7 @@ npm run build     # build the plugin into dist/github-vault-sync/
 
 `check` already builds. To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` (create `plugins/` if it's missing, and keep the folder name, which is the plugin id). Ask for the vault path if you don't know it; for a throwaway vault, any folder with an empty `.obsidian/` will do. Then the person reloads Obsidian and enables the plugin under Settings → Community plugins. Desktop Obsidian reads plugin files only on load. For a phone, see "Testing on the phone" below.
 
-The README is the plugin's product page; Obsidian's plugin directory shows it. Keep commands and internals out of it. User-facing detail (when sync runs, what doesn't sync, privacy, troubleshooting) goes in `docs/guide.md`; anything for working on the code goes here.
+The README is the plugin's product page; Obsidian's plugin directory shows it. Keep commands and internals out of it. User-facing detail (when sync runs, what doesn't sync, troubleshooting) goes in `docs/guide.md`; anything for working on the code goes here.
 
 ## Releasing
 

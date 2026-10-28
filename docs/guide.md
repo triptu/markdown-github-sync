@@ -46,17 +46,6 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 
 Git LFS, symlinks, submodules and nested `.gitignore` files aren't supported. Neither are two paths that differ only in letter case.
 
-## Privacy and network use
-
-- The plugin connects only to GitHub: `api.github.com` (REST and GraphQL) for the repository, and `codeload.github.com` to download a commit's files in one go.
-- `github.com` is only opened in your browser, when you click the link to create a token or to view a commit. The plugin makes no requests to it.
-- Your token stays in Obsidian's secret storage on each device and is sent only to GitHub.
-- It uploads your notes and the Obsidian settings that sync to the repository you choose, and writes what it downloads into your vault. The settings folder (`.obsidian`, or whatever you've named it) changes only after you approve.
-- To find what changed, it lists the files in your vault and reads the ones it syncs. Nothing outside the vault is read. Its journal lives in `.git-vault-sync/` inside the vault.
-- It uses base64 (`atob` and `btoa`) only because GitHub's API sends and receives file contents as base64. Nothing is hidden or obfuscated; the code is open source.
-- It writes to the clipboard only when you tap **Copy link** next to the token field, and never reads it.
-- No telemetry, analytics or ads. It's free and open source.
-
 ## Troubleshooting
 
 - **"Branch wasn't found, or the repository is empty."** Check the branch name, and make sure the repository has at least one commit.
