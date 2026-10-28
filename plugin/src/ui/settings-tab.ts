@@ -191,7 +191,7 @@ export class GitSettings extends PluginSettingTab {
   private async renderSetup(el: HTMLElement, generation: number): Promise<void> {
     const draft = { ...this.plugin.settings };
     new Setting(el).setName("Connect to GitHub").setHeading()
-      .setDesc("Your notes are saved as commits in a private GitHub repository you own.");
+      .setDesc("Your notes are saved as commits in a GitHub repository you own.");
     let repository = draft.owner && draft.repository ? `${draft.owner}/${draft.repository}` : "";
     const target = (): AccessTarget | null => {
       const parsed = parseRepository(repository);

@@ -50,7 +50,6 @@ Git LFS, symlinks, submodules and nested `.gitignore` files aren't supported. Ne
 
 - **"Branch wasn't found, or the repository is empty."** Check the branch name, and make sure the repository has at least one commit.
 - **Access denied.** Check that the token has Contents read and write on the repository, and that it hasn't expired. When the token expires, sync stops; updates keep working.
-- **"Sync only works with a private repository."** Make the repository private.
 - **Android.** Android pauses Obsidian in the background and cuts its network. Leave Obsidian open until it shows synced before you switch devices.
 
 ## Development

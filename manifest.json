@@ -1,9 +1,9 @@
 {
   "id": "github-vault-sync",
   "name": "Gitless Vault Sync",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "minAppVersion": "1.11.4",
-  "description": "Sync your notes with a private GitHub repository on desktop and mobile.",
+  "description": "Sync your notes with a GitHub repository on desktop and mobile.",
   "author": "Tushar Tripathi",
   "isDesktopOnly": false
 }

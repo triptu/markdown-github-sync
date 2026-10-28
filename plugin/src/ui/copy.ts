@@ -112,7 +112,6 @@ export function accessProblem(error: unknown, target: Pick<AccessTarget, "owner"
   if (status === 401 || /credential unavailable/.test(message)) return "GitHub rejected this token. It may be mistyped, expired or revoked.";
   if (status === 403) return `GitHub denied access to ${name}. Check that the token has Contents read and write permission.`;
   if (status === 404) return `This token can't see ${name}. Check the name and the token's repository access.`;
-  if (/private GitHub repository/.test(message)) return `${name} is public. Sync only works with a private repository.`;
   if (/identity mismatch/.test(message)) return `GitHub returned a different repository for ${name}. Check the name.`;
   if (/transport failed/.test(message)) return "Couldn't reach GitHub. Check your connection.";
   return message;

@@ -416,7 +416,6 @@ export class GitHubRepository implements Repository {
     // Any failed or mismatched check voids the identity a publication may reuse.
     this.checkedIdentity = null;
     const repo = record(await this.rest(""));
-    if (repo.private !== true) throw new GitHubError("Sync requires a private GitHub repository; public or unknown visibility is refused");
     const id = string(repo.node_id), owner = string(record(repo.owner).login), name = string(repo.name);
     if (!id || owner.toLowerCase() !== this.options.owner.toLowerCase() || name.toLowerCase() !== this.options.name.toLowerCase()) throw new GitHubError("Repository identity mismatch");
     this.checkedIdentity = { id, at: this.now() };
@@ -430,7 +429,7 @@ export class GitHubRepository implements Repository {
     return (await this.identity()).id;
   }
   /**
-   * Read-only reachability check: the token can read the private repository
+   * Read-only reachability check: the token can read the repository
    * and the configured branch exists. Two GETs, no blobs, no mutations. It
    * cannot establish Contents write permission; only a publication does.
    */

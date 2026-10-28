@@ -653,16 +653,14 @@ test("blob uploads within preparation run at most four at a time, once per disti
   for (const [path, entry] of Object.entries(changes)) assert.equal(prepared.files[path]?.oid, entry!.oid);
 });
 
-for (const visibility of [false, undefined, "true", null]) {
-  test(`identity refuses non-private or malformed visibility: ${String(visibility)}`, async () => {
+test("identity accepts public and private repositories alike", async () => {
+  for (const visibility of [false, true]) {
     const api = new FakeGitHub();
     api.intercept = request => new URL(request.url).pathname === "/repos/owner/repo"
       ? response({ private: visibility, node_id: "R_stable", owner: { login: "owner" }, name: "repo" }) : undefined;
-    await assert.rejects(client(api).identity(), /private GitHub repository/);
-    assert.equal(api.requests.length, 1);
-    assert.equal(api.requests[0].method, "GET");
-  });
-}
+    assert.equal((await client(api).identity()).id, "R_stable");
+  }
+});
 
 test("file history pins pagination to a commit and safely encodes the file path", async () => {
   const api = new FakeGitHub(), repo = client(api), originalHead = api.head;
@@ -1303,9 +1301,9 @@ test("ref updates reuse a recent successful identity check and recheck after exp
   now += 11 * 60_000;
   assert.equal(await publishOnce(), "acknowledged");
   assert.equal(identityGets(), 3, "an old check is not reused");
-  api.intercept = r => r.method === "GET" && new URL(r.url).pathname === "/repos/owner/repo" ? response({ private: false, node_id: "R_stable", owner: { login: "owner" }, name: "repo" }) : undefined;
-  await assert.rejects(repo.identity(), /private/);
-  await assert.rejects(publishOnce(), /private/, "a failed check voids the reusable identity");
+  api.intercept = r => r.method === "GET" && new URL(r.url).pathname === "/repos/owner/repo" ? response({ private: true, node_id: "R_stable", owner: { login: "someone-else" }, name: "repo" }) : undefined;
+  await assert.rejects(repo.identity(), /identity mismatch/);
+  await assert.rejects(publishOnce(), /identity mismatch/, "a failed check voids the reusable identity");
 });
 
 test("headOid reads the branch ref alone and agrees with head()", async () => {

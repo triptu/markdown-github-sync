@@ -1,6 +1,6 @@
 # Gitless Vault Sync
 
-Sync your Obsidian vault with a private GitHub repository, on desktop and mobile. No server, no Git on your device.
+Sync your Obsidian vault with a GitHub repository, on desktop and mobile. No server, no Git on your device.
 
 [Install in Obsidian](https://community.obsidian.md/plugins/github-vault-sync) · [Website](https://vaultsync.tushar.ai/) · [Guide](docs/guide.md)
 
@@ -30,7 +30,7 @@ Your notes stay in a repository you own, with history you can browse on GitHub.
 
 ## Install
 
-In Obsidian, go to Settings → Community plugins → Browse and search for Gitless Vault Sync, or open its [plugin page](https://community.obsidian.md/plugins/github-vault-sync). Create one private repository on GitHub with "Add a README file" ticked. Then, on each device:
+In Obsidian, go to Settings → Community plugins → Browse and search for Gitless Vault Sync, or open its [plugin page](https://community.obsidian.md/plugins/github-vault-sync). Create one repository on GitHub with "Add a README file" ticked. Then, on each device:
 
 1. Turn off any other sync plugin, then enter the repository in this plugin's settings.
 2. Click Create token. GitHub's token form opens with the permissions filled in (Contents read and write). Pick just that repository on the form, and paste the token back into settings.
