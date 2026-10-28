@@ -10,6 +10,8 @@ The [README](../README.md) covers what the plugin is and how to set it up. This 
 - Repeat the setup on each device. Don't copy the `.git-vault-sync/` folder between devices.
 - If the vault already has a `.git` folder, it's left alone and never synced. Once connected, stop using Git in that folder.
 
+The plugin's page in Obsidian opens with the link `obsidian://show-plugin?id=github-vault-sync`.
+
 ### Installing from a release
 
 Instead of the community plugin directory, you can download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into `.obsidian/plugins/github-vault-sync/` in your vault.
@@ -44,6 +46,24 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 
 Git LFS, symlinks, submodules and nested `.gitignore` files aren't supported. Neither are two paths that differ only in letter case.
 
+## Limits
+
+- It's in beta.
+- GitHub only, and only private repositories. GitHub can read your notes; they aren't end-to-end encrypted.
+- Files up to 8 MiB each, and vaults up to 128 MiB in total.
+- Needs Obsidian 1.11.4 or newer.
+
+## Privacy and network use
+
+- The plugin connects only to GitHub: `api.github.com` (REST and GraphQL) for the repository, and `codeload.github.com` to download a commit's files in one go.
+- `github.com` is only opened in your browser, when you click the link to create a token or to view a commit. The plugin makes no requests to it.
+- Your token stays in Obsidian's secret storage on each device and is sent only to GitHub.
+- It uploads your notes and the Obsidian settings that sync to the repository you choose, and writes what it downloads into your vault. The settings folder (`.obsidian`, or whatever you've named it) changes only after you approve.
+- To find what changed, it lists the files in your vault and reads the ones it syncs. Nothing outside the vault is read. Its journal lives in `.git-vault-sync/` inside the vault.
+- It uses base64 (`atob` and `btoa`) only because GitHub's API sends and receives file contents as base64. Nothing is hidden or obfuscated; the code is open source.
+- It writes to the clipboard only when you tap **Copy link** next to the token field, and never reads it.
+- No telemetry, analytics or ads. It's free and open source.
+
 ## Troubleshooting
 
 - **"Branch wasn't found, or the repository is empty."** Check the branch name, and make sure the repository has at least one commit.
@@ -53,14 +73,4 @@ Git LFS, symlinks, submodules and nested `.gitignore` files aren't supported. Ne
 
 ## Development
 
-Requires Node 22 or newer and npm.
-
-```sh
-npm run setup     # install dependencies
-npm run check     # typecheck, lint, test, build and check release metadata
-npm run build     # build the plugin into dist/github-vault-sync/
-```
-
-To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` and reload Obsidian.
-
-Maintainer notes, release steps and design rules are in [AGENTS.md](../AGENTS.md). Release notes are in [releases](releases/).
+Building, testing and releasing are described for coding agents in [AGENTS.md](../AGENTS.md). Release notes are in [releases](releases/).
