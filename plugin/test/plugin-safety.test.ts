@@ -140,7 +140,7 @@ function harness() {
     },
   };
   const create = (replacement = false) => {
-    const plugin = new (replacement ? reloaded : loaded).GitVaultSync(app as unknown as App, { id: "git-vault-sync", name: "GitHub Vault Sync", version: "test", minAppVersion: "1.11.4", description: "Safety test", author: "Test" }); plugin.app = app as unknown as App;
+    const plugin = new (replacement ? reloaded : loaded).GitVaultSync(app as unknown as App, { id: "git-vault-sync", name: "Gitless Vault Sync", version: "test", minAppVersion: "1.11.4", description: "Safety test", author: "Test" }); plugin.app = app as unknown as App;
     plugin.settings = structuredClone(settings); Reflect.set(plugin, "ready", true); return plugin;
   };
   return { app, docs, files, local, put, create, emit: (name: string, path: string, oldPath?: string) => events.get(name)?.({ path }, oldPath), beforeProcess: (callback: () => Promise<void>) => { beforeProcess = callback; }, crashAfter: () => { crashAfter = true; }, crashBefore: () => { crashBefore = true; }, tearWrite: () => { tearNextWrite = true; } };

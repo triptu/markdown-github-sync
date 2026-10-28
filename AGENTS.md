@@ -1,6 +1,6 @@
 # Maintainer guide
 
-GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. This repository, `triptu/markdown-github-sync`, is the plugin's source. Personal details for the maintainer's own setup (vault paths, the vault repository, devices) live in `CLAUDE.local.md`, which git ignores; this repository is public, so keep them out of tracked files.
+Gitless Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub repository by committing through the GitHub API. It has no server and no local `.git` checkout. This repository, `triptu/markdown-github-sync`, is the plugin's source. Personal details for the maintainer's own setup (vault paths, the vault repository, devices) live in `CLAUDE.local.md`, which git ignores; this repository is public, so keep them out of tracked files.
 
 ## Layout
 
@@ -14,8 +14,8 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
   - `hidden-config.ts` covers `.obsidian` settings.
   - `scheduler.ts` decides when syncs run.
 - `plugin/src/ui/`: modals and settings. All user-facing wording lives in `ui/copy.ts`.
-- `plugin/updater/`: the companion **GitHub Vault Sync Updater** plugin. `core.ts` holds the logic and has no Obsidian imports.
 - `plugin/test/`: run with `npm test` from `plugin/` (some tests use relative paths).
+- `site/`: the two static product pages, `notes/` (notes.tushar.ai) and `vaultsync/` (vaultsync.tushar.ai). Each folder is its own Vercel project and deploys on push to `main` when that folder changes. Screens and notes there are made up.
 - `android/`: a native Android notes app (Kotlin, Compose) that edits the same vault. Build and test from `android/` with `./gradlew :app:testDebugUnitTest installDebug` (set `ANDROID_SERIAL` when an emulator is also attached). Test the app on an emulator, not the owner's phone: the phone carries only the release app (`io.github.triptu.notes`, built with `./gradlew :app:assembleRelease`, signed with a key configured in `~/.gradle/gradle.properties`) which holds the owner's real vault. Don't install the debug app (`io.github.triptu.notes.debug`) or anything else on the phone, and never open, tap, clear or reconfigure the release app; updating it with `adb install -r` is fine when asked. Never connect the debug app to a real vault. Before any `adb shell input` on an emulator, check `mCurrentFocus` is the debug app. The phone can show up twice in `adb devices` (by IP and by name); pick one with `ANDROID_SERIAL`.
   - `vault/FileVaultStore.kt` writes through the sync module's `VaultFiles`, the one writer of the vault folder, so sync's compare-and-swap and the editor share a lock. Never write the folder directly.
   - `syncing/` connects the app to `android/sync`: `GitHubSync` owns the client, setup, the encrypted token and conflict settling (both versions kept inline between Git conflict markers); `SendEditsWorker` sends edits after the app leaves the screen. Sync copy lives in `syncing/SyncCopy.kt`. `adb logcat -s NotesSync` shows status changes; debug builds also log engine calls and request timings (never paths or note text).
@@ -26,18 +26,21 @@ GitHub Vault Sync is an Obsidian plugin that syncs a vault to a private GitHub r
 
 ## Releasing
 
-1. Bump the version in `package.json`, `plugin/package.json`, `plugin/package-lock.json` and `plugin/manifest.json`.
+1. Bump the version in `package.json`, `plugin/package.json`, `package-lock.json` and `manifest.json` (at the repository root; there's no other copy), and add the version with its `minAppVersion` to `versions.json`. `npm version <version> --no-git-tag-version --workspaces --include-workspace-root`, run at the root, covers the package files. Versions are plain `x.y.z`: Obsidian's plugin directory rejects anything else.
 2. Add `docs/releases/<version>.md`.
-3. Run `npm run check`.
+3. Run `npm run check`. It typechecks, lints, tests and builds, and fails if the version fields or `versions.json` disagree.
 4. Commit and push.
-5. Run `npm run publish-update`. This builds the plugin and force-pushes a single commit to the `updates` branch, containing `latest.json` (the version plus a SHA-256 for each file) and `latest/*`.
-6. Run `gh release create <version> dist/github-vault-sync.zip dist/github-vault-sync-updater.zip --latest -F docs/releases/<version>.md`. Publish it as a full release, not a pre-release: the beta in the version number is not a reason to mark it as one, and pre-releases are hidden from "latest release" lookups. New devices install from these zips; existing ones update from the `updates` branch.
+5. Run `git tag <version> && git push origin <version>`. The tag is the bare version with no `v`.
 
-Every device with the updater installs the new version within about 6 hours. You can also run the command "Check for GitHub Vault Sync update" from the command palette. If the new version fails to load, the updater restores the old files and never retries that version. To ship a fix, publish a higher version number.
+Pushing the tag runs `.github/workflows/release.yml`. It checks the tag matches `manifest.json`, runs `npm run check`, attests `main.js`, `manifest.json` and `styles.css` with GitHub artifact attestations, and publishes a full release, marked latest, with only those three files and the notes from `docs/releases/<version>.md`.
 
-The updater itself never updates automatically, so keep it small and stable. To change it, bump `plugin/updater/manifest.json` and copy `dist/github-vault-sync-updater/*` into `.obsidian/plugins/github-vault-sync-updater/` on one device. Config sync carries it to the other devices once the change is approved under Obsidian settings.
+Obsidian installs updates for every device once a release is published; a new release must have a higher version.
 
-The updater needs no token: it reads `latest.json` and `latest/*` from the public `updates` branch through raw.githubusercontent.com and checks each file's SHA-256. Sync uses a fine-grained PAT with Contents read/write on the vault repository; when it expires, sync shows this in settings.
+`npm run lint` runs Obsidian's `eslint-plugin-obsidianmd` recommended config over `plugin/src`, the same checks as the community plugin review. Keep it free of errors. The warnings it still prints are deliberate: the engine uses bare timers and falls back to `.obsidian` because it also runs under Node in tests and in the Android app, copy keeps the plugin's name in capitals, and settings keep `display()` until `minAppVersion` reaches 1.13.
+
+The review installs and builds from the repository root, so `plugin/` is an npm workspace and its one lockfile is the root `package-lock.json`. Without a lockfile at the root the review can't resolve the `obsidian` types and reports every API call as unsafe.
+
+Sync uses a fine-grained PAT with Contents read/write on the vault repository; when it expires, sync shows this in settings.
 
 ## Testing on the phone
 
@@ -74,4 +77,4 @@ Desktop Obsidian reads plugin files only on load, so reload the app after copyin
 
 ## Private Obsidian APIs
 
-`app.plugins`, `app.setting` and `app.commands` aren't public. Always reach them through guarded `Reflect` calls (see `ui/obsidian-private.ts` and `updater/main.ts`), and degrade gracefully when they're missing.
+`app.plugins`, `app.setting` and `app.commands` aren't public. Always reach them through guarded `Reflect` calls (see `ui/obsidian-private.ts`), and degrade gracefully when they're missing.

@@ -9,8 +9,8 @@
 /* Rows keep Obsidian's label-left, control-right layout; only rows holding a text field wrap on narrow screens. */
 .git-sync-panel .setting-item-control { flex-wrap: wrap; }
 @media (max-width: 600px) {
-  .git-sync-panel .setting-item:has(input[type="text"], input[type="password"], textarea) { flex-wrap: wrap; gap: var(--size-4-2); }
-  .git-sync-panel .setting-item:has(input[type="text"], input[type="password"], textarea) .setting-item-info { flex-basis: 100%; }
+  .git-sync-panel .setting-item.git-sync-text-row { flex-wrap: wrap; gap: var(--size-4-2); }
+  .git-sync-panel .setting-item.git-sync-text-row .setting-item-info { flex-basis: 100%; }
 }
 .git-sync-panel .git-sync-format-field { flex-direction: column; align-items: stretch; gap: var(--size-4-2); }
 .git-sync-panel .git-sync-format-field .setting-item-control { width: 100%; }

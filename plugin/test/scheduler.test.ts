@@ -3,17 +3,16 @@ import assert from "node:assert/strict";
 import { ForegroundScheduler, type SchedulerClock } from "../src/git-sync/scheduler";
 
 function fakeClock() {
-  let now = 0;
-  const timers = new Map<ReturnType<typeof setTimeout>, { at: number; call: () => void }>();
+  let now = 0, lastId = 0;
+  const timers = new Map<number, { at: number; call: () => void }>();
   const clock: SchedulerClock = {
     now: () => now,
     setTimeout: (call, ms) => {
-      const id = setTimeout(() => {}, 2 ** 30);
-      id.unref();
+      const id = ++lastId;
       timers.set(id, { at: now + ms, call });
       return id;
     },
-    clearTimeout: id => { clearTimeout(id); timers.delete(id); },
+    clearTimeout: id => { timers.delete(id); },
   };
   return {
     clock,
@@ -105,6 +104,7 @@ test("default timers retain the browser global receiver during schedule and stop
   // Window timers accept a global invocation, but throw when borrowed as clock methods.
   runInNewContext(`
     let created = 0, cleared = 0;
+    var window = globalThis;
     function setTimeout(callback, milliseconds) {
       if (this !== globalThis) throw Error('Illegal invocation');
       return ++created;

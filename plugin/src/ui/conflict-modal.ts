@@ -61,7 +61,7 @@ export class ConflictModal extends Modal {
         button.setText(`Keep both · yours as ${describePath(conflict.sibling).name}`);
       button.onclick = () => {
         if (kind === "edit") this.edit(actions);
-        else void this.resolve({ kind } as ChoiceInput, button);
+        else void this.resolve({ kind }, button);
       };
     }
   }

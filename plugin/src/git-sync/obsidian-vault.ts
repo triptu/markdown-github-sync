@@ -1,5 +1,5 @@
 import { App, FileView, TFile } from "obsidian";
-import { decodeBase64, entryFromBytes, hashBlob, isValidPath, verifyEntry, withMode, yieldToHost } from "./codec";
+import { decodeBase64, entryFromBytes, hashBlob, hasControlCharacter, isValidPath, verifyEntry, withMode, yieldToHost } from "./codec";
 import type { ApplyResult, Entry, LocalVault, NativeIssue, Snapshot } from "./contracts";
 import type { NativeModes } from "./native-modes";
 import { NativeTransactionJournal, type FileIntent, type NativeOversizeRecovery, type NativeRecovery, type PendingNativeIntent } from "./native-transactions";
@@ -14,7 +14,7 @@ const maxFileBytes = 8 * 1024 * 1024;
 const statConcurrency = 8;
 /** Runs `work` at most `width` at a time, keeping input order; rejects after in-flight work settles. */
 async function mapConcurrent<T, R>(items: readonly T[], width: number, work: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+  const results = new Array<R>(items.length);
   let next = 0, failure: { error: unknown } | undefined;
   await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => {
     while (failure === undefined && next < items.length) {
@@ -43,10 +43,10 @@ function visible(path: string): boolean { return path.split("/").every(part => !
 function safePath(path: string, policy: NativePathPolicy): void {
   if (!policy.allows(path) || path.split("/").some(part => !part || part === "." || part === ".."
     || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
-    || /[\\:\x00-\x1f\x7f]/.test(path)) throw new Error(`Unsupported vault path: ${path}`);
+    || /[\\:]/.test(path) || hasControlCharacter(path)) throw new Error(`Unsupported vault path: ${path}`);
 }
 function safeExportPath(path: string, policy: NativePathPolicy): void {
-  if (!isValidPath(path)) throw new Error(`Unsupported export path: ${path}`);
+  if (!isValidPath(path)) throw new Error(`Unsupported export path: ${String(path)}`);
   const [directory, ...suffix] = path.split("/");
   if (!/^\.git-vault-sync-export-[0-9a-f-]{36}$/.test(directory) || suffix.length === 0)
     throw new Error(`Export must use a dedicated hidden directory: ${path}`);
@@ -56,7 +56,7 @@ function safeExportPath(path: string, policy: NativePathPolicy): void {
 function exactText(bytes: Uint8Array): string | null {
   try {
     const value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    return equal(new TextEncoder().encode(value), bytes) && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value) ? value : null;
+    return equal(new TextEncoder().encode(value), bytes) && !hasControlCharacter(value, "\t\n\r") ? value : null;
   } catch { return null; }
 }
 export class GitObsidianVault implements LocalVault {
@@ -81,7 +81,7 @@ export class GitObsidianVault implements LocalVault {
     private assertActive: () => void = () => {},
     private transactions?: NativeTransactionJournal,
     private hostLifetime: string | null = null,
-    private indexTick: () => Promise<void> = () => new Promise(resolve => setTimeout(resolve, indexWaitIntervalMs)),
+    private indexTick: () => Promise<void> = () => new Promise(resolve => window.setTimeout(resolve, indexWaitIntervalMs)),
   ) {
     if (transactions && !transactions.matchesPolicy(nativePolicy))
       throw new Error("Native transaction journal policy does not match the vault.");
@@ -132,7 +132,8 @@ export class GitObsidianVault implements LocalVault {
     this.oversized.delete(path);
     return bytes;
   }
-  private async hiddenOid(path: string): Promise<string | "oversize" | null> {
+  /** The blob ID, "oversize", or null when the file is missing. */
+  private async hiddenOid(path: string): Promise<string | null> {
     const bytes = await this.hiddenBytes(path);
     return bytes === null || bytes === "oversize" ? bytes : hashBlob(bytes);
   }

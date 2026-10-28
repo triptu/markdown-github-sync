@@ -1,6 +1,6 @@
-# GitHub Vault Sync
+# Gitless Vault Sync
 
-An Obsidian plugin that syncs a vault through ordinary commits in a private GitHub repository, on desktop and mobile. There's no server and no local Git checkout. The plugin talks to the GitHub API directly. A small companion plugin, GitHub Vault Sync Updater, keeps it up to date.
+An Obsidian plugin that syncs a vault through ordinary commits in a private GitHub repository, on desktop and mobile. There's no server and no local Git checkout. The plugin talks to the GitHub API directly. It was called GitHub Vault Sync before 0.4.1.
 
 ## What it does and its limits
 
@@ -19,28 +19,20 @@ Limits:
 
 ## Install
 
-Download `github-vault-sync.zip` and `github-vault-sync-updater.zip` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest). Unzip both into your vault's `.obsidian/plugins/` folder. On a phone, copy the two unzipped folders over USB or any file manager.
+In Obsidian, go to Settings → Community plugins → Browse, search for **Gitless Vault Sync**, then install and enable it. Or open [`obsidian://show-plugin?id=github-vault-sync`](obsidian://show-plugin?id=github-vault-sync) to go straight to it. Obsidian keeps it up to date.
 
-With the GitHub CLI, from inside your vault folder:
-
-```sh
-mkdir -p .obsidian/plugins && cd .obsidian/plugins \
-  && gh release download -R triptu/markdown-github-sync -p '*.zip' --clobber \
-  && unzip -oq github-vault-sync.zip && unzip -oq github-vault-sync-updater.zip && rm github-vault-sync*.zip
-```
-
-From then on the updater keeps the plugin current. It checks about every 6 hours. You can also run **Check for GitHub Vault Sync update** from the command palette. If a new version fails to load, the updater puts the old one back.
+Or download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/triptu/markdown-github-sync/releases/latest) into `.obsidian/plugins/github-vault-sync/` in your vault.
 
 ## Set up
 
 1. Create a private repository on GitHub, for example `your-name/notes`. It can't be empty, so tick **Add a README file** when you create it.
-2. In Obsidian, go to Settings → Community plugins. Turn off any other sync plugin (Obsidian Git, Self-hosted LiveSync, Remotely Save). Then enable **GitHub Vault Sync** and **GitHub Vault Sync Updater**.
-3. In GitHub Vault Sync's settings, enter the repository as `your-name/notes` and the branch (usually `main`).
+2. In Obsidian, go to Settings → Community plugins. Turn off any other sync plugin (Obsidian Git, Self-hosted LiveSync, Remotely Save). Then enable **Gitless Vault Sync**.
+3. In Gitless Vault Sync's settings, enter the repository as `your-name/notes` and the branch (usually `main`).
 4. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new). The **Create token** link in settings opens this form with the permissions filled in. Give it access to only your notes repository, with:
    - Contents: read and write
    - Metadata: read
 
-   Paste the token into settings. Obsidian keeps it in its secret storage. The updater needs no token; it reads releases from this public repository.
+   Paste the token into settings. Obsidian keeps it in its secret storage.
 5. Click **Connect**, look over what the first sync will do, then click **Start syncing**.
 
 Repeat this on each device. Don't copy the `.git-vault-sync/` folder between devices.
@@ -71,6 +63,16 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 - files that look like credentials, such as `.env`, `*.pem` and `*.key`
 - anything matched by a `.gitignore` at the vault root
 
+## Privacy and network use
+
+- You need a GitHub account, a private repository and a fine-grained personal access token. The token stays in Obsidian's secret storage on each device and is sent only to GitHub.
+- The plugin connects only to GitHub. It calls `api.github.com` for the repository, and downloads a commit's files in one go from `codeload.github.com`.
+- It uploads your notes, and the Obsidian settings, themes and plugins that sync, to the repository you choose, and writes what it downloads into your vault. That includes the settings folder (`.obsidian`, or whatever you've named it) after you approve the change.
+- To find what changed, it lists the files in your vault and reads the ones it syncs. Nothing outside the vault is read.
+- It uses the clipboard only when you tap **Copy link** next to the token field, to copy GitHub's token page link. It never reads the clipboard.
+- It keeps its journal in `.git-vault-sync/` inside the vault. Apart from the token, everything it stores is inside the vault.
+- There's no telemetry, analytics or ads. It's free and open source.
+
 ## Troubleshooting
 
 - **"Branch wasn't found, or the repository is empty."** Check the branch name, and make sure the repository has at least one commit.
@@ -81,15 +83,15 @@ Successful syncs stay quiet. Being offline shows only in the status bar, and bec
 
 ## Development
 
-Requires Node 22 or newer, npm and `zip`.
+Requires Node 22 or newer and npm.
 
 ```sh
 npm run setup     # install dependencies
-npm run check     # typecheck, test and build
-npm run package   # build both plugins and their zips into dist/
+npm run check     # typecheck, lint, test, build and check release metadata
+npm run build     # build the plugin into dist/github-vault-sync/
 ```
 
-The built plugins are in `dist/github-vault-sync/` and `dist/github-vault-sync-updater/`. Copy each folder into `<vault>/.obsidian/plugins/` and reload Obsidian.
+To try a build, copy `dist/github-vault-sync/` into `<vault>/.obsidian/plugins/` and reload Obsidian.
 
 Maintainer notes, release steps and design rules are in [AGENTS.md](AGENTS.md). Release notes are in [docs/releases](docs/releases/).
 

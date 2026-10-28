@@ -19,9 +19,10 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 function mode(value: unknown): value is FileMode { return value === "100644" || value === "100755"; }
 function oid(value: unknown): value is string { return typeof value === "string" && /^[a-f0-9]{40}$/.test(value); }
+const copy = <T>(record: Record<string, T>) => Object.assign(Object.create(null) as Record<string, T>, record);
 export function parseModes(value: unknown): Record<string, FileMode> {
   if (!object(value)) throw new Error("File mode metadata is corrupt.");
-  const modes: Record<string, FileMode> = Object.create(null);
+  const modes = Object.create(null) as Record<string, FileMode>;
   for (const [path, item] of Object.entries(value)) {
     if (!mode(item)) throw new Error("File mode metadata is corrupt.");
     modes[path] = item;
@@ -30,12 +31,12 @@ export function parseModes(value: unknown): Record<string, FileMode> {
 }
 /** The intent is committed before touching bytes; capture resolves interrupted writes by their blob IDs. */
 export class NativeModeStore implements NativeModes {
-  private pending: Record<string, ModeIntent> = Object.create(null);
+  private pending = Object.create(null) as Record<string, ModeIntent>;
   private uncertain = false;
   private constructor(private journal: FileJournalStore, private modes: Record<string, FileMode>) {}
   static async open(journal: FileJournalStore, seed: Record<string, FileMode>): Promise<NativeModeStore> {
     const saved = await journal.load();
-    const store = new NativeModeStore(journal, Object.assign(Object.create(null), seed));
+    const store = new NativeModeStore(journal, copy(seed));
     if (saved !== null) {
       if (!object(saved) || saved.format !== 1 || !object(saved.pending)) throw new Error("File mode journal is corrupt.");
       store.modes = parseModes(saved.modes);
@@ -79,8 +80,8 @@ export class NativeModeStore implements NativeModes {
   async set(path: string, value: FileMode): Promise<void> {
     this.assertTrusted();
     if (!this.pending[path] && this.get(path) === value) return;
-    const modes = Object.assign(Object.create(null), this.modes);
-    const pending = Object.assign(Object.create(null), this.pending);
+    const modes = copy(this.modes);
+    const pending = copy(this.pending);
     modes[path] = value;
     delete pending[path];
     await this.commit(modes, pending);
@@ -88,8 +89,8 @@ export class NativeModeStore implements NativeModes {
   async remove(path: string): Promise<void> {
     this.assertTrusted();
     if (!Object.hasOwn(this.modes, path) && !this.pending[path]) return;
-    const modes = Object.assign(Object.create(null), this.modes);
-    const pending = Object.assign(Object.create(null), this.pending);
+    const modes = copy(this.modes);
+    const pending = copy(this.pending);
     delete modes[path];
     delete pending[path];
     await this.commit(modes, pending);
@@ -98,14 +99,14 @@ export class NativeModeStore implements NativeModes {
     this.assertTrusted();
     if (this.pending[path]) throw new Error(`Unresolved file mode intent: ${path}`);
     if (next.mode === this.get(path)) return;
-    const pending = Object.assign(Object.create(null), this.pending);
+    const pending = copy(this.pending);
     pending[path] = { expectedOid: expected?.oid ?? null, nextOid: next.oid, mode: next.mode };
     await this.commit(this.modes, pending);
   }
   async cancel(path: string): Promise<void> {
     this.assertTrusted();
     if (!this.pending[path]) return;
-    const pending = Object.assign(Object.create(null), this.pending);
+    const pending = copy(this.pending);
     delete pending[path];
     await this.commit(this.modes, pending);
   }
@@ -129,8 +130,8 @@ export class NativeModeStore implements NativeModes {
       const target = moved(path); return target === null ? [] : [{ path, target, value }];
     });
     if (!modes.length && !intents.length) return;
-    const nextModes = Object.assign(Object.create(null), this.modes);
-    const nextPending = Object.assign(Object.create(null), this.pending);
+    const nextModes = copy(this.modes);
+    const nextPending = copy(this.pending);
     for (const item of modes) delete nextModes[item.path];
     for (const item of intents) delete nextPending[item.path];
     for (const item of modes) nextModes[item.target] = item.value;

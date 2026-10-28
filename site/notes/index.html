@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Notes for Android</title>
+<meta name="description" content="A calm Android app for writing in your Obsidian vault. Plain Markdown, voice notes recognized on the phone, and sync through your own private GitHub repository." />
+<meta property="og:title" content="Notes for Android" />
+<meta property="og:description" content="A calm Android app for writing in your Obsidian vault, synced through your own private GitHub repository." />
+<meta property="og:image" content="https://notes.tushar.ai/poster.jpg" />
+<meta property="og:url" content="https://notes.tushar.ai/" />
+<meta name="twitter:card" content="summary_large_image" />
+<script>try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.classList.add(t)}catch(_){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f3f2ee;
+    --card: #fbfaf7;
+    --ink: #161616;
+    --muted: #64635f;
+    --faint: #9b9993;
+    --line: rgba(20, 20, 20, 0.09);
+    --shadow: 0 40px 80px -36px rgba(30, 28, 24, 0.38), 0 14px 30px -18px rgba(30, 28, 24, 0.22);
+    --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not(.light) {
+      --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
+      --line: rgba(255, 255, 255, 0.09);
+      --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      color-scheme: dark;
+    }
+  }
+  :root.dark {
+    --bg: #0e0e0e; --card: #151515; --ink: #f1f0ec; --muted: #a09e98; --faint: #66645f;
+    --line: rgba(255, 255, 255, 0.09);
+    --shadow: 0 40px 80px -36px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 18px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.4s ease, color 0.4s ease;
+  }
+  a { color: inherit; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: currentColor; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  header.top { display: flex; align-items: center; justify-content: space-between; padding: 26px 0; }
+  .mark { font-family: var(--serif); font-size: 30px; line-height: 1; text-decoration: none; }
+  .top nav { display: flex; align-items: center; gap: 22px; font-size: 15px; color: var(--muted); }
+  .top nav a { text-decoration: none; }
+  .top nav a:hover { color: var(--ink); }
+  .theme { display: grid; place-items: center; width: 34px; height: 34px; margin: -7px -7px -7px 0; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+  .theme:hover { color: var(--ink); }
+  .theme svg { width: 20px; height: 20px; }
+  .theme .moon { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not(.light) .theme .sun { display: none; } :root:not(.light) .theme .moon { display: block; } }
+  :root.dark .theme .sun { display: none; }
+  :root.dark .theme .moon { display: block; }
+
+  .hero { text-align: center; padding: 72px 0 56px; }
+  .eyebrow { font-size: 13px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); margin: 0 0 22px; }
+  h1, h2 { font-family: var(--serif); font-weight: 400; letter-spacing: -0.01em; margin: 0; }
+  h1 { font-size: clamp(56px, 9vw, 112px); line-height: 0.98; }
+  .lede { max-width: 620px; margin: 28px auto 0; font-size: 20px; color: var(--muted); }
+  .actions { display: flex; gap: 12px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px; padding: 12px 20px; border-radius: 999px;
+    font-size: 16px; font-weight: 500; text-decoration: none; border: 1px solid var(--line);
+  }
+  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn svg { width: 18px; height: 18px; }
+
+  .film { margin: 24px auto 0; max-width: 1040px; }
+  .film video {
+    display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 20px; background: var(--card);
+    box-shadow: var(--shadow);
+  }
+  .film p { text-align: center; font-size: 14px; color: var(--faint); margin: 16px 0 0; }
+
+  .beats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px;
+    margin-top: 96px; padding: 64px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .beats h2 { font-size: clamp(30px, 3vw, 38px); line-height: 1.1; }
+  .beats p { color: var(--muted); margin: 14px 0 0; font-size: 17px; }
+
+  .pair {
+    display: flex; align-items: center; gap: 22px; max-width: 760px; margin: 64px auto 0; padding: 22px 26px;
+    border-radius: 18px; background: var(--card); border: 1px solid var(--line); text-decoration: none;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+  .pair:hover { border-color: var(--faint); transform: translateY(-2px); }
+  .pair .pair-mark { flex: none; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg); }
+  .pair .pair-mark svg { width: 28px; height: 28px; }
+  .pair .eyebrow { margin: 0 0 4px; font-size: 12px; }
+  .pair b { display: block; font: 400 30px/1.1 var(--serif); }
+  .pair .pair-desc { display: block; margin-top: 6px; font-size: 15.5px; line-height: 1.5; color: var(--muted); }
+  .pair .arrow { flex: none; margin-left: auto; font-size: 22px; color: var(--faint); }
+  .pair:hover .arrow { color: var(--ink); }
+
+  footer { padding: 72px 0 64px; text-align: center; }
+  footer p { color: var(--muted); max-width: 520px; margin: 0 auto; }
+  footer .actions { margin-top: 24px; }
+  .fine { font-size: 14px; color: var(--faint); margin-top: 36px; }
+
+  .reveal { opacity: 1; transform: none; }
+  .js .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.9s cubic-bezier(.22, 1, .36, 1), transform 0.9s cubic-bezier(.22, 1, .36, 1); }
+  .js .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .js .reveal { opacity: 1; transform: none; transition: none; }
+    body { transition: none; }
+  }
+
+  @media (max-width: 860px) {
+    body { font-size: 17px; }
+    .wrap { padding: 0 20px; }
+    .hero { padding: 40px 0 36px; }
+    .lede { font-size: 18px; }
+    .film video { border-radius: 12px; }
+    .beats { grid-template-columns: 1fr; gap: 36px; margin-top: 56px; padding: 44px 0; }
+    .top nav .hide-sm { display: none; }
+    .pair { margin-top: 44px; padding: 18px; gap: 16px; align-items: flex-start; }
+    .pair .pair-mark { width: 44px; height: 44px; border-radius: 12px; }
+    .pair .arrow { display: none; }
+    footer { padding: 56px 0 48px; }
+  }
+</style>
+</head>
+<body>
+<script>document.documentElement.classList.add('js')</script>
+<div class="wrap">
+  <header class="top">
+    <a class="mark" href="/">Notes</a>
+    <nav>
+      <a class="hide-sm" href="https://vaultsync.tushar.ai/">Obsidian plugin</a>
+      <a href="https://github.com/triptu/markdown-github-sync">GitHub</a>
+      <button class="theme" type="button" aria-label="Switch between light and dark">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6Z"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">For Android &middot; Open source</p>
+    <h1>A calm place<br />to write.</h1>
+    <p class="lede">A small Android app for your Obsidian vault. Open it, write, put the phone down. Your notes sync through your own private GitHub repository.</p>
+    <div class="actions">
+      <a class="btn primary" href="#film">Watch the film</a>
+      <a class="btn" href="https://github.com/triptu/markdown-github-sync">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Source on GitHub
+      </a>
+    </div>
+  </section>
+
+  <section class="film" id="film">
+    <video src="notes-launch.mp4" poster="poster.jpg" autoplay muted loop playsinline controls preload="auto" aria-label="A one-minute film of Notes on an Android phone"></video>
+    <p>One minute, recorded in the app with made-up notes.</p>
+  </section>
+
+  <section class="beats">
+    <div class="reveal">
+      <h2>Markdown that looks finished.</h2>
+      <p>Headings, links and tasks render in place. The symbols behind them show only on the line you're editing.</p>
+    </div>
+    <div class="reveal">
+      <h2>Speak, and watch it write.</h2>
+      <p>Tap the mic and the page fills in as you talk, using the phone's own speech recognition.</p>
+    </div>
+    <div class="reveal">
+      <h2>No server. Just your repo.</h2>
+      <p>Edits save on the phone first, then go to your private GitHub repository as commits. Obsidian on your computer sees every word.</p>
+    </div>
+  </section>
+
+  <a class="pair reveal" href="https://vaultsync.tushar.ai/">
+    <span class="pair-mark"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="7" r="2.6"/><circle cx="8" cy="21" r="2.6"/><circle cx="20" cy="11" r="2.6"/><path d="M8 9.6v8.8M20 13.6c0 4-3 4.6-9.6 6"/></svg></span>
+    <div>
+      <p class="eyebrow">Pairs with</p>
+      <b>Gitless Vault Sync</b>
+      <span class="pair-desc">The Obsidian plugin this app syncs with. Your phone and your computer share one private repository.</span>
+    </div>
+    <span class="arrow" aria-hidden="true">&rarr;</span>
+  </a>
+
+  <footer class="reveal">
+    <p>Built for one person's vault and shared in case it fits yours.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/triptu/markdown-github-sync">Source on GitHub</a>
+      <a class="btn" href="https://vaultsync.tushar.ai/">The Obsidian plugin</a>
+    </div>
+    <p class="fine">The film shows made-up notes in a test build.</p>
+  </footer>
+</div>
+<script>
+  document.querySelector('.theme').addEventListener('click', () => {
+    const root = document.documentElement
+    const dark = root.classList.contains('dark') || (!root.classList.contains('light') && matchMedia('(prefers-color-scheme: dark)').matches)
+    const next = dark ? 'light' : 'dark'
+    root.classList.remove('light', 'dark')
+    root.classList.add(next)
+    try { localStorage.setItem('theme', next) } catch (_) {}
+  })
+  const els = document.querySelectorAll('.reveal')
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) }
+    }, { rootMargin: '0px 0px -10% 0px' })
+    els.forEach(el => io.observe(el))
+  } else {
+    els.forEach(el => el.classList.add('in'))
+  }
+</script>
+</body>
+</html>

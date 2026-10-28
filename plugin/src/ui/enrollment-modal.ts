@@ -97,7 +97,7 @@ export class PublicationRecoveryModal extends Modal {
         this.close();
         const enrollment = await this.plugin.session?.previewEnrollment();
         if (enrollment?.kind === "preview") new EnrollmentModal(this.app, this.plugin, enrollment).open();
-        else new Notice("Open GitHub Vault Sync settings to review changes and resume.");
+        else new Notice("Open Gitless Vault Sync settings to review changes and resume.");
       }, "Save copies and review").open();
     }));
   }

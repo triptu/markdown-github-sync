@@ -25,7 +25,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 async function mapObjects<T, R>(items: T[], operation: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+  const results = new Array<R>(items.length);
   let next = 0;
   const failures: unknown[] = [];
   await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
@@ -115,7 +115,7 @@ export class FileJournalStore implements DurableStore {
       return result;
     }
     if (!isObject(value)) return value;
-    const out: Record<string, unknown> = Object.create(null);
+    const out = Object.create(null) as Record<string, unknown>;
     for (const [key, item] of Object.entries(value)) {
       if (
         key === "data" &&
@@ -124,7 +124,7 @@ export class FileJournalStore implements DurableStore {
       ) {
         out[key] = { journalBlob: await this.packObject(item, pending) };
       } else if (key === "blobs" && isObject(item)) {
-        const references: Record<string, unknown> = Object.create(null);
+        const references = Object.create(null) as Record<string, unknown>;
         const packed = await mapObjects(Object.entries(item), async ([oid, data]) => {
           if (typeof data !== "string")
             throw new Error("Invalid journal blob table");
@@ -164,12 +164,12 @@ export class FileJournalStore implements DurableStore {
       }
       return object;
     }
-    const result: Record<string, unknown> = Object.create(null);
+    const result = Object.create(null) as Record<string, unknown>;
     for (const [key, item] of Object.entries(value)) {
       if (key === "blobs" && isObject(item)) {
         const unpacked = await mapObjects(Object.entries(item), async ([oid, reference]) =>
           ({ oid, bytes: await this.unpack(reference, pending, cached) }));
-        const blobs: Record<string, unknown> = Object.create(null);
+        const blobs = Object.create(null) as Record<string, unknown>;
         for (const { oid, bytes } of unpacked) blobs[oid] = bytes;
         result[key] = blobs;
       } else result[key] = await this.unpack(item, pending, cached);

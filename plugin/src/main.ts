@@ -164,7 +164,7 @@ export default class GitVaultSync extends Plugin {
     this.alerted = key;
     this.alertNotice?.hide();
     const notice = this.alertNotice = new Notice(`${text} ${fix === "settings" ? "Tap to open settings." : "Tap for details."}`, 0);
-    notice.noticeEl?.addEventListener("click", () => fix === "settings" ? this.openSettings() : new ChangesModal(this.app, this).open());
+    notice.messageEl?.addEventListener("click", () => fix === "settings" ? this.openSettings() : new ChangesModal(this.app, this).open());
   }
   /** A sync that finished cleanly takes down any problem notice still on screen. */
   private settled(): void {
@@ -174,7 +174,7 @@ export default class GitVaultSync extends Plugin {
   }
   /** Opens this plugin's settings page; uses Obsidian's unofficial settings API when present. */
   openSettings(): void {
-    if (!openSettingsTab(this.app, this.manifest.id)) new Notice("Open Settings → GitHub Vault Sync.");
+    if (!openSettingsTab(this.app, this.manifest.id)) new Notice("Open Settings → Gitless Vault Sync.");
   }
   /** Background failures: offline is retried quietly; anything else is shown until it's fixed. */
   fail(error: unknown): void {
@@ -227,7 +227,7 @@ export default class GitVaultSync extends Plugin {
     const state = raw === null ? null : await parseState(raw);
     const nativePolicy = await NativePathPolicy.forConfig(this.app.vault.configDir);
     const repository = this.createRepository(installation);
-    const modes: Record<string, FileMode> = Object.create(null);
+    const modes = Object.create(null) as Record<string, FileMode>;
     if (state !== null) {
       for (const [path, ref] of Object.entries(state.base.files)) modes[path] = ref.mode;
     }
@@ -500,13 +500,13 @@ export default class GitVaultSync extends Plugin {
       if (outcome.kind === "synced" && Date.now() - this.lastCleanup >= 30 * 60 * 1000) {
         // Internal safety copies are pruned quietly; a failed cleanup retries next time.
         try { await this.compactRecoveryOwned(); }
-        catch (error) { console.warn("GitHub Vault Sync: cleanup skipped", error); }
+        catch (error) { console.warn("Gitless Vault Sync: cleanup skipped", error); }
       }
     });
   }
   async syncNow(): Promise<void> {
     if (!this.session) {
-      new Notice("Finish setting up GitHub Vault Sync in settings.");
+      new Notice("Finish setting up Gitless Vault Sync in settings.");
       return;
     }
     await this.scheduler?.now();

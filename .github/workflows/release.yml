@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm run setup
+      - name: Tag matches manifest.json
+        run: test "$(node -p 'require("./manifest.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm run check
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/github-vault-sync/main.js
+            dist/github-vault-sync/manifest.json
+            dist/github-vault-sync/styles.css
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --notes ""; fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --latest "$@" \
+            dist/github-vault-sync/main.js dist/github-vault-sync/manifest.json dist/github-vault-sync/styles.css

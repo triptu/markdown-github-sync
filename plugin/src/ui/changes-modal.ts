@@ -90,7 +90,7 @@ export class ChangesModal extends Modal {
       if (!current()) return;
       body.empty();
       if (!status || status.kind === "unenrolled") {
-        summary.setText("Sync isn't set up yet. Connect to GitHub in GitHub Vault Sync settings.");
+        summary.setText("Sync isn't set up yet. Connect to GitHub in Gitless Vault Sync settings.");
         return;
       }
       if (status.kind === "corrupt") {

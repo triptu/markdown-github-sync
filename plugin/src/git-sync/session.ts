@@ -451,13 +451,13 @@ export class SyncSession {
     const local = await this.#capture(state, "configuration preview", false, scope);
     const items = Object.entries(state.deferred).sort(([a], [b]) => a.localeCompare(b)).map(([path, item]) => ({
       path, expected: item.expected, next: item.next, blockedReason: item.blockedReason,
-      expectedEntry: item.expected ? materialize(state, dictionary([[path, item.expected]]))[path]! : null,
-      incomingEntry: item.next ? materialize(state, dictionary([[path, item.next]]))[path]! : null,
+      expectedEntry: item.expected ? materialize(state, dictionary([[path, item.expected]]))[path] : null,
+      incomingEntry: item.next ? materialize(state, dictionary([[path, item.next]]))[path] : null,
     }));
     const blocked: BlockedStep[] = [];
     for (const item of items) {
       if (item.blockedReason) blocked.push({ path: item.path, reason: item.blockedReason });
-      else if (item.path.endsWith("/community-plugins.json") && local[item.path] && enabledCompetingReason(local[item.path]!)) blocked.push({ path: item.path, reason: enabledCompetingReason(local[item.path]!)! });
+      else if (item.path.endsWith("/community-plugins.json") && local[item.path] && enabledCompetingReason(local[item.path])) blocked.push({ path: item.path, reason: enabledCompetingReason(local[item.path])! });
       else if (this.#quarantined(state).has(item.path)) blocked.push({ path: item.path, reason: "Native recovery for this configuration needs review" });
       else if (!sameEntry(local[item.path], item.expected)) blocked.push({ path: item.path, reason: "Local configuration changed since it was deferred; sync to review the conflict" });
       else if (this.#unreadable.some((entry) => entry.path === item.path)) blocked.push({ path: item.path, reason: "Local configuration cannot be read" });
@@ -960,7 +960,7 @@ export class SyncSession {
       throw error;
     }
     if (this.#unreadable.some((item) => item.path === ".gitignore")) return this.#pause(state, "scope-unreadable", "Local .gitignore cannot be read");
-    const localIgnore = local[".gitignore"] ? entryText(local[".gitignore"]!) : null;
+    const localIgnore = local[".gitignore"] ? entryText(local[".gitignore"]) : null;
     if (local[".gitignore"] && localIgnore === null) return this.#pause(state, "scope-unreadable", "Local .gitignore is not valid UTF-8");
     let transaction: TransactionScope;
     try { transaction = await freezeTransactionScope(parentScope, headScope, localIgnore); }
@@ -978,7 +978,7 @@ export class SyncSession {
         .filter((path) => !parentScope.includes(path) && headScope.includes(path));
       state.reentry = [...new Set([...state.reentry, ...newlyIncluded])].sort();
     }
-    const parked: Snapshot = dictionary(excluded.flatMap((path) => base.files[path] ? [[path, base.files[path]!]] as const : []));
+    const parked: Snapshot = dictionary(excluded.flatMap((path) => base.files[path] ? [[path, base.files[path]]] as const : []));
     this.#record(state, "sync", parked);
     for (const path of excluded) {
       delete state.deferred[path];
@@ -996,7 +996,7 @@ export class SyncSession {
       if (observed.kind === "unknown" || sameEntry(observed.entry, deferred.expected)) continue;
       // The deferred remote version never became the local merge base. Move
       // its original preimage into carry before ordinary conflict planning.
-      const origin = deferred.expected ? materialize(state, dictionary([[path, deferred.expected]]))[path]! : null;
+      const origin = deferred.expected ? materialize(state, dictionary([[path, deferred.expected]]))[path] : null;
       state.carry[path] = deferred.expected;
       if (origin) planBase[path] = origin;
       else delete planBase[path];
@@ -1562,7 +1562,7 @@ export class SyncSession {
         const draft = recaptured[path];
         if (draft) newer[path] = draft;
       }
-      if (expected && local[path]?.oid === expected.oid) state.blobs[expected.oid] = local[path]!.data;
+      if (expected && local[path]?.oid === expected.oid) state.blobs[expected.oid] = local[path].data;
     }
     this.#record(state, "carried", newer);
     const origins: Manifest = dictionary();
@@ -1628,7 +1628,7 @@ export class SyncSession {
         await this.#save(state);
         continue;
       }
-      const next = step.next ? materialize(state, dictionary([[step.path, step.next]]))[step.path]! : null;
+      const next = step.next ? materialize(state, dictionary([[step.path, step.next]]))[step.path] : null;
       const result = await this.#vault.apply(step.path, current, next);
       if (result.kind === "blocked") markStep(step, "blocked", result.reason || "Blocked by the vault adapter");
       else markStep(step, result.kind);
@@ -1699,7 +1699,7 @@ export class SyncSession {
         (step.status === "pending" || step.status === "blocked") &&
         sameRef(step.expected, intent.expected) &&
         sameRef(step.next, intent.next) &&
-        !(state.holds[step.path] && (step.decision === null || state.holds[step.path]!.oversize.length > 0)) &&
+        !(state.holds[step.path] && (step.decision === null || state.holds[step.path].oversize.length > 0)) &&
         !this.#quarantined(state).has(step.path) &&
         !this.#unreadable.some((item) => item.path === step.path);
       (authorized ? replay : cancel).push(intent.id);
@@ -2217,17 +2217,17 @@ export class SyncSession {
    * none of them has. The repository verifies every offered body it uses.
    */
   async #readWithKnown(oid: string, state: StoredState, ...snapshots: Snapshot[]): Promise<CommitSnapshot> {
-    const offer = this.#repository.offerKnownBlobs;
+    const offer = this.#repository.offerKnownBlobs?.bind(this.#repository);
     if (!offer) return this.#repository.readCommit(oid);
     // Entries are offered as the objects themselves, so the repository can recognize verified ones.
     const known = new Map<string, { oid: string; data: string }>();
     for (const [oid, data] of Object.entries(state.blobs)) known.set(oid, { oid, data });
     for (const snapshot of snapshots) for (const entry of Object.values(snapshot)) known.set(entry.oid, entry);
-    offer.call(this.#repository, Array.from(known.values()));
+    offer(Array.from(known.values()));
     try {
       return await this.#repository.readCommit(oid);
     } finally {
-      offer.call(this.#repository, []);
+      offer([]);
     }
   }
 
@@ -2386,7 +2386,7 @@ function isNativeConflict<T extends { kind: string }>(conflict: T): conflict is 
 }
 
 function nativeHolds(state: StoredState): Record<string, NativeHold> {
-  const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid]! } : null);
+  const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid] } : null);
   const holds: Record<string, NativeHold> = dictionary();
   for (const [path, item] of Object.entries(state.holds)) {
     holds[path] = { id: item.ids.join(","), kind: item.kind, base: entry(item.base), expected: entry(item.expected), next: entry(item.next), found: entry(item.found), oversize: item.oversize };
@@ -2398,21 +2398,21 @@ function choices(state: StoredState): Record<string, Choice> {
   const result: Record<string, Choice> = dictionary();
   for (const [id, decision] of Object.entries(state.decisions)) {
     if (decision.kind !== "edit") result[id] = decision;
-    else result[id] = { kind: "edit", entry: { ...decision.entry, data: state.blobs[decision.entry.oid]! } };
+    else result[id] = { kind: "edit", entry: { ...decision.entry, data: state.blobs[decision.entry.oid] } };
   }
   return result;
 }
 
 function materialize(state: StoredState, files: Manifest): Snapshot {
   const snapshot: Snapshot = dictionary();
-  for (const [path, entry] of Object.entries(files)) snapshot[path] = { ...entry, data: state.blobs[entry.oid]! };
+  for (const [path, entry] of Object.entries(files)) snapshot[path] = { ...entry, data: state.blobs[entry.oid] };
   return snapshot;
 }
 
 function restoreConflict(state: StoredState, conflict: StoredConflict): Conflict {
   if (conflict.kind === "collision") return conflict;
   if (conflict.kind === "bulk-deletion") return { ...conflict, choices: ["mine", "remote"] };
-  const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid]! } : null);
+  const entry = (ref: Ref | null): Entry | null => (ref ? { ...ref, data: state.blobs[ref.oid] } : null);
   if (isNativeConflict(conflict)) {
     return {
       ...conflict,

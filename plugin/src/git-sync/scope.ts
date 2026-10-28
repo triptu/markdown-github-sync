@@ -113,10 +113,10 @@ const EXTENSION = /^[a-z0-9]{1,16}$/;
 function validateExtensions(value: unknown): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length === 0 || value.length > 256) throw new ScopeError("Invalid excluded extensions");
-  const sorted = [...value].sort();
+  const sorted = [...(value as unknown[])].sort();
   if (sorted.some((item, index) => typeof item !== "string" || !EXTENSION.test(item) || item === sorted[index - 1]))
     throw new ScopeError("Invalid excluded extensions");
-  return Object.freeze(sorted);
+  return Object.freeze(sorted as string[]);
 }
 
 async function validateRules(rules: ScopeRules, text: string | null): Promise<Readonly<ScopeRules>> {

@@ -118,7 +118,7 @@ export class RestoreModal extends Modal {
         return true;
       } catch (error) { if (current(revision)) history.createEl("p", { text: failure(error) }); return false; }
     };
-    const controls = new Setting(el).setName("File path").setDesc("You can also enter the path of a deleted note.")
+    const controls = new Setting(el).setClass("git-sync-text-row").setName("File path").setDesc("You can also enter the path of a deleted note.")
       .addText(text => text.setValue(path).setPlaceholder("Notes/My note.md").onChange(value => {
         path = value; this.revision++; history.empty(); output.empty();
       }))

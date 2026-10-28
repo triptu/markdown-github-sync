@@ -66,9 +66,9 @@ export class PluginOwnership {
     this.events = events;
     const prior: unknown = Reflect.get(host, ownerKey);
     if (prior !== undefined) {
-      if (typeof prior !== "object" || prior === null || typeof Reflect.get(prior, "retire") !== "function")
-        throw new Error("Invalid sync owner");
-      Reflect.apply(Reflect.get(prior, "retire"), prior, []);
+      const retire: unknown = typeof prior === "object" && prior !== null ? Reflect.get(prior, "retire") : undefined;
+      if (typeof retire !== "function") throw new Error("Invalid sync owner");
+      Reflect.apply(retire, prior, []);
     }
     Reflect.set(host, ownerKey, this);
   }
@@ -108,7 +108,7 @@ export class PluginOwnership {
     void pending.then(() => this.admitted.delete(pending), () => this.admitted.delete(pending));
     const settled = pending.then(
       value => ({ kind: "completed" as const, value }),
-      error => ({ kind: "failed" as const, error }),
+      (error: unknown) => ({ kind: "failed" as const, error }),
     );
     return serialize(this.host, "plugin-lifetime", async () => {
       const result = await settled;
@@ -134,7 +134,7 @@ export class PluginOwnership {
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
           this.assertActive();
-          return Reflect.apply(value, target, args);
+          return Reflect.apply(value, target, args) as unknown;
         };
       },
     });
@@ -149,15 +149,15 @@ export class PluginOwnership {
           if (!current()) throw new Error("Sync configuration changed. Reopen this preview.");
           const revision = this.recordLocalChange();
           const pending = Promise.resolve(Reflect.apply(value, target, args)).then((result: unknown) => {
-            if (typeof result === "object" && result !== null && ["invalidated", "unenrolled"].includes(Reflect.get(result, "kind")))
-              this.acknowledgeLocalChange(revision);
+            const kind: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "kind") : undefined;
+            if (kind === "invalidated" || kind === "unenrolled") this.acknowledgeLocalChange(revision);
             return result;
           });
           return this.track(pending);
         };
         return (...args: unknown[]) => this.run(async () => {
           if (!current()) throw new Error("Sync configuration changed. Reopen this preview.");
-          return Reflect.apply(value, target, args);
+          return Reflect.apply(value, target, args) as unknown;
         });
       },
     });

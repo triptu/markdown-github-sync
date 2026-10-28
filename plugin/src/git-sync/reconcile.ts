@@ -180,7 +180,7 @@ function pureRenames(base: Snapshot, side: Snapshot, other: Snapshot): Map<strin
   const renames = new Map<string, string>();
   for (const [version, from] of deleted) {
     const to = added.get(version);
-    if (from.length === 1 && to?.length === 1) renames.set(from[0]!, to[0]!);
+    if (from.length === 1 && to?.length === 1) renames.set(from[0], to[0]);
   }
   return renames;
 }
@@ -290,10 +290,10 @@ export async function reconcile(input: ReconcileInput): Promise<Plan> {
   for (const direction of ["local", "remote"] as const) {
     const side = direction === "local" ? local : remote;
     const additions = relocated(side);
-    const deleted = automaticDeletions[direction].filter((path) => !additions.has(`${base[path]!.mode}:${base[path]!.oid}`));
+    const deleted = automaticDeletions[direction].filter((path) => !additions.has(`${base[path].mode}:${base[path].oid}`));
     if (deleted.length < threshold && !vanishedFolder(side, untouched, deleted)) continue;
     const pathsDeleted = automaticDeletions[direction];
-    const id = await digestText(JSON.stringify(["bulk-deletion/1", input.guardScope ?? "", direction, pathsDeleted.map((path) => [path, base[path]!.mode, base[path]!.oid])]));
+    const id = await digestText(JSON.stringify(["bulk-deletion/1", input.guardScope ?? "", direction, pathsDeleted.map((path) => [path, base[path].mode, base[path].oid])]));
     const conflict: BulkDeletionConflict = { kind: "bulk-deletion", id, direction, paths: pathsDeleted, choices: ["mine", "remote"] };
     const choice = decisions[id];
     if (!choice || (choice.kind !== "mine" && choice.kind !== "remote")) {
@@ -471,20 +471,20 @@ function mergeHunks(base: string[], local: Hunk[], remote: Hunk[]): string[] | n
   const out: string[] = [];
   let position = 0;
   for (let at = 0; at < all.length; ) {
-    const group = [all[at]!];
-    let end = all[at]!.hunk.end;
+    const group = [all[at]];
+    let end = all[at].hunk.end;
     let next = at + 1;
     // Closed intervals: touching or same-point insertions from both sides conflict.
-    while (next < all.length && all[next]!.hunk.start <= end) {
-      group.push(all[next]!);
-      end = Math.max(end, all[next]!.hunk.end);
+    while (next < all.length && all[next].hunk.start <= end) {
+      group.push(all[next]);
+      end = Math.max(end, all[next].hunk.end);
       next++;
     }
     const sides = new Set(group.map((item) => item.side));
     let hunks = group.map((item) => item.hunk);
     if (sides.size > 1) {
-      if (group.length !== 2 || !sameHunk(hunks[0]!, hunks[1]!)) return null;
-      hunks = [hunks[0]!];
+      if (group.length !== 2 || !sameHunk(hunks[0], hunks[1])) return null;
+      hunks = [hunks[0]];
     }
     for (const hunk of hunks) {
       out.push(...base.slice(position, hunk.start), ...hunk.lines);
@@ -511,7 +511,7 @@ export function diff(a: string[], b: string[]): Hunk[] | null {
   let found = -1;
   for (let d = 0; d <= Math.min(max, MAX_EDITS) && found < 0; d++) {
     for (let k = -d; k <= d; k += 2) {
-      let x = d === 0 ? 0 : k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!) ? v[offset + k + 1]! : v[offset + k - 1]! + 1;
+      let x = d === 0 ? 0 : k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
       let y = x - k;
       while (x < n && y < m && a[x] === b[y]) {
         x++;
@@ -529,8 +529,8 @@ export function diff(a: string[], b: string[]): Hunk[] | null {
   let x = n;
   let y = m;
   for (let d = found; d > 0; d--) {
-    const previous = trace[d - 1]!;
-    const at = (k: number) => previous[k + d - 1]!;
+    const previous = trace[d - 1];
+    const at = (k: number) => previous[k + d - 1];
     const k = x - y;
     const priorK = k === -d || (k !== d && at(k - 1) < at(k + 1)) ? k + 1 : k - 1;
     const priorX = at(priorK);
