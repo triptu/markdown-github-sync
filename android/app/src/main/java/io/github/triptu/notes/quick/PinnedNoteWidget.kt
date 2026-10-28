@@ -139,7 +139,7 @@ private fun Title(title: String, open: Action) {
         GlanceModifier.fillMaxWidth().height(52.dp).clickable(open).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = TextStyle(color = WidgetColors.ink, fontSize = 16.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+        Text(title, style = TextStyle(color = WidgetColors.ink, fontSize = 16.sp, fontWeight = FontWeight.Bold), maxLines = 1)
     }
 }
 
@@ -178,12 +178,13 @@ private fun TaskRow(task: WidgetLine.Task) {
             .clickable(toggle)
             .semantics { contentDescription = "${if (task.checked) QuickCopy.MarkNotDone else QuickCopy.MarkDone}: ${task.text}" }
             .padding(start = 16.dp + IndentStep * task.indent, end = 16.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
+        // Sits on the first line when the task wraps.
         Image(
             ImageProvider(if (task.checked) R.drawable.widget_task_done else R.drawable.widget_task_open),
             contentDescription = null,
-            modifier = GlanceModifier.size(18.dp),
+            modifier = GlanceModifier.size(18.dp).padding(top = 1.dp),
         )
         Spacer(GlanceModifier.width(12.dp))
         Text(task.text, style = TextStyle(color = if (task.checked) WidgetColors.muted else WidgetColors.ink, fontSize = 15.sp))
