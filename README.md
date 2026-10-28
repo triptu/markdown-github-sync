@@ -1,15 +1,34 @@
 # Gitless Vault Sync
 
+![Your vault, in your own repo. Gitless Vault Sync syncs an Obsidian vault between your computer and your phone through a private GitHub repository you own.](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/site/vaultsync/og.png)
+
 Sync your Obsidian vault through ordinary commits in a private GitHub repository, on desktop and mobile. No server, no local Git. The plugin talks to the GitHub API directly, and your history is plain Git you can browse on GitHub.
 
-- Edits to different files, or different parts of the same note, merge on their own. Overlapping edits open a conflict view with a diff, where you keep either side, both, or a combined version.
-- Obsidian settings, themes and plugins sync too, with a review step before they change on another device.
-- File history previews a note's past versions and restores one.
-- Successful syncs stay quiet. Problems show once, and clear themselves when sync recovers.
+[Website](https://vaultsync.tushar.ai/) · [Install in Obsidian](https://community.obsidian.md/plugins/github-vault-sync) · [Latest release](https://github.com/triptu/markdown-github-sync/releases/latest) · [Guide](docs/guide.md)
+
+Writing on Android? [Notes for Android](https://notes.tushar.ai/) edits the same vault and syncs through the same engine.
+
+## What it does
+
+**Connect a repository and forget about it.** Syncs run after you pause typing and when you leave Obsidian. Successful syncs stay quiet. Problems show once, and clear themselves when sync recovers.
+
+![The plugin's settings in Obsidian, connected to a repository and showing the last sync time, automatic sync, settings sync and history](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/docs/images/settings.png)
+
+**Edits merge on their own.** Changes to different files, or different parts of the same note, combine without asking. Overlapping edits open a conflict view with a diff, where you keep either side, both, or a combined version.
+
+![The conflict view for one note, with this device's paragraph in green and GitHub's in blue, and buttons to keep either, keep both, or edit and combine](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/docs/images/conflict.png)
+
+**Every version of every note.** File history lists a note's past versions from all your devices, previews one and restores it as a new change.
+
+![File history for a note, listing its versions by device and time, with one version previewed and a Restore this version button](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/docs/images/file-history.png)
+
+**Obsidian settings sync too.** Themes, hotkeys and plugins follow your notes, with a review step before they change on another device.
+
+![The review step for settings arriving from another device, listing Appearance and Hotkeys with an Apply 2 updates button](https://raw.githubusercontent.com/triptu/markdown-github-sync/main/docs/images/settings-review.png)
 
 ## Install
 
-In Obsidian, open Settings → Community plugins → Browse and search for **Gitless Vault Sync**, or open [`obsidian://show-plugin?id=github-vault-sync`](obsidian://show-plugin?id=github-vault-sync).
+In Obsidian, open Settings → Community plugins → Browse and search for **Gitless Vault Sync**. You can also open it from the [plugin directory](https://community.obsidian.md/plugins/github-vault-sync) or with the link `obsidian://show-plugin?id=github-vault-sync`.
 
 ## Set up
 
