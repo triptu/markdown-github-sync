@@ -26,6 +26,8 @@ import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
@@ -60,45 +62,54 @@ class CaptureWidgetReceiver : GlanceAppWidgetReceiver() {
 @Composable
 private fun CaptureBar(context: Context) {
     val wide = LocalSize.current.width >= 180.dp
-    Row(
-        GlanceModifier
-            .fillMaxSize()
-            .appWidgetBackground()
-            .cornerRadius(android.R.dimen.system_app_widget_background_radius)
-            .background(WidgetColors.bg)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    // A pill of the in-app composer's height, centred in the cell like the Google search bar, so the
+    // mic sits the same distance from the top, bottom and end.
+    Box(GlanceModifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Row(
             GlanceModifier
-                .defaultWeight()
-                .fillMaxHeight()
-                .cornerRadius(24.dp)
-                .clickable(actionStartActivity(QuickLaunch.intent(context, QuickAction.NewNote)))
-                .semantics { contentDescription = QuickCopy.WriteNewNote }
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalAlignment = if (wide) Alignment.Start else Alignment.CenterHorizontally,
-        ) {
-            WidgetIcon(R.drawable.ph_note_pencil, WidgetColors.ink2, 22)
-            if (wide) {
-                Spacer(GlanceModifier.width(12.dp))
-                Text(QuickCopy.NewNote, style = TextStyle(color = WidgetColors.muted, fontSize = 16.sp), maxLines = 1)
-            }
-        }
-        Box(
-            GlanceModifier
-                .size(48.dp)
-                .cornerRadius(24.dp)
+                .fillMaxWidth()
+                .height(BarHeight)
+                .appWidgetBackground()
+                .cornerRadius(BarHeight / 2)
                 .background(WidgetColors.raised)
-                .clickable(actionStartActivity(QuickLaunch.intent(context, QuickAction.Voice)))
-                .semantics { contentDescription = QuickCopy.SpeakNewNote },
-            contentAlignment = Alignment.Center,
+                .padding(end = MicInset),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            WidgetIcon(R.drawable.ph_microphone, WidgetColors.ink, 22)
+            Row(
+                GlanceModifier
+                    .defaultWeight()
+                    .fillMaxHeight()
+                    .cornerRadius(BarHeight / 2)
+                    .clickable(actionStartActivity(QuickLaunch.intent(context, QuickAction.NewNote)))
+                    .semantics { contentDescription = QuickCopy.WriteNewNote }
+                    .padding(start = (BarHeight - IconSize) / 2),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                WidgetIcon(R.drawable.ph_note_pencil, WidgetColors.ink2, IconSize.value.toInt())
+                if (wide) {
+                    Spacer(GlanceModifier.width(12.dp))
+                    Text(QuickCopy.NewNote, style = TextStyle(color = WidgetColors.muted, fontSize = 16.sp), maxLines = 1)
+                }
+            }
+            Box(
+                GlanceModifier
+                    .size(BarHeight - MicInset * 2)
+                    .cornerRadius(BarHeight / 2)
+                    .background(WidgetColors.ink)
+                    .clickable(actionStartActivity(QuickLaunch.intent(context, QuickAction.Voice)))
+                    .semantics { contentDescription = QuickCopy.SpeakNewNote },
+                contentAlignment = Alignment.Center,
+            ) {
+                WidgetIcon(R.drawable.ph_microphone, WidgetColors.bg, IconSize.value.toInt())
+            }
         }
     }
 }
+
+/** The same sizes as Home's composer. */
+private val BarHeight = 56.dp
+private val MicInset = 6.dp
+private val IconSize = 22.dp
 
 @Composable
 internal fun WidgetIcon(icon: Int, tint: ColorProvider, sizeDp: Int) {

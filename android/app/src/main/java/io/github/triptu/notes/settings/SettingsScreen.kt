@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.FocusRequester
@@ -78,7 +79,7 @@ fun SettingsScreen(
             IconButton48(R.drawable.ph_arrow_left, "Back", onBack)
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = PagePadding)) {
-            Text("Settings", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+            Text("Settings", style = NotesType.title, color = colors.ink, modifier = Modifier.padding(top = 6.dp))
 
             SyncSection(sync, focusToken)
 
@@ -117,7 +118,8 @@ fun SettingsScreen(
 
 @Composable
 internal fun Section(text: String) {
-    Text(text, style = NotesType.section, color = NotesTheme.colors.muted, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+    // Heavier than the field labels under it, with more room above than between its fields.
+    Text(text, style = NotesType.row.copy(fontWeight = FontWeight.SemiBold), color = NotesTheme.colors.ink, modifier = Modifier.padding(top = 32.dp, bottom = 4.dp))
 }
 
 @Composable
