@@ -39,13 +39,6 @@ In Obsidian, open Settings → Community plugins → Browse and search for **Git
 
 Repeat on each device. The [guide](docs/guide.md) covers when sync runs, what doesn't sync, review, troubleshooting and development.
 
-## Limits
-
-- It's in beta.
-- GitHub only, and only private repositories. GitHub can read your notes; they aren't end-to-end encrypted.
-- Files up to 8 MiB each, vaults up to 128 MiB in total.
-- Needs Obsidian 1.11.4 or newer.
-
 ## Privacy and network use
 
 - The plugin connects only to GitHub: `api.github.com` (REST and GraphQL) for the repository, and `codeload.github.com` to download a commit's files in one go.
